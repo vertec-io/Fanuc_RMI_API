@@ -1,8 +1,9 @@
 use serde::Deserialize;
 // use serde::Serialize;
 use tokio::sync::mpsc;
-use std::fmt::format;
-use std::{error::Error, io, sync::Arc, time::Duration};
+// use std::fmt::format;
+// use std::{error::Error, io, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::{ net::TcpStream, sync::Mutex, time::sleep};
 use tokio::io::{ AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf, split};
 use std::collections::VecDeque;
@@ -12,7 +13,7 @@ use crate::instructions::*;
 use crate::commands::*;
 use crate::PacketEnum;
 use crate::{Configuration, Position, SpeedType, TermType, FrcError };
-use std::marker::Send;
+// use std::marker::Send;
 
 #[derive(Debug,Clone)]
 pub struct  FanucDriverConfig {

@@ -1,5 +1,6 @@
-use std::collections::HashMap;
-use std::error::{self, Error};
+// use std::collections::HashMap;
+// use std::error::{self, Error};
+use std::error::Error;
 use std::fmt;
 
 use packets::Communication;
@@ -135,7 +136,7 @@ pub enum PacketEnum {
 
 #[repr(u32)]
 #[derive(Debug, Serialize, Deserialize, IntEnum)]
-enum FanucErrorCode {
+pub enum FanucErrorCode {
     InternalSystemError = 2556929,
     InvalidUToolNumber = 2556930,
     InvalidUFrameNumber = 2556931,

@@ -1,6 +1,6 @@
 use fanuc_rmi::{drivers::{FanucDriver, FanucDriverConfig}, Configuration, FrcError, Position};
 // use fanuc_rmi::{Configuration, Position};
-use std::error::Error;
+// use std::error::Error;
 
 
 #[tokio::main]
