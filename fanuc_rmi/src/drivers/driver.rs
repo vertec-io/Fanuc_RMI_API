@@ -20,7 +20,6 @@ pub struct  FanucDriverConfig {
     addr: String,
     port: u32,
     max_messages: usize,
-    packet_queue: VecDeque<PacketEnum>
 }
 
 
@@ -33,7 +32,6 @@ impl Default for FanucDriverConfig {
             addr,
             port,
             max_messages,
-            packet_queue:VecDeque::new()
 
         }
     }
@@ -45,6 +43,8 @@ pub struct FanucDriver {
     pub messages: Arc<Mutex<VecDeque<String>>>,
     write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
+    packet_queue: VecDeque<PacketEnum>
+
 }
 
 // Static assertion to ensure FanucDriver is Send
@@ -123,6 +123,7 @@ impl FanucDriver {
             messages,
             write_half,
             read_half,
+            packet_queue:VecDeque::new()
         })
     }
 
