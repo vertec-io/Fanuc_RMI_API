@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcCall {
     #[serde(rename = "SequenceID")]
     sequence_id: i32,
@@ -21,7 +21,7 @@ impl FrcCall{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcCallResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

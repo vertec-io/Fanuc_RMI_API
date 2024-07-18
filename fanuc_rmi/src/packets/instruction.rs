@@ -3,7 +3,7 @@ use super::Packet;
 use crate::instructions::*;
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Instruction")]
 pub enum Instruction {
     #[serde(rename = "FRC_WaitDIN")]
@@ -55,7 +55,7 @@ pub enum Instruction {
     FrcLinearMotionJRep(FrcLinearMotionJRep),   // Add Linear Motion with Joint Representation
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Instruction")]
 pub enum InstructionResponse {
     #[serde(rename = "FRC_WaitDIN")]
@@ -121,7 +121,7 @@ impl InstructionResponse {
 
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum OnOff{
     ON,
     OFF

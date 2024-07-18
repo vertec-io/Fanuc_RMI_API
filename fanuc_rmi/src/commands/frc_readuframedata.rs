@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::FrameData;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadUFrameData {
     #[serde(rename = "FrameNumber")]
     frame_number: i8,    
@@ -24,7 +24,7 @@ impl FrcReadUFrameData{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcReadUFrameDataResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

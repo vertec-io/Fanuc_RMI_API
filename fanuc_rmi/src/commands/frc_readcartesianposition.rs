@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{Configuration, Position};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadCartesianPosition {
     #[serde(rename = "Group")]
     group: u8,
@@ -20,7 +20,7 @@ impl FrcReadCartesianPosition{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcReadCartesianPositionResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

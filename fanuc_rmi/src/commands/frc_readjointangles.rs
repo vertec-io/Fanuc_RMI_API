@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::JointAngles;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadJointAngles{
     #[serde(rename = "Group")]
     group: u8,
@@ -19,7 +19,7 @@ impl FrcReadJointAngles{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcReadJointAnglesResponse {    
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

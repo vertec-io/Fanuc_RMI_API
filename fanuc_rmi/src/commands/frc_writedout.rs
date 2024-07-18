@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcWriteDOUT{
     #[serde(rename = "PortNumber")]
     pub port_number: u16,
@@ -21,7 +21,7 @@ impl FrcWriteDOUT{
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcWriteDOUTResponse {    
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

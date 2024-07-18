@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{Configuration, Position, SpeedType, TermType};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcLinearMotion {
     #[serde(rename = "SequenceID")]
     sequence_id: u32,    
@@ -45,7 +45,7 @@ impl FrcLinearMotion{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcLinearMotionResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

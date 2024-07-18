@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcWaitTime {
     #[serde(rename = "SequenceID")]
     sequence_id: i32,
@@ -21,7 +21,7 @@ impl FrcWaitTime{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcWaitTimeResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

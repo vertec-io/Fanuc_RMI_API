@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadError {
     #[serde(rename = "Count")]
     count: u8,
@@ -28,7 +28,7 @@ impl Default for FrcReadError {
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadErrorResponse {   
     #[serde(rename = "ErrorID")]
     error_id: u16,

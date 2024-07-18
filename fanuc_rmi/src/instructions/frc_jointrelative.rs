@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{Configuration, Position, SpeedType, TermType};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcJointRelative {
     #[serde(rename = "SequenceID")]
     sequence_id: u32,    
@@ -44,7 +44,7 @@ impl FrcJointRelative{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcJointRelativeResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

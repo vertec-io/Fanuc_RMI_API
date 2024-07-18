@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcSetUFrameUTool {
     #[serde(rename = "Group")]
     group: u8,
@@ -27,7 +27,7 @@ impl FrcSetUFrameUTool{
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcSetUFrameUToolResponse { 
 
     #[serde(rename = "ErrorID")]

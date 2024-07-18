@@ -2,7 +2,7 @@ use serde::{Serialize, Deserialize};
 
 use super::Packet;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "Communication")]
 pub enum Communication {
     #[serde(rename = "FRC_Connect")]
@@ -16,7 +16,7 @@ pub enum Communication {
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "Communication")]
 pub enum CommunicationResponse {
     #[serde(rename = "FRC_Connect")]
@@ -29,7 +29,7 @@ pub enum CommunicationResponse {
     FrcSystemFault,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcConnectResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
@@ -40,13 +40,12 @@ pub struct FrcConnectResponse {
     #[serde(rename = "MinorVersion")]
     pub minor_version: u16
 }
-#[derive(Serialize, Deserialize, Debug)]
-
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcDisconnectResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcSystemFault {
     #[serde(rename = "SequenceID")]
     pub sequence_id: u32,

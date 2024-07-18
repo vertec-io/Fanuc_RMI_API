@@ -4,7 +4,7 @@ use super::Packet;
 use crate::commands::*;
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Command")]
 pub enum Command {
     #[serde(rename = "FRC_Initialize")]
@@ -69,7 +69,7 @@ pub enum Command {
     FrcReadTCPSpeed,
 
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Command")]
 pub enum CommandResponse {
     #[serde(rename = "FRC_Initialize")]

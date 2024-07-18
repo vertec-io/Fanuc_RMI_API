@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::packets::OnOff;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcWaitDIN {
     #[serde(rename = "SequenceID")]
     sequence_id: i32,
@@ -24,7 +24,7 @@ impl FrcWaitDIN{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcWaitDINResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

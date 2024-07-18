@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{JointAngles, SpeedType, TermType};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcJointMotionJRep {
     #[serde(rename = "SequenceID")]
     sequence_id: u32,    
@@ -40,7 +40,7 @@ impl FrcJointMotionJRep{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcJointMotionJRepResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

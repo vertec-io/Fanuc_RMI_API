@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Configuration, Position};
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadPositionRegister {
     #[serde(rename = "Group")]
     group: u8,
@@ -25,7 +25,7 @@ impl FrcReadPositionRegister{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcReadPositionRegisterResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

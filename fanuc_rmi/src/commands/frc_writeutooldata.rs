@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::FrameData;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcWriteUToolData {
     #[serde(rename = "ToolNumber")]
     tool_number: i8,    
@@ -27,7 +27,7 @@ impl FrcWriteUToolData{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcWriteUToolDataResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

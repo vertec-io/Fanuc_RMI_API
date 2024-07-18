@@ -19,7 +19,7 @@ pub mod instructions;
 pub mod commands;
 pub mod communication;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrameData {
     x: f32,
     y: f32,
@@ -30,7 +30,7 @@ pub struct FrameData {
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub struct Configuration {
     pub u_tool_number: u8,
@@ -44,7 +44,7 @@ pub struct Configuration {
     pub turn6: u8,
 }
 
-#[derive(Serialize, Deserialize,Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct Position {
     pub x: f32,
@@ -58,7 +58,7 @@ pub struct Position {
     pub ext3: f32,
 }
 
-#[derive(Serialize, Deserialize,Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct JointAngles {
     j1: f32,
     j2: f32,
@@ -72,7 +72,7 @@ pub struct JointAngles {
 }
 
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum TermType {
     FINE,
     CNT, // CNT with a value from 1 to 100
@@ -91,7 +91,7 @@ pub enum TermType {
 /// * `InchMin` - Represents speed in inches per second.
 /// * `Time` - Represents time in 0.1 second increments.
 /// * `MilliSeconds` - Represents time in milliseconds (0.001 seconds).
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum SpeedType {
     #[serde(rename = "mmSec")]
     MMSec, // Speed in millimeters per second (mm/sec).
@@ -101,7 +101,7 @@ pub enum SpeedType {
     MilliSeconds, // Time in milliseconds (0.001 seconds).
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum FrcError{
     Serialization(String),
     UnrecognizedPacket,
@@ -128,7 +128,7 @@ impl fmt::Display for FrcError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(untagged)]
 
 pub enum PacketEnum {
@@ -138,7 +138,7 @@ pub enum PacketEnum {
 }
 
 #[repr(u32)]
-#[derive(Debug, Serialize, Deserialize, IntEnum)]
+#[derive(Debug, Serialize, Deserialize, IntEnum, Clone)]
 pub enum FanucErrorCode {
     InternalSystemError = 2556929,
     InvalidUToolNumber = 2556930,

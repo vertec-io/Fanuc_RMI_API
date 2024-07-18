@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{Configuration, Position, SpeedType, TermType};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcCircularMotion {
     #[serde(rename = "SequenceID")]
     sequence_id: u32,    
@@ -52,7 +52,7 @@ impl FrcCircularMotion{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcCircularMotionResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,

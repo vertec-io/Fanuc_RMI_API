@@ -1,5 +1,5 @@
 use serde::Deserialize;
-// use serde::Serialize;
+use serde::Serialize;
 use tokio::sync::mpsc;
 // use std::fmt::format;
 // use std::{error::Error, io, sync::Arc, time::Duration};
@@ -15,11 +15,12 @@ use crate::PacketEnum;
 use crate::{Configuration, Position, SpeedType, TermType, FrcError };
 // use std::marker::Send;
 
-#[derive(Debug,Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct  FanucDriverConfig {
     addr: String,
     port: u32,
     max_messages: usize,
+    packet_queue: VecDeque<PacketEnum>
 }
 
 
@@ -31,7 +32,9 @@ impl Default for FanucDriverConfig {
         Self {
             addr,
             port,
-            max_messages
+            max_messages,
+            packet_queue:VecDeque::new()
+
         }
     }
 }

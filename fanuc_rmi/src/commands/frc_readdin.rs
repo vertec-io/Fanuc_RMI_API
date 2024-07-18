@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadDIN{
     #[serde(rename = "PortNumber")]
     port_num: u16,
@@ -18,7 +18,7 @@ impl FrcReadDIN{
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadDINResponse {    
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
