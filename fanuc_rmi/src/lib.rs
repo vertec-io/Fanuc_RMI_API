@@ -69,7 +69,7 @@ pub struct JointAngles {
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum TermType {
     FINE,
     CNT, // CNT with a value from 1 to 100
