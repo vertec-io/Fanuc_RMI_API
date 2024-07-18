@@ -10,8 +10,11 @@ use packets::Instruction;
 use serde::{Deserialize, Serialize};
 use int_enum::IntEnum;
 
-pub mod packets;
+#[cfg(feature="driver")]
 pub mod drivers;
+
+pub mod packets;
+
 pub mod instructions;
 pub mod commands;
 pub mod communication;
