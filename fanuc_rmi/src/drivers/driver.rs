@@ -32,7 +32,6 @@ impl Default for FanucDriverConfig {
             addr,
             port,
             max_messages,
-
         }
     }
 }
@@ -43,8 +42,7 @@ pub struct FanucDriver {
     pub messages: Arc<Mutex<VecDeque<String>>>,
     write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
-    packet_queue: VecDeque<PacketEnum>
-
+    send_to_queue: mpsc::Sender<PacketEnum>
 }
 
 // Static assertion to ensure FanucDriver is Send
@@ -99,7 +97,6 @@ impl FanucDriver {
             }
         };
 
-
         let mut new_port = 0;
         match res {
             CommunicationResponse::FrcConnect(res) => new_port = res.port_number,
@@ -115,16 +112,19 @@ impl FanucDriver {
         let write_half = Arc::new(Mutex::new(write_half));
         let messages: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let mut msg = messages.lock().await;
+        let (send_to_queue, read_from_queue) = mpsc::channel::<PacketEnum>(100);
+
         msg.push_back("Connected".to_string());
         drop(msg);
-
-        Ok(Self {
+        let driver = Self {
             config,
             messages,
             write_half,
             read_half,
-            packet_queue:VecDeque::new()
-        })
+            send_to_queue
+        };
+        let _ = driver.start_program(read_from_queue);
+        Ok(driver)
     }
 
     async fn log_message<T: Into<String>>(&self, message:T){
@@ -329,9 +329,8 @@ impl FanucDriver {
 
     }
 
-    pub fn load_gcode(&self) -> Result<VecDeque<PacketEnum>, FrcError> {
-        let mut queue: VecDeque<PacketEnum> = VecDeque::new();
-        queue.push_back(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+    pub async fn load_gcode(&self){
+        self.add_to_queue(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
             1,    
                 Configuration {
                     u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
@@ -342,8 +341,8 @@ impl FanucDriver {
                 30,
                 TermType::FINE,
                 1,
-        ))));
-        queue.push_back(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+        )))).await;
+        self.add_to_queue(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
             2,    
             Configuration {
                 u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
@@ -354,8 +353,8 @@ impl FanucDriver {
             30,
             TermType::FINE,
             1,
-        ))));
-        queue.push_back(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+        )))).await;
+        self.add_to_queue(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
                 3,    
                 Configuration { u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
                 },
@@ -365,8 +364,8 @@ impl FanucDriver {
                 30,
                 TermType::FINE,
                 1,
-        ))));
-        queue.push_back(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+        )))).await;
+        self.add_to_queue(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
                 4,    
                 Configuration { u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
                 },
@@ -376,18 +375,17 @@ impl FanucDriver {
                 30,
                 TermType::FINE,
                 1,
-        ))));
-        Ok(queue)
+        )))).await;
     }
 
-    pub async fn start_program(&self) -> Result<(), FrcError> {
+    pub async fn start_program(&self, read_from_queue:mpsc::Receiver<PacketEnum> ) -> Result<(), FrcError> {
 
-        let mut queue = self.load_gcode()?; // Handle synchronous load_gcode
+        // self.load_gcode().await; // Handle synchronous load_gcode
         let (tx, rx) = mpsc::channel(100); // Create a channel with a buffer size of 100
 
         //spins up 2 async concurent functions
         let (res1, res2) = tokio::join!(
-            self.send_queue(&mut queue, tx),
+            self.send_queue(tx,read_from_queue),
             self.read_queue_responses(rx)
         );
         
@@ -403,8 +401,14 @@ impl FanucDriver {
 
         Ok(())
     }
+    pub async fn add_to_queue(&self, packet: PacketEnum){
+        let sender = self.send_to_queue.clone();
+        let _ = sender.send(packet).await;
 
-    async fn send_queue(&self, queue: &mut VecDeque<PacketEnum>, tx: mpsc::Sender<u32>)-> Result<(), FrcError>{
+    }
+
+    async fn send_queue(&self, tx: mpsc::Sender<u32>, mut packets_to_add: mpsc::Receiver<PacketEnum>)-> Result<(), FrcError>{
+        let mut queue = VecDeque::new();
         while !queue.is_empty() {
             let packet = queue.pop_front();
             
@@ -419,6 +423,10 @@ impl FanucDriver {
                 },
                 _ => 0, // Use a default value for non-instruction packets
             };
+            while let Ok(new_packet) = packets_to_add.try_recv() {
+                queue.push_back(new_packet);
+            }
+            
 
             tx.send(sequence_id).await.expect("Failed to send message");
 
