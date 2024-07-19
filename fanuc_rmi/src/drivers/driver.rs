@@ -2,8 +2,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
-// use std::fmt::format;
-// use std::{error::Error, io, sync::Arc, time::Duration};
+
 use std::{sync::Arc, time::Duration};
 use tokio::{ net::TcpStream, sync::Mutex, time::sleep};
 use tokio::io::{ AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf, split};
@@ -15,7 +14,6 @@ pub use crate::instructions::*;
 pub use crate::commands::*;
 pub use crate::PacketEnum;
 pub use crate::{Configuration, Position, SpeedType, TermType, FrcError };
-// use std::marker::Send;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct  FanucDriverConfig {
@@ -54,6 +52,9 @@ pub struct FanucDriver {
 // };
 
 impl FanucDriver {
+
+    /// connect is a constructor that a config to and it attempts connection and if connection failed returns error and if not returns a driver with tcp connection to a fanuc controllor(the actual robot hardware)
+    /// connection calls the start program function that spins up 2 async tasks. one to handle packets sent to the robot one to handle recieving the responses.
     pub async fn connect(config: FanucDriverConfig) -> Result<FanucDriver, FrcError> {
         let init_addr = format!("{}:{}",&config.addr, &config.port);
         let mut stream = connect_with_retries(&init_addr, 3).await?;
@@ -139,7 +140,7 @@ impl FanucDriver {
 
 
 
-
+//log message is an interface to print info needed and log it for api use
     async fn log_message<T: Into<String>>(&self, message:T){
         let message = message.into();
         let messages = self.messages.clone();
@@ -158,6 +159,7 @@ impl FanucDriver {
     }
 
 
+    //this is mostly depricated
     pub async fn initialize(&self) -> Result<(), FrcError> {
 
         let packet = Command::FrcInitialize(FrcInitialize::default());
@@ -188,7 +190,7 @@ impl FanucDriver {
 
     }
     
-        
+    
     pub async fn abort(&self) -> Result<(), FrcError> {
 
         let packet = Command::FrcAbort {};
@@ -211,26 +213,26 @@ impl FanucDriver {
         Ok(())
     }
 
-    pub async fn get_status(&self) -> Result<(), FrcError> {
+    // pub async fn get_status(&self) -> Result<(), FrcError> {
 
-        let packet = Command::FrcGetStatus {};
+    //     let packet = Command::FrcGetStatus {};
         
-        let packet = match serde_json::to_string(&packet) {
-            Ok(serialized_packet) => serialized_packet + "\r\n",
-            Err(_) => return Err(FrcError::Serialization("get_status packet didnt serialize correctly".to_string())),
-        };
+    //     let packet = match serde_json::to_string(&packet) {
+    //         Ok(serialized_packet) => serialized_packet + "\r\n",
+    //         Err(_) => return Err(FrcError::Serialization("get_status packet didnt serialize correctly".to_string())),
+    //     };
 
-        self.send_packet(packet.clone()).await?;
-        let response = self.recieve::<CommandResponse>().await?;        
-        if let CommandResponse::FrcGetStatus(ref res) = response {
-            if res.error_id != 0 {
-                self.log_message(format!("Error ID: {}", res.error_id)).await;
-                let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
-                return Err(FrcError::FanucErrorCode(error_code)); 
-            }
-        }
-        Ok(())
-    }
+    //     self.send_packet(packet.clone()).await?;
+    //     let response = self.recieve::<CommandResponse>().await?;        
+    //     if let CommandResponse::FrcGetStatus(ref res) = response {
+    //         if res.error_id != 0 {
+    //             self.log_message(format!("Error ID: {}", res.error_id)).await;
+    //             let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
+    //             return Err(FrcError::FanucErrorCode(error_code)); 
+    //         }
+    //     }
+    //     Ok(())
+    // }
 
     pub async fn disconnect(&self) -> Result<(), FrcError> {
 
@@ -347,7 +349,7 @@ impl FanucDriver {
     }
 
 
-
+    //this is just a debug helper function to load the queue automatically
     pub async fn load_gcode(&self){
         self.add_to_queue(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
             1,    
@@ -505,16 +507,29 @@ impl FanucDriver {
                                         None
                                     }
                                 };
+
+
+                                // here is packet response handling logic. may be relocated soon
                                 match response_packet {
                                     Some(ResponsePacketEnum::CommunicationResponse(CommunicationResponse::FrcDisconnect(_))) => {
                                         println!("Received a FrcDisconnect packet.");
                                         break
                                     },
+                                    Some(ResponsePacketEnum::CommandResponse(CommandResponse::FrcInitialize(frc_initialize_response))) => {
+                                        let id = frc_initialize_response.error_id;
+                                        if id != 0 {
+                                            self.add_to_queue(PacketEnum::Command(Command::FrcAbort)).await;
+                                            self.add_to_queue(PacketEnum::Command(Command::FrcInitialize(FrcInitialize::default()))).await;
+                                        }
+                                        println!("Received a init packet. with eid :{}", id);
+                                        break
+                                    },
                                     _ => {
-                                        println!("Received a different type of packet.");
+                                        // println!("Received a different type of packet.");
                                         // Handle other types of packets here
                                     }
                                 }
+
 
                             }
                         }
