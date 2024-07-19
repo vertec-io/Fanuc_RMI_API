@@ -174,10 +174,12 @@ async fn main() -> Result<(), FrcError > {
     //     1,
     // ).await?;
     println!("sleeping to wait for background task");
-    sleep(Duration::from_secs(5)).await;
+    sleep(Duration::from_millis(500)).await;
 
     driver.abort().await?;
     driver.disconnect().await?;
+    sleep(Duration::from_millis(5)).await;
+
 
     Ok(())
 }

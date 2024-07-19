@@ -242,14 +242,14 @@ impl FanucDriver {
         };
 
         self.send_packet(packet.clone()).await?;
-        let response = self.recieve::<CommunicationResponse>().await?;        
-        if let CommunicationResponse::FrcDisconnect(ref res) = response {
-            if res.error_id != 0 {
-                self.log_message(format!("Error ID: {}", res.error_id)).await;
-                let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
-                return Err(FrcError::FanucErrorCode(error_code));             
-            }
-        }
+        // let response = self.recieve::<CommunicationResponse>().await?;        
+        // if let CommunicationResponse::FrcDisconnect(ref res) = response {
+        //     if res.error_id != 0 {
+        //         self.log_message(format!("Error ID: {}", res.error_id)).await;
+        //         let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
+        //         return Err(FrcError::FanucErrorCode(error_code));             
+        //     }
+        // }
 
         Ok(())
 
@@ -400,10 +400,6 @@ impl FanucDriver {
 
     pub async fn start_program(&mut self, read_from_queue:Receiver<PacketEnum>) -> Result<(), FrcError> {
 
-        // self.load_gcode().await; // Handle synchronous load_gcode
-        // let (send_to_queue, read_from_queue) = mpsc::channel(100); // Create a channel with a buffer size of 100
-        // self.send_to_queue = send_to_queue;
-        // println!("reassigned send to queue");
         //spins up 2 async concurent functions
         let (res1, res2) = tokio::join!(
             self.send_queue(read_from_queue),
@@ -509,6 +505,16 @@ impl FanucDriver {
                                         None
                                     }
                                 };
+                                match response_packet {
+                                    Some(ResponsePacketEnum::CommunicationResponse(CommunicationResponse::FrcDisconnect(_))) => {
+                                        println!("Received a FrcDisconnect packet.");
+                                        break
+                                    },
+                                    _ => {
+                                        println!("Received a different type of packet.");
+                                        // Handle other types of packets here
+                                    }
+                                }
 
                             }
                         }
@@ -523,6 +529,7 @@ impl FanucDriver {
         
         // Ok(())
     }
+
 
 }
 
