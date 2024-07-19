@@ -453,8 +453,8 @@ impl FanucDriver {
                 // Send the packet
                 if let Err(e) = self.send_packet(serialized_packet).await {
                     self.log_message(format!("Failed to send a packet: {:?}", e)).await;
-                    break;
                 }
+                if packet == PacketEnum::Communication(Communication::FrcDisconnect){break;}
             }
 
 
