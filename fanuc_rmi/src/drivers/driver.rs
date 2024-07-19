@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::Receiver;
 // use std::fmt::format;
 // use std::{error::Error, io, sync::Arc, time::Duration};
 use std::{sync::Arc, time::Duration};
@@ -8,11 +9,12 @@ use tokio::{ net::TcpStream, sync::Mutex, time::sleep};
 use tokio::io::{ AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf, split};
 use std::collections::VecDeque;
 
-use crate::{packets::*, FanucErrorCode};
-use crate::instructions::*;
-use crate::commands::*;
-use crate::PacketEnum;
-use crate::{Configuration, Position, SpeedType, TermType, FrcError };
+use crate::ResponsePacketEnum;
+pub use crate::{packets::*, FanucErrorCode};
+pub use crate::instructions::*;
+pub use crate::commands::*;
+pub use crate::PacketEnum;
+pub use crate::{Configuration, Position, SpeedType, TermType, FrcError };
 // use std::marker::Send;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -121,11 +123,22 @@ impl FanucDriver {
             messages,
             write_half,
             read_half,
-            send_to_queue
+            send_to_queue,
         };
-        let _ = driver.start_program(read_from_queue);
+        // let _ = driver.start_program(read_from_queue);
+        let mut driver2 = driver.clone();
+        tokio::spawn(async move {
+            match driver2.start_program(read_from_queue).await {
+                Ok(_) => println!("Program started successfully"),
+                Err(e) => eprintln!("Failed to start program: {:?}", e),
+            }
+        });
+
         Ok(driver)
     }
+
+
+
 
     async fn log_message<T: Into<String>>(&self, message:T){
         let message = message.into();
@@ -158,17 +171,20 @@ impl FanucDriver {
             self.log_message(e.to_string()).await;
             return Err(e);
         }; 
+        return Ok(());
 
-        let response = self.recieve::<CommandResponse>().await?;
+        // let response = self.recieve::<CommandResponse>().await?;
 
-        if let CommandResponse::FrcInitialize(ref res) = response {
-            if res.error_id != 0 {
-                self.log_message(format!("Error ID: {}", res.error_id)).await;
-                let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
-                return Err(FrcError::FanucErrorCode(error_code));
-            }
-        };
-        Ok(())
+        // if let CommandResponse::FrcInitialize(ref res) = response {
+        //     if res.error_id != 0 {
+        //         self.log_message(format!("Error ID: {}", res.error_id)).await;
+        //         let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
+        //         return Err(FrcError::FanucErrorCode(error_code));
+        //     }
+        // };
+
+ 
+        // Ok(())
 
     }
     
@@ -183,15 +199,15 @@ impl FanucDriver {
         };
 
         self.send_packet(packet.clone()).await?;
-        let response = self.recieve::<CommandResponse>().await?;
+        // let response = self.recieve::<CommandResponse>().await?;
 
-        if let CommandResponse::FrcAbort(ref res) = response {
-            if res.error_id != 0 {
-                self.log_message(format!("Error ID: {}", res.error_id)).await;
-                let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
-                return Err(FrcError::FanucErrorCode(error_code));            
-            }
-        }
+        // if let CommandResponse::FrcAbort(ref res) = response {
+        //     if res.error_id != 0 {
+        //         self.log_message(format!("Error ID: {}", res.error_id)).await;
+        //         let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
+        //         return Err(FrcError::FanucErrorCode(error_code));            
+        //     }
+        // }
         Ok(())
     }
 
@@ -231,7 +247,8 @@ impl FanucDriver {
             if res.error_id != 0 {
                 self.log_message(format!("Error ID: {}", res.error_id)).await;
                 let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
-                return Err(FrcError::FanucErrorCode(error_code));             }
+                return Err(FrcError::FanucErrorCode(error_code));             
+            }
         }
 
         Ok(())
@@ -329,6 +346,8 @@ impl FanucDriver {
 
     }
 
+
+
     pub async fn load_gcode(&self){
         self.add_to_queue(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
             1,    
@@ -376,17 +395,19 @@ impl FanucDriver {
                 TermType::FINE,
                 1,
         )))).await;
+        println!("added 4 packets to queue");
     }
 
-    pub async fn start_program(&self, read_from_queue:mpsc::Receiver<PacketEnum> ) -> Result<(), FrcError> {
+    pub async fn start_program(&mut self, read_from_queue:Receiver<PacketEnum>) -> Result<(), FrcError> {
 
         // self.load_gcode().await; // Handle synchronous load_gcode
-        let (tx, rx) = mpsc::channel(100); // Create a channel with a buffer size of 100
-
+        // let (send_to_queue, read_from_queue) = mpsc::channel(100); // Create a channel with a buffer size of 100
+        // self.send_to_queue = send_to_queue;
+        // println!("reassigned send to queue");
         //spins up 2 async concurent functions
         let (res1, res2) = tokio::join!(
-            self.send_queue(tx,read_from_queue),
-            self.read_queue_responses(rx)
+            self.send_queue(read_from_queue),
+            self.read_queue_responses()
         );
         
         match res1 {
@@ -402,58 +423,60 @@ impl FanucDriver {
         Ok(())
     }
     pub async fn add_to_queue(&self, packet: PacketEnum){
+        let packet2 = packet.clone();
         let sender = self.send_to_queue.clone();
-        let _ = sender.send(packet).await;
-
+        if let Err(e) = sender.send(packet).await {
+            // Handle the error properly, e.g., logging it
+            println!("Failed to send packet: {}", e);
+        }
+        else{
+            // println!("sent packet to queue: {:?} ", packet2);
+        }
     }
 
-    async fn send_queue(&self, tx: mpsc::Sender<u32>, mut packets_to_add: mpsc::Receiver<PacketEnum>)-> Result<(), FrcError>{
+    async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<PacketEnum>)-> Result<(), FrcError>{
         let mut queue = VecDeque::new();
-        while !queue.is_empty() {
-            let packet = queue.pop_front();
-            
-            //all this match statement does is extract the sequence id from the packet about to be sent, it may not be neccesary later
-            let sequence_id = match &packet.as_ref().unwrap() {
-                PacketEnum::Instruction(instruction) => {
-                    match instruction {
-                        Instruction::FrcLinearRelative(packet) => packet.sequence_id,
-                        // Handle other instruction types similarly if needed
-                        _ => 0, // Use a default value if sequence_id is not applicable
-                    }
-                },
-                _ => 0, // Use a default value for non-instruction packets
-            };
+        loop {   
+            // println!("running");
+
             while let Ok(new_packet) = packets_to_add.try_recv() {
                 queue.push_back(new_packet);
             }
-            
 
-            tx.send(sequence_id).await.expect("Failed to send message");
 
-            let packet = match serde_json::to_string(&packet) {
-                Ok(serialized_packet) => serialized_packet + "\r\n",
-                Err(e) => {
-                    self.log_message(format!("Failed to serialize a packet: {}", e)).await;
+            if let Some(packet) = queue.pop_front() {
+                // Serialize the packet
+                let serialized_packet = match serde_json::to_string(&packet) {
+                    Ok(packet_str) => packet_str + "\r\n",
+                    Err(e) => {
+                        self.log_message(format!("Failed to serialize a packet: {}", e)).await;
+                        break;
+                    }
+                };
+
+                // Send the packet
+                if let Err(e) = self.send_packet(serialized_packet).await {
+                    self.log_message(format!("Failed to send a packet: {:?}", e)).await;
                     break;
                 }
-            };
-            self.send_packet(packet).await?;
-        
-            // sleep(Duration::from_millis(1)).await;
-            
+            }
+
+
+            // tx.send(0).await.expect("Failed to send message");
+            sleep(Duration::from_millis(100)).await;
+
         }
         self.log_message("Sent all packets").await;
 
         //when 0 is sent it shuts  off the recciever system so we wait one sec so that the response can be sent back and processed
         sleep(Duration::from_secs(1)).await;
 
-        tx.send(0).await.expect("Failed to send end message");
 
         Ok(())
     }
     
 
-    async fn read_queue_responses(&self, mut rx: mpsc::Receiver<u32>) -> Result<(), FrcError> {
+    async fn read_queue_responses(&self) -> Result<(), FrcError> {
         
         let mut reader = self.read_half.lock().await;
 
@@ -465,7 +488,7 @@ impl FanucDriver {
             tokio::select! {
                 result = reader.read(&mut buffer) => {
                     match result {
-                        Ok(0) => break, // Connection closed
+                        Ok(0) => break Ok(()), // Connection closed
                         Ok(n) => {
                             // Append new data to temp_buffer
                             temp_buffer.extend_from_slice(&buffer[..n]);
@@ -477,39 +500,28 @@ impl FanucDriver {
                                 let request = &request[..request.len() - 1];
 
                                 let response_str = String::from_utf8_lossy(request);
-                                self.log_message(response_str.clone()).await;
+                                self.log_message(format!("recieved: {}", response_str.clone())).await;
 
-                                let response_packet: Option<InstructionResponse> = match serde_json::from_str::<InstructionResponse>(&response_str) {
+                                let response_packet: Option<ResponsePacketEnum> = match serde_json::from_str::<ResponsePacketEnum>(&response_str) {
                                     Ok(response_packet) => Some(response_packet),
                                     Err(e) => {
-                                        self.log_message(format!("Could not parse response: {}", e)).await;
+                                        self.log_message(format!("Could not parse response into RPE: {}", e)).await;
                                         None
                                     }
                                 };
 
-                                if let Some(response_packet) = response_packet {
-                                    let sequence_id = response_packet.get_sequence_id();
-                                    self.log_message(format!("Found matching id: {}", sequence_id)).await;
-                                    numbers_to_look_for.retain(|&x| x != sequence_id);
-                                }
                             }
                         }
                         Err(e) => {
                             self.log_message(format!("Failed to read from stream: {}", e)).await;
                         }
                     }
-                },
-                Some(message) = rx.recv() => {
-                    if message == 0 {
-                        break;
-                    } else {
-                        numbers_to_look_for.push_back(message);
-                    }
-                }
+
             }
         }
+    }
         
-        Ok(())
+        // Ok(())
     }
 
 }

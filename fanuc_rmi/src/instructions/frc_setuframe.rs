@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcSetUFrame {
     #[serde(rename = "SequenceID")]
-    sequence_id: i32,
+    pub sequence_id: u32,
     #[serde(rename = "FrameNumber")]
     frame_number: u8,
 
@@ -12,7 +12,7 @@ pub struct FrcSetUFrame {
  
 impl FrcSetUFrame{
     #[allow(unused)]
-    fn new(seq:i32, frame_num:u8) -> Self {
+    fn new(seq:u32, frame_num:u8) -> Self {
         Self {
             sequence_id: seq,
             frame_number: frame_num,

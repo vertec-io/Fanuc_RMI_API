@@ -55,6 +55,31 @@ pub enum Instruction {
     FrcLinearMotionJRep(FrcLinearMotionJRep),   // Add Linear Motion with Joint Representation
 }
 
+impl Instruction {
+    pub fn get_sequence_id(&self) -> u32 {
+        match self {
+            Instruction::FrcWaitDIN(resp) => resp.sequence_id,
+            Instruction::FrcSetUFrame(resp) => resp.sequence_id,
+            Instruction::FrcSetUTool(resp) => resp.sequence_id,
+            Instruction::FrcWaitTime(resp) => resp.sequence_id,
+            Instruction::FrcSetPayLoad(resp) => resp.sequence_id,
+            Instruction::FrcCall(resp) => resp.sequence_id,
+            Instruction::FrcLinearMotion(resp) => resp.sequence_id,
+            Instruction::FrcLinearRelative(resp) => resp.sequence_id,
+            Instruction::FrcLinearRelativeJRep(resp) => resp.sequence_id,
+            Instruction::FrcJointMotion(resp) => resp.sequence_id,
+            Instruction::FrcJointRelative(resp) => resp.sequence_id,
+            Instruction::FrcCircularMotion(resp) => resp.sequence_id,
+            Instruction::FrcCircularRelative(resp) => resp.sequence_id,
+            Instruction::FrcJointMotionJRep(resp) => resp.sequence_id,
+            Instruction::FrcJointRelativeJRep(resp) => resp.sequence_id,
+            Instruction::FrcLinearMotionJRep(resp) => resp.sequence_id,
+        }
+    }
+}
+
+
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Instruction")]
 pub enum InstructionResponse {

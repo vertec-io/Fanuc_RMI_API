@@ -16,6 +16,7 @@ pub enum Communication {
 }
 
 
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "Communication")]
 pub enum CommunicationResponse {

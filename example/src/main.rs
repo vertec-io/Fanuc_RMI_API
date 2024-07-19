@@ -1,4 +1,7 @@
-use fanuc_rmi::{drivers::{FanucDriver, FanucDriverConfig}, Configuration, FrcError, Position};
+use std::time::Duration;
+
+use fanuc_rmi::{drivers::{FanucDriver, FanucDriverConfig}, instructions::FrcLinearRelative, Configuration, FrcError, Instruction, PacketEnum, Position, SpeedType, TermType};
+use tokio::time::sleep;
 // use fanuc_rmi::{Configuration, Position};
 // use std::error::Error;
 
@@ -11,7 +14,7 @@ async fn main() -> Result<(), FrcError > {
 
     // let mut driver = FanucDriver::new("192.168.1.100".to_string(), 16001);
 
-    let driver = match driver {
+    let mut driver = match driver {
         Ok(driver) => {
             println!("Connected successfully");
             driver
@@ -22,7 +25,6 @@ async fn main() -> Result<(), FrcError > {
         },
     };
 
-
     // driver.get_status().await?;
     let res = driver.initialize().await;
     if res.is_err() {
@@ -30,6 +32,23 @@ async fn main() -> Result<(), FrcError > {
         driver.abort().await?;
         driver.initialize().await?;
     };
+
+    // driver.load_gcode().await;
+    // let _ = driver.start_program();
+    // println!("after startprogram");
+
+    driver.load_gcode().await;
+    // driver.add_to_queue(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+    //     4,    
+    //     Configuration { u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
+    //     },
+    //     Position { x: -30.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+    //     },
+    //     SpeedType::MMSec,
+    //     30,
+    //     TermType::FINE,
+    //     1,
+    // )))).await;
 
     // driver.start_program().await?;
 
@@ -154,8 +173,11 @@ async fn main() -> Result<(), FrcError > {
     //     fanuc_rmi::TermType::FINE,
     //     1,
     // ).await?;
-    // driver.abort().await?;
-    // driver.disconnect().await?;
+    println!("sleeping to wait for background task");
+    sleep(Duration::from_secs(5)).await;
+
+    driver.abort().await?;
+    driver.disconnect().await?;
 
     Ok(())
 }

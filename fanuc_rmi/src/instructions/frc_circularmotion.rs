@@ -4,7 +4,7 @@ use crate::{Configuration, Position, SpeedType, TermType};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcCircularMotion {
     #[serde(rename = "SequenceID")]
-    sequence_id: u32,    
+    pub sequence_id: u32,    
     #[serde(rename = "Configuration")]
     configuration: Configuration,
     #[serde(rename = "Position")]

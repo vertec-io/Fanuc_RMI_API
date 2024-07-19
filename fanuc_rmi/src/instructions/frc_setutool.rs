@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcSetUTool {
     #[serde(rename = "SequenceID")]
-    sequence_id: i32,
+    pub sequence_id: u32,
     #[serde(rename = "ToolNumber")]
     tool_number: u8,
 
@@ -12,7 +12,7 @@ pub struct FrcSetUTool {
  
 impl FrcSetUTool{
     #[allow(unused)]
-    fn new(seq:i32, tool_num:u8) -> Self {
+    fn new(seq:u32, tool_num:u8) -> Self {
         Self {
             sequence_id: seq,
             tool_number: tool_num,

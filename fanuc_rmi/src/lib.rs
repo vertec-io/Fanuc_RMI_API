@@ -3,10 +3,13 @@
 use std::error::Error;
 use std::fmt;
 
-use packets::Communication;
-use packets::Command;
-use packets::Instruction;
+use packets::CommandResponse;
+pub use packets::Communication;
+pub use packets::Command;
+use packets::CommunicationResponse;
+pub use packets::Instruction;
 
+use packets::InstructionResponse;
 use serde::{Deserialize, Serialize};
 use int_enum::IntEnum;
 
@@ -136,6 +139,16 @@ pub enum PacketEnum {
     Command(Command),
     Instruction(Instruction)
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+
+pub enum ResponsePacketEnum {
+    CommunicationResponse(CommunicationResponse),
+    CommandResponse(CommandResponse),
+    InstructionResponse(InstructionResponse)
+}
+
 
 #[repr(u32)]
 #[derive(Debug, Serialize, Deserialize, IntEnum, Clone)]

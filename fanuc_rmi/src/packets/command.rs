@@ -67,8 +67,14 @@ pub enum Command {
 
     #[serde(rename = "FRC_ReadTCPSpeed")]
     FrcReadTCPSpeed,
-
 }
+
+
+
+
+
+
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Command")]
 pub enum CommandResponse {

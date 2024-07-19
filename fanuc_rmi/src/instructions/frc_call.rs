@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcCall {
     #[serde(rename = "SequenceID")]
-    sequence_id: i32,
+    pub sequence_id: u32,
     #[serde(rename = "ProgramName")]
     program_name: String,
 
@@ -12,7 +12,7 @@ pub struct FrcCall {
  
 impl FrcCall{
     #[allow(unused)]
-    fn new(seq:i32, program:String) -> Self {
+    fn new(seq:u32, program:String) -> Self {
         Self {
             sequence_id: seq,
             program_name: program,

@@ -4,7 +4,7 @@ use crate::{JointAngles, SpeedType, TermType};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcLinearRelativeJRep {
     #[serde(rename = "SequenceID")]
-    sequence_id: u32,    
+    pub sequence_id: u32,    
     #[serde(rename = "JointAngles")]
     joint_angles: JointAngles,
     #[serde(rename = "SpeedType")]
