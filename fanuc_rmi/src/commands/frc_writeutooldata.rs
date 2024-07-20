@@ -14,14 +14,14 @@ pub struct FrcWriteUToolData {
 
 impl FrcWriteUToolData{
     #[allow(unused)]
-    fn new(groupentered: Option<u8>, toolnum:i8, framespecs:FrameData) -> Self {
+    fn new(group: Option<u8>, tool_number:i8, frame:FrameData) -> Self {
         Self {
-            group: match groupentered {
+            group: match group {
                 Some(gm) => gm,
                 None => 1
             },
-            tool_number: toolnum,
-            frame: framespecs
+            tool_number,
+            frame
         }
 
     }

@@ -12,13 +12,13 @@ pub struct FrcReadUToolData {
 
 impl FrcReadUToolData{
     #[allow(unused)]
-    fn new(groupentered: Option<u8>, framenum:i8) -> Self {
+    fn new(group: Option<u8>, frame_number:i8) -> Self {
         Self {
-            group: match groupentered {
+            group: match group {
                 Some(gm) => gm,
                 None => 1
             },
-            frame_number: framenum
+            frame_number
             }
 
     }

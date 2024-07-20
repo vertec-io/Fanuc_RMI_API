@@ -14,11 +14,11 @@ pub struct FrcWaitDIN {
  
 impl FrcWaitDIN{
     #[allow(unused)]
-    fn new(seq:u32,port_num:u32,port_val:OnOff) -> Self {
+    fn new(sequence_id:u32,port_number:u32,port_value:OnOff) -> Self {
         Self {
-            sequence_id: seq,
-            port_number: port_num,
-            port_value: port_val,
+            sequence_id,
+            port_number,
+            port_value,
         }
 
     }

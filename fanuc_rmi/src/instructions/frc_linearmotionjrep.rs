@@ -12,7 +12,7 @@ pub struct FrcLinearMotionJRep {
     #[serde(rename = "SpeedType")]
     speed_type: SpeedType,
     #[serde(rename = "Speed")]
-    speed: u16,
+    speed: f64,
     #[serde(rename = "TermType")]
     term_type: TermType,
     #[serde(rename = "TermValue")]
@@ -22,21 +22,21 @@ pub struct FrcLinearMotionJRep {
 
 impl FrcLinearMotionJRep{
     pub fn new(    
-        sequenceid: u32,    
-        joints: JointAngles,
-        speed_t: SpeedType,
-        speed: u16,
-        term_t: TermType,
-        term_va: u8,
+        sequence_id: u32,    
+        joint_angles: JointAngles,
+        speed_type: SpeedType,
+        speed: f64,
+        term_type: TermType,
+        term_value: u8,
     
     ) -> Self {
         Self {
-            sequence_id: sequenceid,    
-            joint_angles: joints,
-            speed_type: speed_t,
-            speed: speed,
-            term_type: term_t,
-            term_value: term_va,
+            sequence_id,    
+            joint_angles,
+            speed_type,
+            speed,
+            term_type,
+            term_value,
         }
 
     }

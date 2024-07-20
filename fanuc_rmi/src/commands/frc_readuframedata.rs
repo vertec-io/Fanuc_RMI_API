@@ -12,13 +12,13 @@ pub struct FrcReadUFrameData {
 
 impl FrcReadUFrameData{
     #[allow(unused)]
-    fn new(groupentered: Option<u8>, frame:i8) -> Self {
+    fn new(group: Option<u8>, frame_number:i8) -> Self {
         Self {
-            group: match groupentered {
+            group: match group {
                 Some(gm) => gm,
                 None => 1
             },
-            frame_number: frame,
+            frame_number,
         }
 
     }
@@ -29,7 +29,7 @@ pub struct FrcReadUFrameDataResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     #[serde(rename = "UFrameNumber")]
-    pub uframe_number: i8,
+    pub u_frame_number: i8,
     #[serde(rename = "Group")]
     group: u8,
     #[serde(rename = "Frame")]

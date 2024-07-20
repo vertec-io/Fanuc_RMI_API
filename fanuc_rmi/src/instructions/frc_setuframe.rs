@@ -12,10 +12,10 @@ pub struct FrcSetUFrame {
  
 impl FrcSetUFrame{
     #[allow(unused)]
-    fn new(seq:u32, frame_num:u8) -> Self {
+    fn new(sequence_id:u32, frame_number:u8) -> Self {
         Self {
-            sequence_id: seq,
-            frame_number: frame_num,
+            sequence_id,
+            frame_number,
         }
 
     }

@@ -14,14 +14,14 @@ pub struct FrcWriteUFrameData {
 
 impl FrcWriteUFrameData{
     #[allow(unused)]
-    fn new(groupentered: Option<u8>, framenum:i8, framespecs:FrameData) -> Self {
+    fn new(group: Option<u8>, frame_number:i8, frame:FrameData) -> Self {
         Self {
-            group: match groupentered {
+            group: match group {
                 Some(gm) => gm,
                 None => 1
             },
-            frame_number: framenum,
-            frame: framespecs
+            frame_number,
+            frame
         }
 
     }

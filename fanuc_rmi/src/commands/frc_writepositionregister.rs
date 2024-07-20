@@ -17,15 +17,15 @@ pub struct FrcWritePositionRegister {
 
 impl FrcWritePositionRegister{
     #[allow(unused)]
-    fn new(groupentered: Option<u8>, register:u16, config:Configuration , pos:Position) -> Self {
+    fn new(group: Option<u8>, register_number:u16, configuration:Configuration , position:Position) -> Self {
         Self {
-            group: match groupentered {
+            group: match group {
                 Some(gm) => gm,
                 None => 1
             },
-            register_number: register,
-            position: pos,
-            congifuration: config
+            register_number,
+            position,
+            congifuration: configuration
         }
 
     }
@@ -35,7 +35,4 @@ impl FrcWritePositionRegister{
 pub struct FrcWritePositionRegisterResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
-
-
-
 }

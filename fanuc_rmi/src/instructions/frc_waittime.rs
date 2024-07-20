@@ -12,10 +12,10 @@ pub struct FrcWaitTime {
  
 impl FrcWaitTime{
     #[allow(unused)]
-    fn new(seq:u32, time:f32) -> Self {
+    fn new(sequence_id:u32, time:f32) -> Self {
         Self {
-            sequence_id: seq,
-            time: time,
+            sequence_id,
+            time,
         }
 
     }

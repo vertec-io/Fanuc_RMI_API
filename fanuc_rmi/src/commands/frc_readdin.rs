@@ -3,15 +3,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadDIN{
     #[serde(rename = "PortNumber")]
-    port_num: u16,
+    port_number: u16,
 }
 
 
 impl FrcReadDIN{
     #[allow(unused)]
-    fn new(port: u16) -> Self {
+    fn new(port_number: u16) -> Self {
         Self {
-            port_num: port
+            port_number
         }
 
     }

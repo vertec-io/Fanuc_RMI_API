@@ -13,13 +13,13 @@ pub struct FrcReadPositionRegister {
 
 impl FrcReadPositionRegister{
     #[allow(unused)]
-    fn new(groupentered: Option<u8>, register:u16) -> Self {
+    fn new(group: Option<u8>, register_number:u16) -> Self {
         Self {
-            group: match groupentered {
+            group: match group {
                 Some(gm) => gm,
                 None => 1
             },
-            register_number: register
+            register_number
         }
 
     }

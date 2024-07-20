@@ -9,13 +9,13 @@ pub struct FrcReadError {
 
 
 impl FrcReadError{
-    fn new(count1: Option<u8>) -> Self {
-        let count1 = match count1 {
+    fn new(count: Option<u8>) -> Self {
+        let count = match count {
             Some(gm) => gm,
             None => 1
         };
         Self {
-            count: count1
+            count
         }
 
     }

@@ -9,9 +9,9 @@ pub struct FrcGetUFrameUTool {
 
 impl FrcGetUFrameUTool{
     #[allow(unused)]
-    fn new(groupentered: Option<u8>) -> Self {
+    fn new(group: Option<u8>) -> Self {
         Self {
-            group: match groupentered {
+            group: match group {
                 Some(gm) => gm,
                 None => 1
             },
@@ -24,9 +24,9 @@ impl FrcGetUFrameUTool{
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcGetUFrameUToolResponse { 
     #[serde(rename = "UFrameNumber")]
-    uframe_number: u8,
+    u_frame_number: u8,
     #[serde(rename = "UToolNumber")]
-    utool_number: u8,
+    u_tool_number: u8,
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     #[serde(rename = "Group")]

@@ -310,23 +310,23 @@ impl FanucDriver {
 
     pub async fn linear_relative(
         &self,
-        sequenceid: u32,    
-        config: Configuration,
-        pos: Position,
-        speed_t: SpeedType,
-        speed: u16,
-        term_t: TermType,
-        term_va: u8,
+        sequence_id: u32,    
+        configuration: Configuration,
+        position: Position,
+        speed_type: SpeedType,
+        speed: f64,
+        term_type: TermType,
+        term_value: u8,
 
     ) -> Result<(), FrcError> {
         let packet = Instruction::FrcLinearRelative(FrcLinearRelative::new(
-            sequenceid,    
-            config,
-            pos,
-            speed_t,
+            sequence_id,    
+            configuration,
+            position,
+            speed_type,
             speed,
-            term_t,
-            term_va,
+            term_type,
+            term_value,
 
         ));
         
@@ -359,7 +359,7 @@ impl FanucDriver {
                 Position { x: 0.0, y: 0.0, z: 100.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
                 },
                 SpeedType::MMSec,
-                30,
+                30.0,
                 TermType::FINE,
                 1,
         )))).await;
@@ -371,7 +371,7 @@ impl FanucDriver {
             Position { x: 30.0, y: 100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
             },
             SpeedType::MMSec,
-            30,
+            30.0,
             TermType::FINE,
             1,
         )))).await;
@@ -382,7 +382,7 @@ impl FanucDriver {
                 Position { x: 0.0, y: 0.0, z: -100.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
                 },
                 SpeedType::MMSec,
-                30,
+                30.0,
                 TermType::FINE,
                 1,
         )))).await;
@@ -393,7 +393,7 @@ impl FanucDriver {
                 Position { x: -30.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
                 },
                 SpeedType::MMSec,
-                30,
+                30.0,
                 TermType::FINE,
                 1,
         )))).await;
@@ -421,7 +421,6 @@ impl FanucDriver {
         Ok(())
     }
     pub async fn add_to_queue(&self, packet: PacketEnum){
-        let packet2 = packet.clone();
         let sender = self.send_to_queue.clone();
         if let Err(e) = sender.send(packet).await {
             // Handle the error properly, e.g., logging it
@@ -478,7 +477,7 @@ impl FanucDriver {
         
         let mut reader = self.read_half.lock().await;
 
-        let mut numbers_to_look_for: VecDeque<u32> = VecDeque::new();
+        // let mut numbers_to_look_for: VecDeque<u32> = VecDeque::new();
         let mut buffer = vec![0; 2048];
         let mut temp_buffer = Vec::new();
 

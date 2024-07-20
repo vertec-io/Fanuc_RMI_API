@@ -8,14 +8,14 @@ pub struct FrcInitialize {
 
 
 impl FrcInitialize{
-    fn new(groupmask: Option<u8>) -> Self {
-        let groupmask = match groupmask {
+    fn new(group_mask: Option<u8>) -> Self {
+        let group_mask = match group_mask {
             Some(gm) => gm,
             None => 1
         };
 
         Self {
-            group_mask: groupmask
+            group_mask
         }
 
     }

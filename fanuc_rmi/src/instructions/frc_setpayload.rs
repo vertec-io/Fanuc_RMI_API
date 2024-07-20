@@ -13,10 +13,10 @@ pub struct FrcSetPayLoad {
 impl FrcSetPayLoad{
     #[allow(unused)]
 
-    fn new(seq:u32, schedule_num:u8) -> Self {
+    fn new(sequence_id:u32, schedule_number:u8) -> Self {
         Self {
-            sequence_id: seq,
-            schedule_number: schedule_num,
+            sequence_id,
+            schedule_number,
         }
 
     }

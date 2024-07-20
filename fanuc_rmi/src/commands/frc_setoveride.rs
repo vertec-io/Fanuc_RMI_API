@@ -12,9 +12,9 @@ pub struct FrcSetOverride {
 
 impl FrcSetOverride{
     #[allow(unused)]
-    fn new(val: u8) -> Self {
+    fn new(value: u8) -> Self {
         Self {
-            value: val
+            value
         }
 
     }

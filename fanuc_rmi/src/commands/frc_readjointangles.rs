@@ -9,9 +9,9 @@ pub struct FrcReadJointAngles{
 
 impl FrcReadJointAngles{
     #[allow(unused)]
-    fn new(groupentered: Option<u8>) -> Self {
+    fn new(group: Option<u8>) -> Self {
         Self {
-            group: match groupentered {
+            group: match group {
                 Some(gm) => gm,
                 None => 1
             },
