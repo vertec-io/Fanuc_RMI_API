@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use fanuc_rmi::{drivers::{FanucDriver, FanucDriverConfig}, instructions::FrcLinearRelative, Configuration, FrcError, Instruction, PacketEnum, Position, SpeedType, TermType};
+use fanuc_rmi::{
+    drivers::{FanucDriver, FanucDriverConfig}, 
+    FrcError
+};
 use tokio::time::sleep;
 // use fanuc_rmi::{Configuration, Position};
 // use std::error::Error;
@@ -14,7 +17,7 @@ async fn main() -> Result<(), FrcError > {
 
     // let mut driver = FanucDriver::new("192.168.1.100".to_string(), 16001);
 
-    let mut driver = match driver {
+    let driver = match driver {
         Ok(driver) => {
             println!("Connected successfully");
             driver

@@ -1,5 +1,4 @@
 use serde::{Serialize, Deserialize};
-
 use super::Packet;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -14,8 +13,6 @@ pub enum Communication {
     #[serde(rename = "FRC_SystemFault")]
     FrcSystemFault,
 }
-
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "Communication")]

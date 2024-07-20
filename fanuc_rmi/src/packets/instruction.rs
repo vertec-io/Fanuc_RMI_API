@@ -2,7 +2,6 @@ use serde::{Serialize,Deserialize};
 use super::Packet;
 use crate::instructions::*;
 
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Instruction")]
 pub enum Instruction {
@@ -78,8 +77,6 @@ impl Instruction {
     }
 }
 
-
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Instruction")]
 pub enum InstructionResponse {
@@ -119,7 +116,6 @@ pub enum InstructionResponse {
 
 }
 
-
 impl InstructionResponse {
     pub fn get_sequence_id(&self) -> u32 {
         match self {
@@ -142,9 +138,6 @@ impl InstructionResponse {
         }
     }
 }
-
-
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum OnOff{

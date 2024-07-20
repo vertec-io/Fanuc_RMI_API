@@ -8,11 +8,10 @@ use tokio::{ net::TcpStream, sync::Mutex, time::sleep};
 use tokio::io::{ AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf, split};
 use std::collections::VecDeque;
 
-use crate::ResponsePacketEnum;
+// use crate::ResponsePacket;
 pub use crate::{packets::*, FanucErrorCode};
 pub use crate::instructions::*;
 pub use crate::commands::*;
-pub use crate::PacketEnum;
 pub use crate::{Configuration, Position, SpeedType, TermType, FrcError };
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -42,7 +41,7 @@ pub struct FanucDriver {
     pub messages: Arc<Mutex<VecDeque<String>>>,
     write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
-    send_to_queue: mpsc::Sender<PacketEnum>
+    send_to_queue: mpsc::Sender<SendPacket>
 }
 
 // Static assertion to ensure FanucDriver is Send
@@ -115,7 +114,7 @@ impl FanucDriver {
         let write_half = Arc::new(Mutex::new(write_half));
         let messages: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let mut msg = messages.lock().await;
-        let (send_to_queue, read_from_queue) = mpsc::channel::<PacketEnum>(100);
+        let (send_to_queue, read_from_queue) = mpsc::channel::<SendPacket>(100);
 
         msg.push_back("Connected".to_string());
         drop(msg);
@@ -351,7 +350,7 @@ impl FanucDriver {
 
     //this is just a debug helper function to load the queue automatically
     pub async fn load_gcode(&self){
-        self.add_to_queue(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
             1,    
                 Configuration {
                     u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
@@ -363,7 +362,7 @@ impl FanucDriver {
                 TermType::FINE,
                 1,
         )))).await;
-        self.add_to_queue(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
             2,    
             Configuration {
                 u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
@@ -375,7 +374,7 @@ impl FanucDriver {
             TermType::FINE,
             1,
         )))).await;
-        self.add_to_queue(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
                 3,    
                 Configuration { u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
                 },
@@ -386,7 +385,7 @@ impl FanucDriver {
                 TermType::FINE,
                 1,
         )))).await;
-        self.add_to_queue(PacketEnum::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
                 4,    
                 Configuration { u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
                 },
@@ -400,7 +399,7 @@ impl FanucDriver {
         println!("added 4 packets to queue");
     }
 
-    pub async fn start_program(&mut self, read_from_queue:Receiver<PacketEnum>) -> Result<(), FrcError> {
+    pub async fn start_program(&mut self, read_from_queue:Receiver<SendPacket>) -> Result<(), FrcError> {
 
         //spins up 2 async concurent functions
         let (res1, res2) = tokio::join!(
@@ -420,7 +419,7 @@ impl FanucDriver {
 
         Ok(())
     }
-    pub async fn add_to_queue(&self, packet: PacketEnum){
+    pub async fn add_to_queue(&self, packet: SendPacket){
         let sender = self.send_to_queue.clone();
         if let Err(e) = sender.send(packet).await {
             // Handle the error properly, e.g., logging it
@@ -431,7 +430,7 @@ impl FanucDriver {
         }
     }
 
-    async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<PacketEnum>)-> Result<(), FrcError>{
+    async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<SendPacket>)-> Result<(), FrcError>{
         let mut queue = VecDeque::new();
         loop {   
             // println!("running");
@@ -455,7 +454,7 @@ impl FanucDriver {
                 if let Err(e) = self.send_packet(serialized_packet).await {
                     self.log_message(format!("Failed to send a packet: {:?}", e)).await;
                 }
-                if packet == PacketEnum::Communication(Communication::FrcDisconnect){break;}
+                if packet == SendPacket::Communication(Communication::FrcDisconnect){break;}
             }
 
 
@@ -499,7 +498,7 @@ impl FanucDriver {
                                 let response_str = String::from_utf8_lossy(request);
                                 self.log_message(format!("recieved: {}", response_str.clone())).await;
 
-                                let response_packet: Option<ResponsePacketEnum> = match serde_json::from_str::<ResponsePacketEnum>(&response_str) {
+                                let response_packet: Option<ResponsePacket> = match serde_json::from_str::<ResponsePacket>(&response_str) {
                                     Ok(response_packet) => Some(response_packet),
                                     Err(e) => {
                                         self.log_message(format!("Could not parse response into RPE: {}", e)).await;
@@ -510,15 +509,15 @@ impl FanucDriver {
 
                                 // here is packet response handling logic. may be relocated soon
                                 match response_packet {
-                                    Some(ResponsePacketEnum::CommunicationResponse(CommunicationResponse::FrcDisconnect(_))) => {
+                                    Some(ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_))) => {
                                         println!("Received a FrcDisconnect packet.");
                                         break
                                     },
-                                    Some(ResponsePacketEnum::CommandResponse(CommandResponse::FrcInitialize(frc_initialize_response))) => {
+                                    Some(ResponsePacket::CommandResponse(CommandResponse::FrcInitialize(frc_initialize_response))) => {
                                         let id = frc_initialize_response.error_id;
                                         if id != 0 {
-                                            self.add_to_queue(PacketEnum::Command(Command::FrcAbort)).await;
-                                            self.add_to_queue(PacketEnum::Command(Command::FrcInitialize(FrcInitialize::default()))).await;
+                                            self.add_to_queue(SendPacket::Command(Command::FrcAbort)).await;
+                                            self.add_to_queue(SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()))).await;
                                         }
                                         println!("Received a init packet. with eid :{}", id);
                                         break
