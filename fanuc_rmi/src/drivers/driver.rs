@@ -28,9 +28,9 @@ pub struct DriverPacket {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct  FanucDriverConfig {
-    addr: String,
-    port: u32,
-    max_messages: usize,
+    pub addr: String,
+    pub port: u32,
+    pub max_messages: usize,
 }
 
 impl Default for FanucDriverConfig {
