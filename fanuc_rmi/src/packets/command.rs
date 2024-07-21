@@ -1,8 +1,6 @@
 use serde::{Serialize, Deserialize};
-// use crate::{FrameData, Configuration, Position};
 use super::Packet;
 use crate::commands::*;
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Command")]

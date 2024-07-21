@@ -14,13 +14,24 @@ pub use crate::instructions::*;
 pub use crate::commands::*;
 pub use crate::{Configuration, Position, SpeedType, TermType, FrcError };
 
+pub enum PacketPriority{
+    Low,
+    Standard,
+    High,
+    Immediate,
+}
+pub struct DriverPacket {
+    priority: PacketPriority,
+    packet: SendPacket,
+}
+
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct  FanucDriverConfig {
     addr: String,
     port: u32,
     max_messages: usize,
 }
-
 
 impl Default for FanucDriverConfig {
     fn default() -> Self {
@@ -39,16 +50,11 @@ impl Default for FanucDriverConfig {
 pub struct FanucDriver {
     pub config: FanucDriverConfig,
     pub messages: Arc<Mutex<VecDeque<String>>>,
+    pub latest_sequence: Arc<Mutex<u32>>,
     write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
-    send_to_queue: mpsc::Sender<SendPacket>
+    queue_tx: mpsc::Sender<DriverPacket>
 }
-
-// Static assertion to ensure FanucDriver is Send
-// const _: fn() = || {
-//     fn assert_send<T: Send>() {}
-//     assert_send::<FanucDriver>();
-// };
 
 impl FanucDriver {
 
@@ -114,21 +120,23 @@ impl FanucDriver {
         let write_half = Arc::new(Mutex::new(write_half));
         let messages: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let mut msg = messages.lock().await;
-        let (send_to_queue, read_from_queue) = mpsc::channel::<SendPacket>(100);
+        let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
 
+        let latest_sequence = Arc::new(Mutex::new(0));
         msg.push_back("Connected".to_string());
         drop(msg);
         let driver = Self {
             config,
             messages,
+            latest_sequence,
             write_half,
             read_half,
-            send_to_queue,
+            queue_tx,
         };
-        // let _ = driver.start_program(read_from_queue);
-        let mut driver2 = driver.clone();
+        
+        let mut driver_clone = driver.clone();
         tokio::spawn(async move {
-            match driver2.start_program(read_from_queue).await {
+            match driver_clone.start_program(queue_rx).await {
                 Ok(_) => println!("Program started successfully"),
                 Err(e) => eprintln!("Failed to start program: {:?}", e),
             }
@@ -138,8 +146,7 @@ impl FanucDriver {
     }
 
 
-
-//log message is an interface to print info needed and log it for api use
+    //log message is an interface to print info needed and log it for api use
     async fn log_message<T: Into<String>>(&self, message:T){
         let message = message.into();
         let messages = self.messages.clone();
@@ -148,11 +155,8 @@ impl FanucDriver {
         #[cfg(feature="logging")]
         println!("{}", &message);
 
-        loop{
-            if messages.len() >= self.config.max_messages {
-                messages.pop_front();
-            }
-            else{break}
+        while messages.len() >= self.config.max_messages {
+            messages.pop_front();
         }
         messages.push_back(message);
     }
@@ -326,7 +330,6 @@ impl FanucDriver {
             speed,
             term_type,
             term_value,
-
         ));
         
         let packet = match serde_json::to_string(&packet) {
@@ -347,63 +350,11 @@ impl FanucDriver {
 
     }
 
-
-    //this is just a debug helper function to load the queue automatically
-    pub async fn load_gcode(&self){
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-            1,    
-                Configuration {
-                    u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: 0.0, z: 100.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-        )))).await;
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-            2,    
-            Configuration {
-                u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
-            },
-            Position { x: 30.0, y: 100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-            },
-            SpeedType::MMSec,
-            30.0,
-            TermType::FINE,
-            1,
-        )))).await;
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                3,    
-                Configuration { u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: 0.0, z: -100.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-        )))).await;
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                4,    
-                Configuration { u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: -30.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-        )))).await;
-        println!("added 4 packets to queue");
-    }
-
-    pub async fn start_program(&mut self, read_from_queue:Receiver<SendPacket>) -> Result<(), FrcError> {
+    pub async fn start_program(&mut self, queue_rx:Receiver<DriverPacket>) -> Result<(), FrcError> {
 
         //spins up 2 async concurent functions
         let (res1, res2) = tokio::join!(
-            self.send_queue(read_from_queue),
+            self.send_queue(queue_rx),
             self.read_queue_responses()
         );
         
@@ -419,9 +370,11 @@ impl FanucDriver {
 
         Ok(())
     }
-    pub async fn add_to_queue(&self, packet: SendPacket){
-        let sender = self.send_to_queue.clone();
-        if let Err(e) = sender.send(packet).await {
+
+    pub async fn add_to_queue(&self, packet: SendPacket, priority: PacketPriority){
+        let sender = self.queue_tx.clone();
+        let driver_packet = DriverPacket{priority, packet};
+        if let Err(e) = sender.send(driver_packet).await {
             // Handle the error properly, e.g., logging it
             println!("Failed to send packet: {}", e);
         }
@@ -430,16 +383,17 @@ impl FanucDriver {
         }
     }
 
-    async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<SendPacket>)-> Result<(), FrcError>{
+    async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<DriverPacket>)-> Result<(), FrcError>{
         let mut queue = VecDeque::new();
         loop {   
-            // println!("running");
-
             while let Ok(new_packet) = packets_to_add.try_recv() {
-                queue.push_back(new_packet);
+                match new_packet.priority{
+                    PacketPriority::Low => queue.push_back(new_packet.packet),
+                    PacketPriority::Standard => queue.push_back(new_packet.packet),
+                    PacketPriority::High => queue.push_front(new_packet.packet),
+                    PacketPriority::Immediate => queue.push_front(new_packet.packet),
+                };
             }
-
-
             if let Some(packet) = queue.pop_front() {
                 // Serialize the packet
                 let serialized_packet = match serde_json::to_string(&packet) {
@@ -456,17 +410,13 @@ impl FanucDriver {
                 }
                 if packet == SendPacket::Communication(Communication::FrcDisconnect){break;}
             }
-
-
-            // tx.send(0).await.expect("Failed to send message");
-            sleep(Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(40)).await;
 
         }
-        self.log_message("Sent all packets").await;
+        self.log_message("Disconnecting from FRC server... closing send queue").await;
 
-        //when 0 is sent it shuts  off the recciever system so we wait one sec so that the response can be sent back and processed
+        //when 0 is sent it shuts  off the reciever system so we wait one sec so that the response can be sent back and processed
         sleep(Duration::from_secs(1)).await;
-
 
         Ok(())
     }
@@ -506,7 +456,6 @@ impl FanucDriver {
                                     }
                                 };
 
-
                                 // here is packet response handling logic. may be relocated soon
                                 match response_packet {
                                     Some(ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_))) => {
@@ -516,8 +465,8 @@ impl FanucDriver {
                                     Some(ResponsePacket::CommandResponse(CommandResponse::FrcInitialize(frc_initialize_response))) => {
                                         let id = frc_initialize_response.error_id;
                                         if id != 0 {
-                                            self.add_to_queue(SendPacket::Command(Command::FrcAbort)).await;
-                                            self.add_to_queue(SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()))).await;
+                                            self.add_to_queue(SendPacket::Command(Command::FrcAbort), PacketPriority::Immediate).await;
+                                            self.add_to_queue(SendPacket::Command(Command::FrcInitialize(FrcInitialize::default())), PacketPriority::Immediate).await;
                                         }
                                         println!("Received a init packet. with eid :{}", id);
                                         break
@@ -527,25 +476,81 @@ impl FanucDriver {
                                         // Handle other types of packets here
                                     }
                                 }
-
-
                             }
                         }
                         Err(e) => {
                             self.log_message(format!("Failed to read from stream: {}", e)).await;
                         }
                     }
-
             }
         }
     }
-        
-        // Ok(())
     }
 
+    //this is just a debug helper function to load the queue automatically
+    pub async fn load_gcode(&self){
+        let mut latest_sequence = self.latest_sequence.lock().await;
+        let starting_sequence = *latest_sequence;
+        *latest_sequence = starting_sequence+4;
 
+
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+                1,    
+                Configuration {
+                    u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
+                },
+                Position { x: 0.0, y: 0.0, z: 100.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                },
+                SpeedType::MMSec,
+                30.0,
+                TermType::FINE,
+                1,
+            ))),
+            PacketPriority::Standard
+        ).await;
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+                2,    
+                Configuration {
+                    u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
+                },
+                Position { x: 30.0, y: 100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                },
+                SpeedType::MMSec,
+                30.0,
+                TermType::FINE,
+                1,
+            ))),
+            PacketPriority::Standard
+        ).await;
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+                3,    
+                Configuration { u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
+                },
+                Position { x: 0.0, y: 0.0, z: -100.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                },
+                SpeedType::MMSec,
+                30.0,
+                TermType::FINE,
+                1,
+            ))),
+            PacketPriority::Standard
+        ).await;
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+                4,    
+                Configuration { u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, glip: 1, turn4: 1, turn5: 1, turn6: 1,
+                },
+                Position { x: -30.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                },
+                SpeedType::MMSec,
+                30.0,
+                TermType::FINE,
+                1,
+            ))),
+            PacketPriority::Standard
+        ).await;
+        println!("added 4 packets to queue");
+    }
 }
-
 
 async fn connect_with_retries(addr: &str, retries: u32) -> Result<TcpStream, FrcError> {
     for attempt in 0..retries {
