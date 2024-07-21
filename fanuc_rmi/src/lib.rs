@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature="driver")]
 pub mod drivers;
+
 pub mod packets;
 pub mod instructions;
 pub mod commands;
@@ -27,7 +28,7 @@ pub struct Configuration {
     pub front: u8,
     pub up: u8,
     pub left: u8,
-    pub glip: u8,
+    pub flip: u8,
     pub turn4: u8,
     pub turn5: u8,
     pub turn6: u8,
@@ -40,10 +41,10 @@ impl Default for Configuration{
                front: 1, 
                up: 1, 
                left: 1, 
-               glip: 1, 
-               turn4: 1, 
-               turn5: 1, 
-               turn6: 1,
+               flip: 0, 
+               turn4: 0, 
+               turn5: 0, 
+               turn6: 0,
             }
     }
 }
