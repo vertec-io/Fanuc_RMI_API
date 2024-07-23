@@ -391,6 +391,7 @@ impl FanucDriver {
     async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<DriverPacket>)-> Result<(), FrcError>{
         let mut queue = VecDeque::new();
         println!("started send loop");
+        let mut current_sequence_id:u32 = 1;
         loop {   
             while let Ok(new_packet) = packets_to_add.try_recv() {
                 match new_packet.priority{
@@ -401,6 +402,10 @@ impl FanucDriver {
                 };
             }
             if let Some(packet) = queue.pop_front() {
+                
+                //this will give the instruction packets a sequence number
+                let packet: SendPacket = self.give_sequence_id(packet, current_sequence_id);
+                
                 // Serialize the packet
                 let serialized_packet = match serde_json::to_string(&packet) {
                     Ok(packet_str) => packet_str + "\r\n",
@@ -559,7 +564,70 @@ impl FanucDriver {
         ).await;
         println!("added 4 packets to queue");
     }
+
+    fn give_sequence_id(&self, mut packet: SendPacket, mut current_id: u32) -> SendPacket {
+        if let SendPacket::Instruction(ref mut instruction) = packet {
+            match instruction {
+                Instruction::FrcWaitDIN(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcSetUFrame(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcSetUTool(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcWaitTime(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcSetPayLoad(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcCall(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcLinearMotion(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcLinearRelative(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcLinearRelativeJRep(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcJointMotion(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcJointRelative(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcCircularMotion(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcCircularRelative(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcJointMotionJRep(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcJointRelativeJRep(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcLinearMotionJRep(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+            }
+            current_id += 1;
+        }
+        packet
+    }
+
+
 }
+
+
+
+
 
 async fn connect_with_retries(addr: &str, retries: u32) -> Result<TcpStream, FrcError> {
     for attempt in 0..retries {
@@ -576,3 +644,4 @@ async fn connect_with_retries(addr: &str, retries: u32) -> Result<TcpStream, Frc
     }
     return Err(FrcError::Disconnected())
 }
+
