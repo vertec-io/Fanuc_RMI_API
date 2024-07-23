@@ -141,6 +141,7 @@ impl FanucDriver {
                 Err(e) => eprintln!("Failed to start program: {:?}", e),
             }
         });
+        // let _ = driver.initialize();
 
         Ok(driver)
     }
@@ -353,6 +354,8 @@ impl FanucDriver {
     }
 
     pub async fn start_program(&mut self, queue_rx:Receiver<DriverPacket>) -> Result<(), FrcError> {
+
+        if let Err(e) = self.initialize().await {println!("Failed to initialize onconstruction: {:?}", e);}
 
         //spins up 2 async concurent functions
         let (res1, res2) = tokio::join!(

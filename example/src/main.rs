@@ -35,7 +35,7 @@ async fn main() -> Result<(), FrcError > {
         },
     };
 
-    let _ = driver.initialize().await;
+    // let _ = driver.initialize().await;
     sleep(Duration::from_secs(1)).await;
 
     // // if res.is_err() {
