@@ -35,7 +35,7 @@ async fn main() -> Result<(), FrcError > {
         },
     };
 
-    // let _ = driver.initialize().await;
+    let _ = driver.initialize().await;
     sleep(Duration::from_secs(1)).await;
 
     // // if res.is_err() {
@@ -48,19 +48,19 @@ async fn main() -> Result<(), FrcError > {
     // let _ = driver.start_program();
     // println!("after startprogram");
 
-    // driver.load_gcode().await;
-    driver.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-        1,    
-        Configuration {
-            u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-        },
-        Position { x: 30.0, y: 0.0, z: 200.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-        },
-        SpeedType::MMSec,
-        50.0,
-        TermType::FINE,
-        1,
-    ))),PacketPriority::Standard).await;
+    driver.load_gcode().await;
+    // driver.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+    //     7,    
+    //     Configuration {
+    //         u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+    //     },
+    //     Position { x: 30.0, y: 0.0, z: 200.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+    //     },
+    //     SpeedType::MMSec,
+    //     50.0,
+    //     TermType::FINE,
+    //     1,
+    // ))),PacketPriority::Standard).await;
 
     // driver.start_program().await?;
 
@@ -191,7 +191,7 @@ async fn main() -> Result<(), FrcError > {
     // // sleep(Duration::from_millis(500)).await;
 
 
-    sleep(Duration::from_secs(4)).await;
+    sleep(Duration::from_secs(20)).await;
     driver.abort().await?;
     sleep(Duration::from_secs(1)).await;
     driver.disconnect().await?;

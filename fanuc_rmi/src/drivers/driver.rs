@@ -404,7 +404,7 @@ impl FanucDriver {
             if let Some(packet) = queue.pop_front() {
                 
                 //this will give the instruction packets a sequence number
-                let packet: SendPacket = self.give_sequence_id(packet, current_sequence_id);
+                let packet: SendPacket = self.give_sequence_id(packet, &mut current_sequence_id);
                 
                 // Serialize the packet
                 let serialized_packet = match serde_json::to_string(&packet) {
@@ -509,14 +509,41 @@ impl FanucDriver {
 
 
         self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                1,    
+                9,    
                 Configuration {
-                    u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+                    u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
                 },
                 Position { x: 0.0, y: 0.0, z: 100.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
                 },
                 SpeedType::MMSec,
-                30.0,
+                50.0,
+                TermType::FINE,
+                1,
+            ))),
+            PacketPriority::Standard
+        ).await;
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+                5,    
+                Configuration {
+                    u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+                },
+                Position { x: 0.0, y: 100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                },
+                SpeedType::MMSec,
+                50.0,
+                TermType::FINE,
+                1,
+            ))),
+            PacketPriority::Standard
+        ).await;
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+                8,    
+                Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+                },
+                Position { x: 0.0, y: 0.0, z: -100.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                },
+                SpeedType::MMSec,
+                50.0,
                 TermType::FINE,
                 1,
             ))),
@@ -524,39 +551,12 @@ impl FanucDriver {
         ).await;
         self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
                 2,    
-                Configuration {
-                    u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 30.0, y: 100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-            ))),
-            PacketPriority::Standard
-        ).await;
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                3,    
-                Configuration { u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: 0.0, z: -100.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-            ))),
-            PacketPriority::Standard
-        ).await;
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                4,    
-                Configuration { u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+                Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
                 },
                 Position { x: 0.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
                 },
                 SpeedType::MMSec,
-                30.0,
+                50.0,
                 TermType::FINE,
                 1,
             ))),
@@ -565,59 +565,59 @@ impl FanucDriver {
         println!("added 4 packets to queue");
     }
 
-    fn give_sequence_id(&self, mut packet: SendPacket, mut current_id: u32) -> SendPacket {
+    fn give_sequence_id(&self, mut packet: SendPacket, mut current_id: &mut u32) -> SendPacket {
         if let SendPacket::Instruction(ref mut instruction) = packet {
             match instruction {
                 Instruction::FrcWaitDIN(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcSetUFrame(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcSetUTool(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcWaitTime(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcSetPayLoad(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcCall(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcLinearMotion(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcLinearRelative(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcLinearRelativeJRep(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcJointMotion(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcJointRelative(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcCircularMotion(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcCircularRelative(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcJointMotionJRep(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcJointRelativeJRep(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
                 Instruction::FrcLinearMotionJRep(ref mut instr) => {
-                    instr.sequence_id = current_id;
+                    instr.sequence_id = *current_id;
                 }
             }
-            current_id += 1;
+            *current_id += 1;
         }
         packet
     }
