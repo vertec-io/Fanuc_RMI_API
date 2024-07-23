@@ -355,7 +355,7 @@ impl FanucDriver {
 
     pub async fn start_program(&mut self, queue_rx:Receiver<DriverPacket>) -> Result<(), FrcError> {
 
-        if let Err(e) = self.initialize().await {println!("Failed to initialize onconstruction: {:?}", e);}
+        // if let Err(e) = self.initialize().await {println!("Failed to initialize onconstruction: {:?}", e);}
 
         //spins up 2 async concurent functions
         let (res1, res2) = tokio::join!(
@@ -477,10 +477,10 @@ impl FanucDriver {
                                     },
                                     Some(ResponsePacket::CommandResponse(CommandResponse::FrcInitialize(frc_initialize_response))) => {
                                         let id = frc_initialize_response.error_id;
-                                        // if id != 0 {
-                                        //     self.add_to_queue(SendPacket::Command(Command::FrcAbort), PacketPriority::Standard).await;
-                                        //     self.add_to_queue(SendPacket::Command(Command::FrcInitialize(FrcInitialize::default())), PacketPriority::Standard).await;
-                                        // }
+                                        if id != 0 {
+                                            self.add_to_queue(SendPacket::Command(Command::FrcAbort), PacketPriority::Standard).await;
+                                            self.add_to_queue(SendPacket::Command(Command::FrcInitialize(FrcInitialize::default())), PacketPriority::Standard).await;
+                                        }
                                         println!("Received a init packet. with eid :{}", id);
                                         break
                                     },
