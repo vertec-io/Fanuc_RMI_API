@@ -165,17 +165,18 @@ impl FanucDriver {
     //this is mostly depricated
     pub async fn initialize(&self) -> Result<(), FrcError> {
 
-        let packet = Command::FrcInitialize(FrcInitialize::default());
+        let packet: SendPacket =  SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()));
         
-        let packet = match serde_json::to_string(&packet) {
-            Ok(serialized_packet) => serialized_packet + "\r\n",
-            Err(_) => return Err(FrcError::Serialization("Initalize packet didnt serialize correctly".to_string())),
-        };
+        // let packet = match serde_json::to_string(&packet) {
+        //     Ok(serialized_packet) => serialized_packet + "\r\n",
+        //     Err(_) => return Err(FrcError::Serialization("Initalize packet didnt serialize correctly".to_string())),
+        // };
 
-        if let Err(e) = self.send_packet(packet.clone()).await {
-            self.log_message(e.to_string()).await;
-            return Err(e);
-        }; 
+        self.add_to_queue(packet, PacketPriority::Standard).await;
+        // if let Err(e) = self.send_packet(packet.clone()).await {
+        //     self.log_message(e.to_string()).await;
+        //     return Err(e);
+        // }; 
         return Ok(());
 
         // let response = self.recieve::<CommandResponse>().await?;
@@ -196,14 +197,15 @@ impl FanucDriver {
     
     pub async fn abort(&self) -> Result<(), FrcError> {
 
-        let packet = Command::FrcAbort {};
-        
-        let packet = match serde_json::to_string(&packet) {
-            Ok(serialized_packet) => serialized_packet + "\r\n",
-            Err(_) => return Err(FrcError::Serialization("Abort packet didnt serialize correctly".to_string())),
-        };
+        let packet = SendPacket::Command(Command::FrcAbort {});
+        self.add_to_queue(packet, PacketPriority::Standard).await;
 
-        self.send_packet(packet.clone()).await?;
+        // let packet = match serde_json::to_string(&packet) {
+        //     Ok(serialized_packet) => serialized_packet + "\r\n",
+        //     Err(_) => return Err(FrcError::Serialization("Abort packet didnt serialize correctly".to_string())),
+        // };
+
+        // self.send_packet(packet.clone()).await?;
         // let response = self.recieve::<CommandResponse>().await?;
 
         // if let CommandResponse::FrcAbort(ref res) = response {
@@ -385,6 +387,7 @@ impl FanucDriver {
 
     async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<DriverPacket>)-> Result<(), FrcError>{
         let mut queue = VecDeque::new();
+        println!("started send loop");
         loop {   
             while let Ok(new_packet) = packets_to_add.try_recv() {
                 match new_packet.priority{
@@ -429,10 +432,12 @@ impl FanucDriver {
         // let mut numbers_to_look_for: VecDeque<u32> = VecDeque::new();
         let mut buffer = vec![0; 2048];
         let mut temp_buffer = Vec::new();
+        println!("started recieve loop");
 
         loop {
             tokio::select! {
                 result = reader.read(&mut buffer) => {
+
                     match result {
                         Ok(0) => break Ok(()), // Connection closed
                         Ok(n) => {
@@ -464,10 +469,10 @@ impl FanucDriver {
                                     },
                                     Some(ResponsePacket::CommandResponse(CommandResponse::FrcInitialize(frc_initialize_response))) => {
                                         let id = frc_initialize_response.error_id;
-                                        if id != 0 {
-                                            self.add_to_queue(SendPacket::Command(Command::FrcAbort), PacketPriority::Immediate).await;
-                                            self.add_to_queue(SendPacket::Command(Command::FrcInitialize(FrcInitialize::default())), PacketPriority::Immediate).await;
-                                        }
+                                        // if id != 0 {
+                                        //     self.add_to_queue(SendPacket::Command(Command::FrcAbort), PacketPriority::Standard).await;
+                                        //     self.add_to_queue(SendPacket::Command(Command::FrcInitialize(FrcInitialize::default())), PacketPriority::Standard).await;
+                                        // }
                                         println!("Received a init packet. with eid :{}", id);
                                         break
                                     },
@@ -482,9 +487,10 @@ impl FanucDriver {
                             self.log_message(format!("Failed to read from stream: {}", e)).await;
                         }
                     }
+                    sleep(Duration::from_millis(1)).await;
+                }
             }
         }
-    }
     }
 
     //this is just a debug helper function to load the queue automatically
@@ -539,7 +545,7 @@ impl FanucDriver {
                 4,    
                 Configuration { u_tool_number: 1, u_frame_number: 1, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
                 },
-                Position { x: -30.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                Position { x: 0.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
                 },
                 SpeedType::MMSec,
                 30.0,
