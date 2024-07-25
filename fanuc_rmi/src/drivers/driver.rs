@@ -167,31 +167,10 @@ impl FanucDriver {
     pub async fn initialize(&self) -> Result<(), FrcError> {
 
         let packet: SendPacket =  SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()));
-        
-        // let packet = match serde_json::to_string(&packet) {
-        //     Ok(serialized_packet) => serialized_packet + "\r\n",
-        //     Err(_) => return Err(FrcError::Serialization("Initalize packet didnt serialize correctly".to_string())),
-        // };
 
         self.add_to_queue(packet, PacketPriority::Standard).await;
-        // if let Err(e) = self.send_packet(packet.clone()).await {
-        //     self.log_message(e.to_string()).await;
-        //     return Err(e);
-        // }; 
+
         return Ok(());
-
-        // let response = self.recieve::<CommandResponse>().await?;
-
-        // if let CommandResponse::FrcInitialize(ref res) = response {
-        //     if res.error_id != 0 {
-        //         self.log_message(format!("Error ID: {}", res.error_id)).await;
-        //         let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
-        //         return Err(FrcError::FanucErrorCode(error_code));
-        //     }
-        // };
-
- 
-        // Ok(())
 
     }
     
@@ -201,21 +180,6 @@ impl FanucDriver {
         let packet = SendPacket::Command(Command::FrcAbort {});
         self.add_to_queue(packet, PacketPriority::Standard).await;
 
-        // let packet = match serde_json::to_string(&packet) {
-        //     Ok(serialized_packet) => serialized_packet + "\r\n",
-        //     Err(_) => return Err(FrcError::Serialization("Abort packet didnt serialize correctly".to_string())),
-        // };
-
-        // self.send_packet(packet.clone()).await?;
-        // let response = self.recieve::<CommandResponse>().await?;
-
-        // if let CommandResponse::FrcAbort(ref res) = response {
-        //     if res.error_id != 0 {
-        //         self.log_message(format!("Error ID: {}", res.error_id)).await;
-        //         let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
-        //         return Err(FrcError::FanucErrorCode(error_code));            
-        //     }
-        // }
         Ok(())
     }
 
@@ -250,14 +214,7 @@ impl FanucDriver {
         };
 
         self.send_packet(packet.clone()).await?;
-        // let response = self.recieve::<CommunicationResponse>().await?;        
-        // if let CommunicationResponse::FrcDisconnect(ref res) = response {
-        //     if res.error_id != 0 {
-        //         self.log_message(format!("Error ID: {}", res.error_id)).await;
-        //         let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
-        //         return Err(FrcError::FanucErrorCode(error_code));             
-        //     }
-        // }
+
 
         Ok(())
 
@@ -355,12 +312,12 @@ impl FanucDriver {
 
     pub async fn start_program(&mut self, queue_rx:Receiver<DriverPacket>) -> Result<(), FrcError> {
 
-        // if let Err(e) = self.initialize().await {println!("Failed to initialize onconstruction: {:?}", e);}
+        let mut current_packets_in_controllor_queue:Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
 
         //spins up 2 async concurent functions
         let (res1, res2) = tokio::join!(
-            self.send_queue(queue_rx),
-            self.read_queue_responses()
+            self.send_queue(queue_rx, current_packets_in_controllor_queue.clone()),
+            self.read_queue_responses(current_packets_in_controllor_queue.clone())
         );
         
         match res1 {
@@ -388,10 +345,12 @@ impl FanucDriver {
         }
     }
 
-    async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<DriverPacket>)-> Result<(), FrcError>{
+    //this is an async function that recieves packets and yeets them to the controllor to run
+    async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<DriverPacket>, current_packets_in_controllor_queue:Arc<Mutex<i32>>)-> Result<(), FrcError>{
         let mut queue = VecDeque::new();
         println!("started send loop");
         let mut current_sequence_id:u32 = 1;
+        
         loop {   
             while let Ok(new_packet) = packets_to_add.try_recv() {
                 match new_packet.priority{
@@ -419,6 +378,15 @@ impl FanucDriver {
                 if let Err(e) = self.send_packet(serialized_packet).await {
                     self.log_message(format!("Failed to send a packet: {:?}", e)).await;
                 }
+
+                //this is a custom scope so that the mutex guard unlocks immediatly after it is operated on
+                {
+                let mut current_packets: tokio::sync::MutexGuard<i32> = current_packets_in_controllor_queue.lock().await;
+                *current_packets += 1; // Dereference and increment the value
+                println!("just incremented to:{}",current_packets);
+
+                }
+                
                 if packet == SendPacket::Communication(Communication::FrcDisconnect){break;}
             }
             sleep(Duration::from_millis(40)).await;
@@ -433,7 +401,7 @@ impl FanucDriver {
     }
     
 
-    async fn read_queue_responses(&self) -> Result<(), FrcError> {
+    async fn read_queue_responses(&self, current_packets_in_controllor_queue:Arc<Mutex<i32>>) -> Result<(), FrcError> {
         
         let mut reader = self.read_half.lock().await;
 
@@ -462,7 +430,16 @@ impl FanucDriver {
                                 self.log_message(format!("recieved: {}", response_str.clone())).await;
 
                                 let response_packet: Option<ResponsePacket> = match serde_json::from_str::<ResponsePacket>(&response_str) {
-                                    Ok(response_packet) => Some(response_packet),
+                                    Ok(response_packet) => {
+
+                                        //this decrements the number of packets in the controllor queue when we recieve a response
+                                        {
+                                        let mut current_packets: tokio::sync::MutexGuard<i32> = current_packets_in_controllor_queue.lock().await;
+                                        *current_packets -= 1; // Dereference and increment the value
+                                        println!("just decremented to:{}",current_packets);
+                                        }
+                                        
+                                        Some(response_packet)},
                                     Err(e) => {
                                         self.log_message(format!("Could not parse response into RPE: {}", e)).await;
                                         None
