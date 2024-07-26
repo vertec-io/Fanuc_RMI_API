@@ -53,7 +53,8 @@ pub struct FanucDriver {
     pub latest_sequence: Arc<Mutex<u32>>,
     write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
-    queue_tx: mpsc::Sender<DriverPacket>
+    queue_tx: mpsc::Sender<DriverPacket>,
+    connected: Arc<Mutex<bool>>,
 }
 
 impl FanucDriver {
@@ -123,6 +124,7 @@ impl FanucDriver {
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
 
         let latest_sequence = Arc::new(Mutex::new(0));
+        let connected = Arc::new(Mutex::new(true));
         msg.push_back("Connected".to_string());
         drop(msg);
         let driver = Self {
@@ -132,6 +134,7 @@ impl FanucDriver {
             write_half,
             read_half,
             queue_tx,
+            connected,
         };
         
         let mut driver_clone = driver.clone();
@@ -142,7 +145,7 @@ impl FanucDriver {
             }
         });
         // let _ = driver.initialize();
-
+        
         Ok(driver)
     }
 
@@ -232,44 +235,44 @@ impl FanucDriver {
             Ok(())
     }
 
-    async fn recieve<T>(&self) -> Result<T, FrcError>
-        where
-            T: for<'a> Deserialize<'a> + std::fmt::Debug,
-        {
+    // async fn recieve<T>(&self) -> Result<T, FrcError>
+    //     where
+    //         T: for<'a> Deserialize<'a> + std::fmt::Debug,
+    //     {
             
-            let mut buffer = vec![0; 2048];
-            let mut stream = self.read_half.lock().await;
+    //         let mut buffer = vec![0; 2048];
+    //         let mut stream = self.read_half.lock().await;
 
-            let n: usize = match stream.read(&mut buffer).await{
-                Ok(n)=> n,
-                Err(e) => {
-                    let err = FrcError::FailedToRecieve(format!("{}",e));
-                    self.log_message(err.to_string()).await;
-                    return Err(err);
-                }
-            };
+    //         let n: usize = match stream.read(&mut buffer).await{
+    //             Ok(n)=> n,
+    //             Err(e) => {
+    //                 let err = FrcError::FailedToRecieve(format!("{}",e));
+    //                 self.log_message(err.to_string()).await;
+    //                 return Err(err);
+    //             }
+    //         };
 
 
-            if n == 0 {
-                let e = FrcError::Disconnected();
-                self.log_message(e.to_string()).await;
-                return Err(e);
-            }
+    //         if n == 0 {
+    //             let e = FrcError::Disconnected();
+    //             self.log_message(e.to_string()).await;
+    //             return Err(e);
+    //         }
 
-            let response = String::from_utf8_lossy(&buffer[..n]);
+    //         let response = String::from_utf8_lossy(&buffer[..n]);
 
-            self.log_message(format!("Received: {}", &response)).await;
+    //         self.log_message(format!("Received: {}", &response)).await;
 
-            // Parse JSON response
-            match serde_json::from_str::<T>(&response) {
-                Ok(response_packet) => Ok(response_packet),
-                Err(e) => {
-                    let e = FrcError::Serialization(format!("Could not parse response: {}", e));
-                    self.log_message(e.to_string()).await;
-                    return Err(e);
-                }
-            }
-        }
+    //         // Parse JSON response
+    //         match serde_json::from_str::<T>(&response) {
+    //             Ok(response_packet) => Ok(response_packet),
+    //             Err(e) => {
+    //                 let e = FrcError::Serialization(format!("Could not parse response: {}", e));
+    //                 self.log_message(e.to_string()).await;
+    //                 return Err(e);
+    //             }
+    //         }
+    //     }
 
     // pub async fn linear_relative(
     //     &self,
@@ -488,9 +491,10 @@ impl FanucDriver {
                             }
                         }
                         Err(e) => {
+                            let mut connected = self.connected.lock().await;
+                            *connected = false;
                             self.log_message(format!("Failed to read from stream: {}", e)).await;
                             break Err(FrcError::Disconnected())
-
                         }
                     }
                     sleep(Duration::from_millis(1)).await;
@@ -653,7 +657,7 @@ impl FanucDriver {
         println!("added 4 packets to queue");
     }
 
-    fn give_sequence_id(&self, mut packet: SendPacket, mut current_id: &mut u32) -> SendPacket {
+    fn give_sequence_id(&self, mut packet: SendPacket, current_id: &mut u32) -> SendPacket {
         if let SendPacket::Instruction(ref mut instruction) = packet {
             match instruction {
                 Instruction::FrcWaitDIN(ref mut instr) => {
