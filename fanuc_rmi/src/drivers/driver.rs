@@ -312,7 +312,7 @@ impl FanucDriver {
 
     pub async fn start_program(&mut self, queue_rx:Receiver<DriverPacket>) -> Result<(), FrcError> {
 
-        let mut current_packets_in_controllor_queue:Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
+        let current_packets_in_controllor_queue: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
 
         //spins up 2 async concurent functions
         let (res1, res2) = tokio::join!(
@@ -322,12 +322,18 @@ impl FanucDriver {
         
         match res1 {
             Ok(_) => self.log_message("send_queue completed successfully").await,
-            Err(e) => self.log_message(format!("send_queue failed: {}", e)).await,
+            Err(e) => {
+                self.log_message(format!("send_queue failed: {}", e)).await;
+                return Err(e);
+            }
         }
 
         match res2 {
             Ok(_) => self.log_message("read_queue_responses completed successfully").await,
-            Err(e) => self.log_message(format!("read_queue_responses failed: {}", e)).await,
+            Err(e) => {
+                self.log_message(format!("send_queue failed: {}", e)).await;
+                return Err(e);
+            }        
         }
 
         Ok(())
@@ -390,18 +396,22 @@ impl FanucDriver {
                 let mut current_packets: tokio::sync::MutexGuard<i32> = current_packets_in_controllor_queue.lock().await;
                 *current_packets += 1; // Dereference and increment the value
                 println!("just incremented to:{}",current_packets);
-
                 }
+
                 
                 if packet == SendPacket::Communication(Communication::FrcDisconnect){break;}
             }
-            sleep(Duration::from_millis(40)).await;
+            sleep(Duration::from_millis(10)).await;
 
         }
         self.log_message("Disconnecting from FRC server... closing send queue").await;
 
         //when 0 is sent it shuts  off the reciever system so we wait one sec so that the response can be sent back and processed
-        sleep(Duration::from_secs(1)).await;
+        // sleep(Duration::from_secs(1)).await;
+
+        let current_packets: tokio::sync::MutexGuard<i32> = current_packets_in_controllor_queue.lock().await;
+        self.log_message(format!("driver send queue ended with {} in controller", *current_packets)).await;
+
 
         Ok(())
     }
@@ -435,6 +445,7 @@ impl FanucDriver {
                                 let response_str = String::from_utf8_lossy(request);
                                 self.log_message(format!("recieved: {}", response_str.clone())).await;
 
+
                                 let response_packet: Option<ResponsePacket> = match serde_json::from_str::<ResponsePacket>(&response_str) {
                                     Ok(response_packet) => {
 
@@ -444,6 +455,8 @@ impl FanucDriver {
                                         *current_packets -= 1; // Dereference and increment the value
                                         println!("just decremented to:{}",current_packets);
                                         }
+                                        sleep(Duration::from_millis(1000)).await;
+
                                         
                                         Some(response_packet)},
                                     Err(e) => {
@@ -476,12 +489,19 @@ impl FanucDriver {
                         }
                         Err(e) => {
                             self.log_message(format!("Failed to read from stream: {}", e)).await;
+                            break Err(FrcError::Disconnected())
+
                         }
                     }
                     sleep(Duration::from_millis(1)).await;
                 }
             }
         }
+
+        // println!("ended here");
+        // let current_packets: tokio::sync::MutexGuard<i32> = current_packets_in_controllor_queue.lock().await;
+        // self.log_message(format!("driver send queue ended with {} in controller", *current_packets)).await;
+        // Ok(())
     }
 
     //this is just a debug helper function to load the queue automatically
@@ -533,18 +553,103 @@ impl FanucDriver {
             PacketPriority::Standard
         ).await;
         self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                2,    
-                Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                50.0,
-                TermType::FINE,
-                1,
-            ))),
-            PacketPriority::Standard
+            2,    
+            Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+            },
+            Position { x: 0.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+            },
+            SpeedType::MMSec,
+            50.0,
+            TermType::FINE,
+            1,
+        ))),
+        PacketPriority::Standard
         ).await;
+
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+            2,    
+            Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+            },
+            Position { x: 0.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+            },
+            SpeedType::MMSec,
+            50.0,
+            TermType::FINE,
+            1,
+        ))),
+        PacketPriority::Standard
+        ).await;
+
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+            2,    
+            Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+            },
+            Position { x: 0.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+            },
+            SpeedType::MMSec,
+            50.0,
+            TermType::FINE,
+            1,
+        ))),
+        PacketPriority::Standard
+        ).await;
+
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+            2,    
+            Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+            },
+            Position { x: 0.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+            },
+            SpeedType::MMSec,
+            50.0,
+            TermType::FINE,
+            1,
+        ))),
+        PacketPriority::Standard
+        ).await;
+
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+            2,    
+            Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+            },
+            Position { x: 0.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+            },
+            SpeedType::MMSec,
+            50.0,
+            TermType::FINE,
+            1,
+        ))),
+        PacketPriority::Standard
+        ).await;
+
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+            2,    
+            Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+            },
+            Position { x: 0.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+            },
+            SpeedType::MMSec,
+            50.0,
+            TermType::FINE,
+            1,
+        ))),
+        PacketPriority::Standard
+        ).await;
+
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+            2,    
+            Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+            },
+            Position { x: 0.0, y: -100.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+            },
+            SpeedType::MMSec,
+            50.0,
+            TermType::FINE,
+            1,
+        ))),
+        PacketPriority::Standard
+        ).await;
+
         println!("added 4 packets to queue");
     }
 

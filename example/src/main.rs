@@ -193,7 +193,7 @@ async fn main() -> Result<(), FrcError > {
 
     sleep(Duration::from_secs(2)).await;
     driver.abort().await?;
-    sleep(Duration::from_secs(1)).await;
+    sleep(Duration::from_secs(10)).await;
     driver.disconnect().await?;
     // sleep(Duration::from_millis(5)).await;
 
