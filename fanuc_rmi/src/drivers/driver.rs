@@ -7,6 +7,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::{ net::TcpStream, sync::Mutex, time::sleep};
 use tokio::io::{ AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf, split};
 use std::collections::VecDeque;
+use std::sync::{Arc as StdArc, RwLock};
 
 // use crate::ResponsePacket;
 pub use crate::{packets::*, FanucErrorCode};
@@ -54,7 +55,8 @@ pub struct FanucDriver {
     write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
     queue_tx: mpsc::Sender<DriverPacket>,
-    pub connected: Arc<Mutex<bool>>,
+    pub connected: StdArc<RwLock<bool>>,
+    // pub connected_rx: ReadHalf<TcpStream>,
 }
 
 impl FanucDriver {
@@ -124,7 +126,9 @@ impl FanucDriver {
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
 
         let latest_sequence = Arc::new(Mutex::new(0));
-        let connected = Arc::new(Mutex::new(true));
+        let connected = StdArc::new(RwLock::new(true));
+        // let (connected_tx, connected_rx) = mpsc::channel::<bool>(10);
+
         msg.push_back("Connected".to_string());
         drop(msg);
         let driver = Self {
@@ -491,8 +495,19 @@ impl FanucDriver {
                             }
                         }
                         Err(e) => {
-                            let mut connected = self.connected.lock().await;
-                            *connected = false;
+                            // let mut connected = self.connected.clone();
+                            let mut err_occured = false;
+                            match self.connected.write() {
+                                Ok(mut connected) => {
+                                    *connected = false;
+                                },
+                                Err(_) => {err_occured = true;},
+                            };
+                          
+                            if err_occured {
+                                self.log_message(format!("The driver stream disconnected in a poisoned state and driver failed to set connection status to false")).await;
+                            }
+                            
                             self.log_message(format!("Failed to read from stream: {}", e)).await;
                             break Err(FrcError::Disconnected())
                         }
