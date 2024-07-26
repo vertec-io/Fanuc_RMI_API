@@ -54,7 +54,7 @@ pub struct FanucDriver {
     write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
     queue_tx: mpsc::Sender<DriverPacket>,
-    connected: Arc<Mutex<bool>>,
+    pub connected: Arc<Mutex<bool>>,
 }
 
 impl FanucDriver {
