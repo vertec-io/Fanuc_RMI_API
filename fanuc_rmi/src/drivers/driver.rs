@@ -271,44 +271,44 @@ impl FanucDriver {
             }
         }
 
-    pub async fn linear_relative(
-        &self,
-        sequence_id: u32,    
-        configuration: Configuration,
-        position: Position,
-        speed_type: SpeedType,
-        speed: f64,
-        term_type: TermType,
-        term_value: u8,
+    // pub async fn linear_relative(
+    //     &self,
+    //     sequence_id: u32,    
+    //     configuration: Configuration,
+    //     position: Position,
+    //     speed_type: SpeedType,
+    //     speed: f64,
+    //     term_type: TermType,
+    //     term_value: u8,
 
-    ) -> Result<(), FrcError> {
-        let packet = Instruction::FrcLinearRelative(FrcLinearRelative::new(
-            sequence_id,    
-            configuration,
-            position,
-            speed_type,
-            speed,
-            term_type,
-            term_value,
-        ));
+    // ) -> Result<(), FrcError> {
+    //     let packet = Instruction::FrcLinearRelative(FrcLinearRelative::new(
+    //         sequence_id,    
+    //         configuration,
+    //         position,
+    //         speed_type,
+    //         speed,
+    //         term_type,
+    //         term_value,
+    //     ));
         
-        let packet = match serde_json::to_string(&packet) {
-            Ok(serialized_packet) => serialized_packet + "\r\n",
-            Err(_) => return Err(FrcError::Serialization("linear motion packet didnt serialize correctly".to_string())),
-        };
+    //     let packet = match serde_json::to_string(&packet) {
+    //         Ok(serialized_packet) => serialized_packet + "\r\n",
+    //         Err(_) => return Err(FrcError::Serialization("linear motion packet didnt serialize correctly".to_string())),
+    //     };
 
-        self.send_packet(packet.clone()).await?;
-        let response = self.recieve::<InstructionResponse>().await?;
-        if let InstructionResponse::FrcLinearRelative(ref res) = response {
-            if res.error_id != 0 {
-                self.log_message(format!("Error ID: {}", res.error_id)).await;
-                let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
-                return Err(FrcError::FanucErrorCode(error_code)); 
-            }
-        }
-        Ok(())
+    //     self.send_packet(packet.clone()).await?;
+    //     let response = self.recieve::<InstructionResponse>().await?;
+    //     if let InstructionResponse::FrcLinearRelative(ref res) = response {
+    //         if res.error_id != 0 {
+    //             self.log_message(format!("Error ID: {}", res.error_id)).await;
+    //             let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
+    //             return Err(FrcError::FanucErrorCode(error_code)); 
+    //         }
+    //     }
+    //     Ok(())
 
-    }
+    // }
 
     pub async fn start_program(&mut self, queue_rx:Receiver<DriverPacket>) -> Result<(), FrcError> {
 
@@ -359,6 +359,12 @@ impl FanucDriver {
                     PacketPriority::High => queue.push_front(new_packet.packet),
                     PacketPriority::Immediate => queue.push_front(new_packet.packet),
                 };
+            }
+
+            //this will delays us from sending too many packets to the controller
+            {
+            let current_packets: tokio::sync::MutexGuard<i32> = current_packets_in_controllor_queue.lock().await;
+            if *current_packets >=8 {continue;}
             }
             if let Some(packet) = queue.pop_front() {
                 
