@@ -1,8 +1,10 @@
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use serde_json::json;
+use tokio::time::sleep;
 use std::error::Error;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 
@@ -151,6 +153,8 @@ async fn handle_secondary_client(mut socket: TcpStream) -> Result<(), Box<dyn Er
             socket.write_all(response.as_bytes()).await?;
             println!("Sent: {}", response);
             seq += 1;
+            // sleep(Duration::from_millis(1000)).await;
+
         }
     }
 
