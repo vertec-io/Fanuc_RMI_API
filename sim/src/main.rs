@@ -150,7 +150,7 @@ async fn handle_secondary_client(mut socket: TcpStream) -> Result<(), Box<dyn Er
             };
             // let delimiter: String = "\r\n".to_string();
             let response = serde_json::to_string(&response_json)? + "\r\n";
-            socket.write(response.as_bytes()).await?;
+            socket.write_all(response.as_bytes()).await?;
             // println!("Sent: {}", response);
             seq += 1;
             // sleep(Duration::from_millis(1000)).await;

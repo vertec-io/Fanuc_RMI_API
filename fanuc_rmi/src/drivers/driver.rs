@@ -53,101 +53,109 @@ impl Default for FanucDriverConfig {
 #[derive( Debug, Clone)]
 pub struct FanucDriver {
     pub config: FanucDriverConfig,
-    pub messages: Arc<RwLock<VecDeque<String>>>,
     pub message_channel: tokio::sync::broadcast::Sender<String>,
     pub latest_sequence: Arc<Mutex<u32>>,
     write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
     queue_tx: mpsc::Sender<DriverPacket>,
     pub connected: StdArc<RwLock<bool>>,
-    // pub connected_rx: ReadHalf<TcpStream>,
 }
 
 impl FanucDriver {
 
-    /// connect is a constructor that a config to and it attempts connection and if connection failed returns error and if not returns a driver with tcp connection to a fanuc controllor(the actual robot hardware)
-    /// connection calls the start program function that spins up 2 async tasks. one to handle packets sent to the robot one to handle recieving the responses.
+    /// Establishes a connection to a Fanuc controller (robot hardware).
+    ///
+    /// This function attempts to connect to the specified Fanuc controller using the provided
+    /// configuration. If the initial connection succeeds, it sends a connection packet to the
+    /// controller and waits for a response. If the connection packet is successfully sent and
+    /// a valid response is received, it establishes a TCP connection with the controller.
+    /// 
+    /// The function also spawns two asynchronous tasks:
+    /// 1. One task handles sending packets to the robot.
+    /// 2. The other task handles receiving responses from the robot.
+    ///
+    /// # Arguments
+    /// 
+    /// * `config` - A `FanucDriverConfig` struct containing the address and port of the Fanuc controller.
+    ///
+    /// # Returns
+    ///
+    /// If successful, returns a `Result` containing an instance of `FanucDriver` with an active
+    /// TCP connection to the Fanuc controller. Otherwise, returns an `FrcError` indicating the
+    /// cause of the failure.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// - The connection to the initial address fails after the specified number of retries.
+    /// - The connection packet cannot be serialized.
+    /// - The connection packet cannot be sent.
+    /// - No response is received from the controller.
+    /// - The response from the controller cannot be parsed.
+    /// - The controller returns an unexpected response.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let config = FanucDriverConfig {
+    ///     addr: "192.168.0.1".to_string(),
+    ///     port: 12345,
+    /// };
+    ///
+    /// match FanucDriver::connect(config).await {
+    ///     Ok(driver) => {
+    ///         // Connection established, use the driver instance
+    ///     },
+    ///     Err(e) => {
+    ///         eprintln!("Failed to connect: {:?}", e);
+    ///     }
+    /// }
+    /// ```
     pub async fn connect(config: FanucDriverConfig) -> Result<FanucDriver, FrcError> {
-        let init_addr = format!("{}:{}",&config.addr, &config.port);
+        let init_addr = format!("{}:{}", config.addr, config.port);
         let mut stream = connect_with_retries(&init_addr, 3).await?;
 
-        // Create a connection packet
         let packet = Communication::FrcConnect {};
-        
-        let packet = match serde_json::to_string(&packet) {
-            Ok(serialized_packet) => serialized_packet + "\r\n",
-            Err(_) => return Err(FrcError::Serialization("Communication: Connect packet didnt serialize correctly".to_string())),
-        };
+        let serialized_packet = serde_json::to_string(&packet)
+            .map_err(|_| FrcError::Serialization("Communication: Connect packet didn't serialize correctly".to_string()))? + "\r\n";
 
-        if let Err(e) = stream.write_all(packet.as_bytes()).await {
-            let err = FrcError::FailedToSend(format!("{}",e));
-            // self.log_message(err.to_string()).await;
-            return Err(err);
-        }  
+        stream.write_all(serialized_packet.as_bytes()).await
+            .map_err(|e| FrcError::FailedToSend(e.to_string()))?;
 
         let mut buffer = vec![0; 2048];
-
-        let n: usize = match stream.read(&mut buffer).await{
-            Ok(n)=> n,
-            Err(e) => {
-                let err = FrcError::FailedToRecieve(format!("{}",e));
-                return Err(err);
-            }
-        };
+        let n = stream.read(&mut buffer).await
+            .map_err(|e| FrcError::FailedToRecieve(e.to_string()))?;
 
         if n == 0 {
-            let e = FrcError::Disconnected();
-            return Err(e);
+            return Err(FrcError::Disconnected());
         }
 
         let response = String::from_utf8_lossy(&buffer[..n]);
-        
-        println!("Sent: {}\nReceived: {}", &packet, &response);
+        println!("Sent: {}\nReceived: {}", &serialized_packet, &response);
 
-        let res: CommunicationResponse  = match serde_json::from_str::<CommunicationResponse>(&response) {
-            Ok(response_packet) => response_packet,
-            Err(e) => {
-                let e = FrcError::Serialization(format!("Could not parse response: {}", e));
-                return Err(e)
-            }
-        };
+        let res: CommunicationResponse = serde_json::from_str(&response)
+            .map_err(|e| FrcError::Serialization(format!("Could not parse response: {}", e)))?;
 
-        let mut new_port = 0;
-        match res {
-            CommunicationResponse::FrcConnect(res) => new_port = res.port_number,
-            _ => ()
+        let new_port = if let CommunicationResponse::FrcConnect(res) = res {
+            res.port_number
+        } else {
+            return Err(FrcError::UnrecognizedPacket);
         };
 
         drop(stream);
-        let init_addr = format!("{}:{}",config.addr, new_port);
+        let init_addr = format!("{}:{}", config.addr, new_port);
         let stream = connect_with_retries(&init_addr, 3).await?;        
 
         let (read_half, write_half) = split(stream);
         let read_half = Arc::new(Mutex::new(read_half));
         let write_half = Arc::new(Mutex::new(write_half));
-        let messages: Arc<RwLock<VecDeque<String>>> = Arc::new(RwLock::new(VecDeque::new()));
-
         let (message_channel, _rx) = broadcast::channel(100);
-        
-
-
-        
-        let mut msg = match messages.write() {
-            Ok(msg) => msg,
-            Err(e) => return Err(FrcError::Initialization(format!("Could not lock a a new driver message initialization: {}",e)))
-        };
-
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
-
         let latest_sequence = Arc::new(Mutex::new(0));
         let connected = StdArc::new(RwLock::new(true));
-        // let (connected_tx, connected_rx) = mpsc::channel::<bool>(10);
 
-        msg.push_back("Connected".to_string());
-        drop(msg);
         let driver = Self {
             config,
-            messages,
             message_channel,
             latest_sequence,
             write_half,
@@ -155,43 +163,117 @@ impl FanucDriver {
             queue_tx,
             connected,
         };
-        
+
         let mut driver_clone = driver.clone();
         tokio::spawn(async move {
-            match driver_clone.start_program(queue_rx).await {
-                Ok(_) => {
-                    println!("Program started successfully");
-                },
-                Err(e) => eprintln!("Failed to start program: {:?}", e),
+            if let Err(e) = driver_clone.start_program(queue_rx).await {
+                eprintln!("Failed to start program: {:?}", e);
+            } else {
+                println!("Program started successfully");
             }
         });
-        // let _ = driver.initialize();
-        
+
         Ok(driver)
     }
 
+    // pub async fn connect(config: FanucDriverConfig) -> Result<FanucDriver, FrcError> {
+    //     let init_addr = format!("{}:{}",&config.addr, &config.port);
+    //     let mut stream = connect_with_retries(&init_addr, 3).await?;
 
-    //log message is an interface to print info needed and log it for api use
+    //     // Create a connection packet
+    //     let packet = Communication::FrcConnect {};
+        
+    //     let packet = match serde_json::to_string(&packet) {
+    //         Ok(serialized_packet) => serialized_packet + "\r\n",
+    //         Err(_) => return Err(FrcError::Serialization("Communication: Connect packet didnt serialize correctly".to_string())),
+    //     };
+
+    //     if let Err(e) = stream.write_all(packet.as_bytes()).await {
+    //         let err = FrcError::FailedToSend(format!("{}",e));
+    //         return Err(err);
+    //     }  
+
+    //     let mut buffer = vec![0; 2048];
+
+    //     let n: usize = match stream.read(&mut buffer).await{
+    //         Ok(n)=> n,
+    //         Err(e) => {
+    //             let err = FrcError::FailedToRecieve(format!("{}",e));
+    //             return Err(err);
+    //         }
+    //     };
+
+    //     if n == 0 {
+    //         let e = FrcError::Disconnected();
+    //         return Err(e);
+    //     }
+
+    //     let response = String::from_utf8_lossy(&buffer[..n]);
+        
+    //     println!("Sent: {}\nReceived: {}", &packet, &response);
+
+    //     let res: CommunicationResponse  = match serde_json::from_str::<CommunicationResponse>(&response) {
+    //         Ok(response_packet) => response_packet,
+    //         Err(e) => {
+    //             let e = FrcError::Serialization(format!("Could not parse response: {}", e));
+    //             return Err(e)
+    //         }
+    //     };
+
+    //     let mut new_port = 0;
+    //     match res {
+    //         CommunicationResponse::FrcConnect(res) => new_port = res.port_number,
+    //         _ => ()
+    //     };
+
+    //     drop(stream);
+    //     let init_addr = format!("{}:{}",config.addr, new_port);
+    //     let stream = connect_with_retries(&init_addr, 3).await?;        
+
+    //     let (read_half, write_half) = split(stream);
+    //     let read_half = Arc::new(Mutex::new(read_half));
+    //     let write_half = Arc::new(Mutex::new(write_half));
+    //     let (message_channel, _rx) = broadcast::channel(100);
+    //     let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
+    //     let latest_sequence = Arc::new(Mutex::new(0));
+    //     let connected = StdArc::new(RwLock::new(true));
+
+    //     let driver = Self {
+    //         config,
+    //         message_channel,
+    //         latest_sequence,
+    //         write_half,
+    //         read_half,
+    //         queue_tx,
+    //         connected,
+    //     };
+        
+    //     let mut driver_clone = driver.clone();
+    //     tokio::spawn(async move {
+    //         match driver_clone.start_program(queue_rx).await {
+    //             Ok(_) => {
+    //                 println!("Program started successfully");
+    //             },
+    //             Err(e) => eprintln!("Failed to start program: {:?}", e),
+    //         }
+    //     });
+    //     Ok(driver)
+    // }
+
     async fn log_message<T: Into<String>>(&self, message:T){
         let message = message.into();
-        let messages = self.messages.clone();
-        
-        #[cfg(feature="logging")]
-        println!("{}", &message);
-
         let _ = self.message_channel.send(message.clone());
-
-        if let Ok(mut messages) = messages.write(){
-            while messages.len() >= self.config.max_messages {
-                messages.pop_front();
-            }
-            messages.push_back(message);
-        };
+        #[cfg(feature="logging")]
+        println!("{:?}", message);
     }
 
+    pub async fn abort(&self) -> Result<(), FrcError> {
+        let packet = SendPacket::Command(Command::FrcAbort {});
+        self.add_to_queue(packet, PacketPriority::Standard).await;
+        Ok(())
+    }
 
-    //this is mostly depricated
-    pub async fn initialize(&self) -> Result<(), FrcError> {
+     pub async fn initialize(&self) -> Result<(), FrcError> {
 
         let packet: SendPacket =  SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()));
 
@@ -200,36 +282,6 @@ impl FanucDriver {
         return Ok(());
 
     }
-    
-    
-    pub async fn abort(&self) -> Result<(), FrcError> {
-
-        let packet = SendPacket::Command(Command::FrcAbort {});
-        self.add_to_queue(packet, PacketPriority::Standard).await;
-
-        Ok(())
-    }
-
-    // pub async fn get_status(&self) -> Result<(), FrcError> {
-
-    //     let packet = Command::FrcGetStatus {};
-        
-    //     let packet = match serde_json::to_string(&packet) {
-    //         Ok(serialized_packet) => serialized_packet + "\r\n",
-    //         Err(_) => return Err(FrcError::Serialization("get_status packet didnt serialize correctly".to_string())),
-    //     };
-
-    //     self.send_packet(packet.clone()).await?;
-    //     let response = self.recieve::<CommandResponse>().await?;        
-    //     if let CommandResponse::FrcGetStatus(ref res) = response {
-    //         if res.error_id != 0 {
-    //             self.log_message(format!("Error ID: {}", res.error_id)).await;
-    //             let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
-    //             return Err(FrcError::FanucErrorCode(error_code)); 
-    //         }
-    //     }
-    //     Ok(())
-    // }
 
     pub async fn disconnect(&self) -> Result<(), FrcError> {
 
@@ -258,34 +310,59 @@ impl FanucDriver {
             self.log_message(format!("Sent: {}", packet)).await;
             Ok(())
     }
-    pub async fn start_program(&mut self, queue_rx:Receiver<DriverPacket>) -> Result<(), FrcError> {
+/// Starts the program by spawning two asynchronous tasks: one to handle sending packets to the robot,
+    /// and another to handle receiving responses from the robot.
+    ///
+    /// This function joins two futures: `send_queue` and `read_queue_responses`, both of which are responsible
+    /// for managing the communication with the Fanuc controller. It logs the outcome of each task and returns
+    /// an error if either task fails.
+    ///
+    /// # Arguments
+    ///
+    /// * `queue_rx` - A `Receiver<DriverPacket>` for receiving packets to be sent to the robot.
+    ///
+    /// # Returns
+    ///
+    /// If successful, returns `Ok(())`. Otherwise, returns an `FrcError` indicating the cause of the failure.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// - `send_queue` fails to send packets to the robot.
+    /// - `read_queue_responses` fails to read responses from the robot.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
+    /// let mut driver = FanucDriver::connect(config).await?;
+    /// driver.start_program(queue_rx).await?;
+    /// ```
+    pub async fn start_program(&mut self, queue_rx: Receiver<DriverPacket>) -> Result<(), FrcError> {
+        let current_packets_in_controller_queue: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
 
-        let current_packets_in_controllor_queue: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
-
-        //spins up 3 async concurent functions
         let (res1, res2) = tokio::join!(
-            self.send_queue(queue_rx, current_packets_in_controllor_queue.clone()),
-            self.read_queue_responses(current_packets_in_controllor_queue.clone())
+            self.send_queue(queue_rx, current_packets_in_controller_queue.clone()),
+            self.read_queue_responses(current_packets_in_controller_queue.clone())
         );
         
-        match res1 {
-            Ok(_) => self.log_message("send_queue completed successfully").await,
-            Err(e) => {
-                self.log_message(format!("send_queue failed: {}", e)).await;
-                return Err(e);
-            }
+        if let Err(e) = res1 {
+            self.log_message(format!("send_queue failed: {}", e)).await;
+            return Err(e);
+        } else {
+            self.log_message("send_queue completed successfully").await;
         }
 
-        match res2 {
-            Ok(_) => self.log_message("read_queue_responses completed successfully").await,
-            Err(e) => {
-                self.log_message(format!("send_queue failed: {}", e)).await;
-                return Err(e);
-            }        
+        if let Err(e) = res2 {
+            self.log_message(format!("read_queue_responses failed: {}", e)).await;
+            return Err(e);
+        } else {
+            self.log_message("read_queue_responses completed successfully").await;
         }
 
         Ok(())
     }
+
 
     pub async fn add_to_queue(&self, packet: SendPacket, priority: PacketPriority){
         let sender = self.queue_tx.clone();
@@ -403,9 +480,7 @@ impl FanucDriver {
                                         *current_packets -= 1; // Dereference and increment the value
                                         println!("just decremented to:{}",current_packets);
                                         }
-                                        // sleep(Duration::from_millis(1000)).await;
 
-                                        
                                         Some(response_packet)},
                                     Err(e) => {
                                         self.log_message(format!("Could not parse response into RPE: {}", e)).await;
