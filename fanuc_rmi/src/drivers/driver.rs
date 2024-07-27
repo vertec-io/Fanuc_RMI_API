@@ -403,7 +403,7 @@ impl FanucDriver {
                                         *current_packets -= 1; // Dereference and increment the value
                                         println!("just decremented to:{}",current_packets);
                                         }
-                                        sleep(Duration::from_millis(1000)).await;
+                                        // sleep(Duration::from_millis(1000)).await;
 
                                         
                                         Some(response_packet)},
