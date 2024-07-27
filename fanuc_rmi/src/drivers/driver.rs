@@ -1,8 +1,10 @@
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::broadcast;
+
+// use tokio::sync::broadcast::Sender;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
-
 
 use std::{sync::Arc, time::Duration};
 use tokio::{ net::TcpStream, sync::Mutex, time::sleep};
@@ -52,6 +54,7 @@ impl Default for FanucDriverConfig {
 pub struct FanucDriver {
     pub config: FanucDriverConfig,
     pub messages: Arc<RwLock<VecDeque<String>>>,
+    pub message_channel: tokio::sync::broadcast::Sender<String>,
     pub latest_sequence: Arc<Mutex<u32>>,
     write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
@@ -123,6 +126,11 @@ impl FanucDriver {
         let read_half = Arc::new(Mutex::new(read_half));
         let write_half = Arc::new(Mutex::new(write_half));
         let messages: Arc<RwLock<VecDeque<String>>> = Arc::new(RwLock::new(VecDeque::new()));
+
+        let (message_channel, _rx) = broadcast::channel(100);
+        
+
+
         
         let mut msg = match messages.write() {
             Ok(msg) => msg,
@@ -140,6 +148,7 @@ impl FanucDriver {
         let driver = Self {
             config,
             messages,
+            message_channel,
             latest_sequence,
             write_half,
             read_half,
@@ -150,7 +159,9 @@ impl FanucDriver {
         let mut driver_clone = driver.clone();
         tokio::spawn(async move {
             match driver_clone.start_program(queue_rx).await {
-                Ok(_) => println!("Program started successfully"),
+                Ok(_) => {
+                    println!("Program started successfully");
+                },
                 Err(e) => eprintln!("Failed to start program: {:?}", e),
             }
         });
@@ -164,10 +175,13 @@ impl FanucDriver {
     async fn log_message<T: Into<String>>(&self, message:T){
         let message = message.into();
         let messages = self.messages.clone();
-        if let Ok(mut messages) = messages.write(){
-            #[cfg(feature="logging")]
-            println!("{}", &message);
+        
+        #[cfg(feature="logging")]
+        println!("{}", &message);
 
+        let _ = self.message_channel.send(message.clone());
+
+        if let Ok(mut messages) = messages.write(){
             while messages.len() >= self.config.max_messages {
                 messages.pop_front();
             }
@@ -244,90 +258,11 @@ impl FanucDriver {
             self.log_message(format!("Sent: {}", packet)).await;
             Ok(())
     }
-
-    // async fn recieve<T>(&self) -> Result<T, FrcError>
-    //     where
-    //         T: for<'a> Deserialize<'a> + std::fmt::Debug,
-    //     {
-            
-    //         let mut buffer = vec![0; 2048];
-    //         let mut stream = self.read_half.lock().await;
-
-    //         let n: usize = match stream.read(&mut buffer).await{
-    //             Ok(n)=> n,
-    //             Err(e) => {
-    //                 let err = FrcError::FailedToRecieve(format!("{}",e));
-    //                 self.log_message(err.to_string()).await;
-    //                 return Err(err);
-    //             }
-    //         };
-
-
-    //         if n == 0 {
-    //             let e = FrcError::Disconnected();
-    //             self.log_message(e.to_string()).await;
-    //             return Err(e);
-    //         }
-
-    //         let response = String::from_utf8_lossy(&buffer[..n]);
-
-    //         self.log_message(format!("Received: {}", &response)).await;
-
-    //         // Parse JSON response
-    //         match serde_json::from_str::<T>(&response) {
-    //             Ok(response_packet) => Ok(response_packet),
-    //             Err(e) => {
-    //                 let e = FrcError::Serialization(format!("Could not parse response: {}", e));
-    //                 self.log_message(e.to_string()).await;
-    //                 return Err(e);
-    //             }
-    //         }
-    //     }
-
-    // pub async fn linear_relative(
-    //     &self,
-    //     sequence_id: u32,    
-    //     configuration: Configuration,
-    //     position: Position,
-    //     speed_type: SpeedType,
-    //     speed: f64,
-    //     term_type: TermType,
-    //     term_value: u8,
-
-    // ) -> Result<(), FrcError> {
-    //     let packet = Instruction::FrcLinearRelative(FrcLinearRelative::new(
-    //         sequence_id,    
-    //         configuration,
-    //         position,
-    //         speed_type,
-    //         speed,
-    //         term_type,
-    //         term_value,
-    //     ));
-        
-    //     let packet = match serde_json::to_string(&packet) {
-    //         Ok(serialized_packet) => serialized_packet + "\r\n",
-    //         Err(_) => return Err(FrcError::Serialization("linear motion packet didnt serialize correctly".to_string())),
-    //     };
-
-    //     self.send_packet(packet.clone()).await?;
-    //     let response = self.recieve::<InstructionResponse>().await?;
-    //     if let InstructionResponse::FrcLinearRelative(ref res) = response {
-    //         if res.error_id != 0 {
-    //             self.log_message(format!("Error ID: {}", res.error_id)).await;
-    //             let error_code = FanucErrorCode::try_from(res.error_id).unwrap_or(FanucErrorCode::UnrecognizedFrcError);
-    //             return Err(FrcError::FanucErrorCode(error_code)); 
-    //         }
-    //     }
-    //     Ok(())
-
-    // }
-
     pub async fn start_program(&mut self, queue_rx:Receiver<DriverPacket>) -> Result<(), FrcError> {
 
         let current_packets_in_controllor_queue: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
 
-        //spins up 2 async concurent functions
+        //spins up 3 async concurent functions
         let (res1, res2) = tokio::join!(
             self.send_queue(queue_rx, current_packets_in_controllor_queue.clone()),
             self.read_queue_responses(current_packets_in_controllor_queue.clone())
