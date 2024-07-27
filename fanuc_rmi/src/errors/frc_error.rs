@@ -10,7 +10,8 @@ pub enum FrcError{
     FanucErrorCode(FanucErrorCode),
     FailedToSend(String),
     FailedToRecieve(String),
-    Disconnected()
+    Disconnected(),
+    Initialization(String),
 }
 impl Error for FrcError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
@@ -21,11 +22,12 @@ impl fmt::Display for FrcError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             FrcError::Serialization(ref msg) => write!(f, "Serialization error: {}", msg),
-            FrcError::UnrecognizedPacket => write!(f, "Fanuc threw a unrecognized "),
+            FrcError::UnrecognizedPacket => write!(f, "Fanuc threw an unrecognized weeoe"),
             FrcError::FanucErrorCode(ref code) => write!(f, "fanuc returned  error#: {}", code.message()),
             FrcError::FailedToSend(ref msg) => write!(f, "SendError: {}", msg),
             FrcError::FailedToRecieve(ref msg) => write!(f, "RecieveError: {}", msg),
             FrcError::Disconnected() => write!(f, "Fanuc appears to be disconnected"),
+            FrcError::Initialization(ref msg) => write!(f, "Could not initialize: {}", msg)
         }
     }
 }

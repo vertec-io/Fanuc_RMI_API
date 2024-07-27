@@ -3,6 +3,7 @@ use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 
+use std::sync::RwLock;
 use std::{sync::Arc, time::Duration};
 use tokio::{ net::TcpStream, sync::Mutex, time::sleep};
 use tokio::io::{ AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf, split};
@@ -49,7 +50,7 @@ impl Default for FanucDriverConfig {
 #[derive( Debug, Clone)]
 pub struct FanucDriver {
     pub config: FanucDriverConfig,
-    pub messages: Arc<Mutex<VecDeque<String>>>,
+    pub messages: Arc<RwLock<VecDeque<String>>>,
     pub latest_sequence: Arc<Mutex<u32>>,
     write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
@@ -118,8 +119,13 @@ impl FanucDriver {
         let (read_half, write_half) = split(stream);
         let read_half = Arc::new(Mutex::new(read_half));
         let write_half = Arc::new(Mutex::new(write_half));
-        let messages: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let mut msg = messages.lock().await;
+        let messages: Arc<RwLock<VecDeque<String>>> = Arc::new(RwLock::new(VecDeque::new()));
+        
+        let mut msg = match messages.write() {
+            Ok(msg) => msg,
+            Err(e) => return Err(FrcError::Initialization(format!("Could not lock a a new driver message initialization: {}",e)))
+        };
+
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
 
         let latest_sequence = Arc::new(Mutex::new(0));
@@ -150,15 +156,15 @@ impl FanucDriver {
     async fn log_message<T: Into<String>>(&self, message:T){
         let message = message.into();
         let messages = self.messages.clone();
-        let mut messages = messages.lock().await;
+        if let Ok(mut messages) = messages.write(){
+            #[cfg(feature="logging")]
+            println!("{}", &message);
 
-        #[cfg(feature="logging")]
-        println!("{}", &message);
-
-        while messages.len() >= self.config.max_messages {
-            messages.pop_front();
-        }
-        messages.push_back(message);
+            while messages.len() >= self.config.max_messages {
+                messages.pop_front();
+            }
+            messages.push_back(message);
+        };
     }
 
 

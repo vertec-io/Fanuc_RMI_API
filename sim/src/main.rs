@@ -118,6 +118,10 @@ async fn handle_secondary_client(mut socket: TcpStream) -> Result<(), Box<dyn Er
                     "Command": "FRC_Abort",
                     "ErrorID": 0,
                 }),
+                Some("FRC_Reset") => json!({
+                    "Command": "FRC_Reset",
+                    "ErrorID": 0,
+                }),
                 _ => json!({}),
             };
 
