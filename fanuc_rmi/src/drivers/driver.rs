@@ -28,7 +28,14 @@ pub struct DriverPacket {
     priority: PacketPriority,
     packet: SendPacket,
 }
-
+impl DriverPacket {
+    fn new(priority:PacketPriority, packet: SendPacket) -> Self {
+        Self {
+            priority,
+            packet,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct  FanucDriverConfig {
