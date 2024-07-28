@@ -24,6 +24,7 @@ pub enum PacketPriority{
     Standard,
     High,
     Immediate,
+    Termination,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -400,6 +401,10 @@ impl FanucDriver {
                     PacketPriority::Standard => queue.push_back(new_packet.packet),
                     PacketPriority::High => queue.push_front(new_packet.packet),
                     PacketPriority::Immediate => queue.push_front(new_packet.packet),
+                    PacketPriority::Termination => {
+                        queue.clear();
+                        queue.push_front(new_packet.packet)
+                    },
                 };
             }
 
