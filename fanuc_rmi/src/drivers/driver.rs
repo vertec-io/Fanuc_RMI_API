@@ -29,7 +29,7 @@ pub struct DriverPacket {
     packet: SendPacket,
 }
 impl DriverPacket {
-    fn new(priority:PacketPriority, packet: SendPacket) -> Self {
+    pub fn new(priority:PacketPriority, packet: SendPacket) -> Self {
         Self {
             priority,
             packet,
