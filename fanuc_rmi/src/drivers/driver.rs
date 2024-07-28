@@ -18,16 +18,20 @@ pub use crate::instructions::*;
 pub use crate::commands::*;
 pub use crate::{Configuration, Position, SpeedType, TermType, FrcError };
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum PacketPriority{
     Low,
     Standard,
     High,
     Immediate,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DriverPacket {
     priority: PacketPriority,
     packet: SendPacket,
 }
+
 impl DriverPacket {
     pub fn new(priority:PacketPriority, packet: SendPacket) -> Self {
         Self {
