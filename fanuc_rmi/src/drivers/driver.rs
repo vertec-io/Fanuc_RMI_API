@@ -28,8 +28,8 @@ pub enum PacketPriority{
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DriverPacket {
-    priority: PacketPriority,
-    packet: SendPacket,
+    pub priority: PacketPriority,
+    pub packet: SendPacket,
 }
 
 impl DriverPacket {
