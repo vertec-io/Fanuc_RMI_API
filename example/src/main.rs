@@ -12,13 +12,13 @@ use tokio::time::sleep;
 #[tokio::main]
 async fn main() -> Result<(), FrcError > {
 
-    let driver_settings = FanucDriverConfig::default();
+    // let driver_settings = FanucDriverConfig::default();
 
-    // let driver_settings = FanucDriverConfig{
-    //     addr: "192.168.1.100".to_string(),
-    //     port: 16001,
-    //     max_messages: 30
-    // };
+    let driver_settings = FanucDriverConfig{
+        addr: "10.10.0.100".to_string(),
+        port: 16001,
+        max_messages: 30
+    };
 
     println!("going to connect");
     let driver = FanucDriver::connect(driver_settings.clone()).await;
@@ -44,11 +44,9 @@ async fn main() -> Result<(), FrcError > {
     // //     driver.initialize().await?;
     // // };
 
-    // driver.load_gcode().await;
-    // let _ = driver.start_program();
     // println!("after startprogram");
 
-    driver.load_gcode().await;
+    // driver.load_gcode().await;
     // driver.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
     //     7,    
     //     Configuration {

@@ -49,7 +49,7 @@ impl Default for Configuration{
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone,Copy, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct Position {
     pub x: f32,
@@ -61,6 +61,22 @@ pub struct Position {
     pub ext1: f32,
     pub ext2: f32,
     pub ext3: f32,
+}
+
+impl Default for Position {
+    fn default() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            z: -100.0,
+            w: 0.0,
+            p: 90.0,
+            r: 0.0,
+            ext1: 0.0,
+            ext2: 0.0,
+            ext3: 0.0,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
