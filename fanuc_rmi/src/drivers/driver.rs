@@ -71,6 +71,8 @@ pub struct FanucDriver {
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
     queue_tx: mpsc::Sender<DriverPacket>,
     pub connected: StdArc<RwLock<bool>>,
+    pub completed_packet_channel: Arc<Mutex<Receiver<u32>>>,
+
 }
 
 impl FanucDriver {
@@ -165,6 +167,8 @@ impl FanucDriver {
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
         let latest_sequence = Arc::new(Mutex::new(0));
         let connected = StdArc::new(RwLock::new(true));
+        let (sequence_id_tx, sequence_id_rx) = mpsc::channel::<u32>(100);
+        let completed_packet_channel = Arc::new(Mutex::new(sequence_id_rx));
 
         let driver = Self {
             config,
@@ -174,11 +178,12 @@ impl FanucDriver {
             read_half,
             queue_tx,
             connected,
+            completed_packet_channel
         };
 
         let mut driver_clone = driver.clone();
         tokio::spawn(async move {
-            if let Err(e) = driver_clone.start_program(queue_rx).await {
+            if let Err(e) = driver_clone.start_program(queue_rx, sequence_id_tx).await {
                 eprintln!("Failed to start program: {:?}", e);
             } else {
                 println!("Program started successfully");
@@ -267,12 +272,12 @@ impl FanucDriver {
     /// let mut driver = FanucDriver::connect(config).await?;
     /// driver.start_program(queue_rx).await?;
     /// ```
-    pub async fn start_program(&mut self, queue_rx: Receiver<DriverPacket>) -> Result<(), FrcError> {
+    pub async fn start_program(&mut self, queue_rx: Receiver<DriverPacket>, completed_sequence_id_sender: mpsc::Sender<u32>) -> Result<(), FrcError> {
         let current_packets_in_controller_queue: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
 
         let (res1, res2) = tokio::join!(
             self.send_queue(queue_rx, current_packets_in_controller_queue.clone()),
-            self.read_queue_responses(current_packets_in_controller_queue.clone())
+            self.read_queue_responses(current_packets_in_controller_queue.clone(), completed_sequence_id_sender)
         );
         
         if let Err(e) = res1 {
@@ -377,7 +382,7 @@ impl FanucDriver {
     }
     
 
-    async fn read_queue_responses(&self, current_packets_in_controllor_queue:Arc<Mutex<i32>>) -> Result<(), FrcError> {
+    async fn read_queue_responses(&self, current_packets_in_controllor_queue:Arc<Mutex<i32>>, completed_sequence_id_sender: mpsc::Sender<u32>) -> Result<(), FrcError> {
         
         let mut reader = self.read_half.lock().await;
 
@@ -438,6 +443,12 @@ impl FanucDriver {
                                         println!("Received a init packet. with eid :{}", id);
                                         break
                                     },
+                                    Some(ResponsePacket::InstructionResponse(packet))=>{
+                                        let sequence_id:u32 = packet.get_sequence_id();
+                                        let error_id:u32 = packet.get_error_id();
+                                        let res = completed_sequence_id_sender.send(sequence_id);
+                                        
+                                    }
                                     _ => {
                                         // println!("Received a different type of packet.");
                                         // Handle other types of packets here

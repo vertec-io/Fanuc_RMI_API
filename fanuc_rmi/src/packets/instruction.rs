@@ -77,6 +77,7 @@ impl Instruction {
     }
 }
 
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Instruction")]
 pub enum InstructionResponse {
@@ -135,6 +136,28 @@ impl InstructionResponse {
             InstructionResponse::FrcJointMotionJRep(resp) => resp.sequence_id,
             InstructionResponse::FrcJointRelativeJRep(resp) => resp.sequence_id,
             InstructionResponse::FrcLinearMotionJRep(resp) => resp.sequence_id,
+        }
+    }
+}
+impl InstructionResponse {
+    pub fn get_error_id(&self) -> u32 {
+        match self {
+            InstructionResponse::FrcWaitDIN(resp) => resp.error_id,
+            InstructionResponse::FrcSetUFrame(resp) => resp.error_id,
+            InstructionResponse::FrcSetUTool(resp) => resp.error_id,
+            InstructionResponse::FrcWaitTime(resp) => resp.error_id,
+            InstructionResponse::FrcSetPayLoad(resp) => resp.error_id,
+            InstructionResponse::FrcCall(resp) => resp.error_id,
+            InstructionResponse::FrcLinearMotion(resp) => resp.error_id,
+            InstructionResponse::FrcLinearRelative(resp) => resp.error_id,
+            InstructionResponse::FrcLinearRelativeJRep(resp) => resp.error_id,
+            InstructionResponse::FrcJointMotion(resp) => resp.error_id,
+            InstructionResponse::FrcJointRelative(resp) => resp.error_id,
+            InstructionResponse::FrcCircularMotion(resp) => resp.error_id,
+            InstructionResponse::FrcCircularRelative(resp) => resp.error_id,
+            InstructionResponse::FrcJointMotionJRep(resp) => resp.error_id,
+            InstructionResponse::FrcJointRelativeJRep(resp) => resp.error_id,
+            InstructionResponse::FrcLinearMotionJRep(resp) => resp.error_id,
         }
     }
 }
