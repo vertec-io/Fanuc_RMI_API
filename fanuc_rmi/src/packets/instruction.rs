@@ -162,6 +162,12 @@ impl InstructionResponse {
     }
 }
 
+pub struct CompletedPacketReturnInfo{
+    pub sequence_id:u32,
+    pub error_id:u32,    
+}
+
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum OnOff{
     ON,
