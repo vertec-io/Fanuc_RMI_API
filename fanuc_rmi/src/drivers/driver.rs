@@ -447,8 +447,11 @@ impl FanucDriver {
                                     Some(ResponsePacket::InstructionResponse(packet))=>{
                                         let sequence_id:u32 = packet.get_sequence_id();
                                         let error_id:u32 = packet.get_error_id();
-                                        let res = completed_packet_tx.send(CompletedPacketReturnInfo{sequence_id, error_id}).await;
-                                        // println!("we got a instruction!!{:?}", res)
+                                        match completed_packet_tx.send(CompletedPacketReturnInfo{sequence_id, error_id}).await{
+                                            Ok(_) => println!("returning some info"),
+                                            Err(e) => println!("couldnt send returned packet info{}",e),
+                                        }
+                                    
                                     }
                                     _ => {
                                         // println!("Received a different type of packet.");
