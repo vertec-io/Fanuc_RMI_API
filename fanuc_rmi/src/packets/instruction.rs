@@ -161,7 +161,7 @@ impl InstructionResponse {
         }
     }
 }
-#[derive(Serialize, Deserialize, Debug, Clone,Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompletedPacketReturnInfo{
     pub sequence_id:u32,
     pub error_id:u32,    
