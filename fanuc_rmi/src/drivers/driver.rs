@@ -550,7 +550,6 @@ impl FanucDriver {
 
         let sid = self.latest_sequence.clone();
         let mut sid = sid.lock().await;
-        println!("when assigning it is{}", sid);
         let current_id = *sid;
 
         if let SendPacket::Instruction(ref mut instruction) = packet {
@@ -606,9 +605,9 @@ impl FanucDriver {
             }
 
             *sid += 1;
-            println!("");
-            println!("Sequence after increment: {}", sid);
-            println!("");
+            // println!("");
+            // println!("Sequence after increment: {}", sid);
+            // println!("");
 
 
         }
