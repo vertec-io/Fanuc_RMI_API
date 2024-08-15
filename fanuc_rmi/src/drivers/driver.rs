@@ -444,6 +444,8 @@ impl FanucDriver {
                                         let id = frc_initialize_response.error_id;
                                         if id != 0 {
                                             self.add_to_queue(SendPacket::Command(Command::FrcAbort), PacketPriority::Standard).await;
+                                            sleep(Duration::from_millis(1)).await;
+
                                             self.add_to_queue(SendPacket::Command(Command::FrcInitialize(FrcInitialize::default())), PacketPriority::Standard).await;
                                         }
                                         println!("Received a init packet. with eid :{}", id);
