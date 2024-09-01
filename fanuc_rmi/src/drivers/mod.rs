@@ -2,5 +2,5 @@ mod driver;
 #[cfg(feature="driver")]
 pub use driver::*;
 
-#[cfg(not(feature="driver"))]
-pub use driver::{FanucDriverConfig,FanucErrorCode};
+mod driver_config;
+pub use driver_config::*;
