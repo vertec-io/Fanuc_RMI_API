@@ -1,3 +1,4 @@
+#[cfg(feature="driver")]
 mod driver;
 #[cfg(feature="driver")]
 pub use driver::*;
