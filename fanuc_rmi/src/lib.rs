@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature="driver")]
+
 pub mod drivers;
 
 pub mod packets;

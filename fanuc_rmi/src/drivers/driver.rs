@@ -19,6 +19,8 @@ pub use crate::instructions::*;
 pub use crate::commands::*;
 pub use crate::{Configuration, Position, SpeedType, TermType, FrcError };
 
+use super::FanucDriverConfig;
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum PacketPriority{
     Low,
@@ -42,27 +44,6 @@ impl DriverPacket {
         }
     }
 }
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct  FanucDriverConfig {
-    pub addr: String,
-    pub port: u32,
-    pub max_messages: usize,
-}
-
-impl Default for FanucDriverConfig {
-    fn default() -> Self {
-        let addr = "127.0.0.1".to_string(); // Change if the server is running on a different machine
-        let port = 16001;
-        let max_messages = 30;
-        Self {
-            addr,
-            port,
-            max_messages,
-        }
-    }
-}
-
 
 #[derive( Debug, Clone)]
 pub struct FanucDriver {
