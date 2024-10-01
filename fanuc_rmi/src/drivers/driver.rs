@@ -11,6 +11,7 @@ use tokio::{ net::TcpStream, sync::Mutex, time::sleep};
 use tokio::io::{ AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf, split};
 use std::collections::VecDeque;
 use std::sync::{Arc as StdArc, RwLock};
+use std::sync::mpsc as other_mpsc;
 
 // use crate::ResponsePacket;
 pub use crate::{packets::*, FanucErrorCode};
@@ -273,12 +274,14 @@ impl FanucDriver {
     /// let mut driver = FanucDriver::connect(config).await?;
     /// driver.start_program(queue_rx).await?;
     /// ```
-    pub async fn start_program(&mut self, queue_rx: Receiver<DriverPacket>, completed_packet_tx: mpsc::Sender<CompletedPacketReturnInfo>) -> Result<(), FrcError> {
-        let current_packets_in_controller_queue: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
+    pub async fn start_program(&mut self, queue_rx: Receiver<DriverPacket>, completed_packet_info_tx: mpsc::Sender<CompletedPacketReturnInfo>) -> Result<(), FrcError> {
 
+
+        let (packets_done_tx, packets_done_rx): (other_mpsc::Sender<u32>, other_mpsc::Receiver<u32>) = other_mpsc::channel();
+        
         let (res1, res2) = tokio::join!(
-            self.send_queue(queue_rx, current_packets_in_controller_queue.clone()),
-            self.read_queue_responses(current_packets_in_controller_queue.clone(), completed_packet_tx)
+           self.send_queue(queue_rx,packets_done_rx),
+           self.read_queue_responses(completed_packet_info_tx,packets_done_tx)
         );
         
         if let Err(e) = res1 {
@@ -312,8 +315,10 @@ impl FanucDriver {
     }
 
     //this is an async function that recieves packets and yeets them to the controllor to run
-    async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<DriverPacket>, current_packets_in_controllor_queue:Arc<Mutex<i32>>)-> Result<(), FrcError>{
-        
+    async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<DriverPacket>, packets_done_rx:other_mpsc::Receiver<u32>)-> Result<(), FrcError>{
+        let mut packets_sent_number:u32 = 0;
+        let mut packets_done_number:u32 = 0;
+        let mut packets_in_queue:u32 = 0;
         let mut queue = VecDeque::new();
 
         println!("started send loop");
@@ -322,7 +327,6 @@ impl FanucDriver {
         let mut sid = sid.lock().await;
         *sid = 1; // Ensure this happens only once, ideally during initialization
         drop(sid); // Release the lock
-        
         loop {   
             while let Ok(new_packet) = packets_to_add.try_recv() {
                 match new_packet.priority{
@@ -337,11 +341,8 @@ impl FanucDriver {
                 };
             }
 
-            //this will delays us from sending too many packets to the controller
-            {
-            let current_packets: tokio::sync::MutexGuard<i32> = current_packets_in_controllor_queue.lock().await;
-            if *current_packets >=8 {continue;}
-            }
+            if packets_in_queue >=8 {continue;}
+            
             if let Some(packet) = queue.pop_front() {
                 
                 //this will give the instruction packets a sequence number
@@ -361,14 +362,15 @@ impl FanucDriver {
                 if let Err(e) = self.send_packet(serialized_packet).await {
                     self.log_message(format!("Failed to send a packet: {:?}", e)).await;
                 }
-
-                //this is a custom scope so that the mutex guard unlocks immediatly after it is operated on
-                {
-                let mut current_packets: tokio::sync::MutexGuard<i32> = current_packets_in_controllor_queue.lock().await;
-                *current_packets += 1; // Dereference and increment the value
-                // println!("just incremented to:{}",current_packets);
+                packets_sent_number += 1;
+                match packets_done_rx.try_recv(){
+                    Ok(num) => packets_done_number = num,
+                    Err(e) => {
+                        //println!("nothing found: {}", e);
+                        },
                 }
-
+                packets_in_queue = packets_sent_number - packets_done_number;
+                println!("{}",packets_in_queue);
                 
                 if packet == SendPacket::Communication(Communication::FrcDisconnect){break;}
             }
@@ -380,16 +382,16 @@ impl FanucDriver {
         //when 0 is sent it shuts  off the reciever system so we wait one sec so that the response can be sent back and processed
         // sleep(Duration::from_secs(1)).await;
 
-        let current_packets: tokio::sync::MutexGuard<i32> = current_packets_in_controllor_queue.lock().await;
-        self.log_message(format!("driver send queue ended with {} in controller", *current_packets)).await;
 
 
         Ok(())
     }
     
 
-    async fn read_queue_responses(&self, current_packets_in_controllor_queue:Arc<Mutex<i32>>, completed_packet_tx: mpsc::Sender<CompletedPacketReturnInfo>) -> Result<(), FrcError> {
+    async fn read_queue_responses(&self, completed_packet_tx: mpsc::Sender<CompletedPacketReturnInfo>, packets_done_tx:other_mpsc::Sender<u32>) -> Result<(), FrcError> {
         
+        let mut packets_done_number:u32 = 0;
+
         let mut reader = self.read_half.lock().await;
 
         // let mut numbers_to_look_for: VecDeque<u32> = VecDeque::new();
@@ -415,18 +417,12 @@ impl FanucDriver {
 
                                 let response_str = String::from_utf8_lossy(request);
                                 self.log_message(format!("recieved: {}", response_str.clone())).await;
-
+                                packets_done_number += 1;
+                                let _ = packets_done_tx.send(packets_done_number);
+               
 
                                 let response_packet: Option<ResponsePacket> = match serde_json::from_str::<ResponsePacket>(&response_str) {
                                     Ok(response_packet) => {
-
-                                        //this decrements the number of packets in the controllor queue when we recieve a response
-                                        {
-                                        let mut current_packets: tokio::sync::MutexGuard<i32> = current_packets_in_controllor_queue.lock().await;
-                                        *current_packets -= 1; // Dereference and increment the value
-                                        // println!("just decremented to:{}",current_packets);
-                                        }
-
                                         Some(response_packet)},
                                     Err(e) => {
                                         self.log_message(format!("Could not parse response into RPE: {}", e)).await;
@@ -498,6 +494,96 @@ impl FanucDriver {
 
     //this is just a debug helper function to load the queue automatically
     pub async fn load_gcode(&self){
+
+
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+                10,    
+                Configuration {
+                    u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+                },
+                Position { x: 0.0, y: 0.0, z: 10.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                },
+                SpeedType::MMSec,
+                30.0,
+                TermType::FINE,
+                1,
+            ))),
+            PacketPriority::Standard
+        ).await;
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+                11,    
+                Configuration {
+                    u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+                },
+                Position { x: 0.0, y: 10.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                },
+                SpeedType::MMSec,
+                30.0,
+                TermType::FINE,
+                1,
+            ))),
+            PacketPriority::Standard
+        ).await;
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+                12,    
+                Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+                },
+                Position { x: 0.0, y: 0.0, z: -10.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                },
+                SpeedType::MMSec,
+                30.0,
+                TermType::FINE,
+                1,
+            ))),
+            PacketPriority::Standard
+        ).await;
+
+
+
+
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+                10,    
+                Configuration {
+                    u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+                },
+                Position { x: 0.0, y: 0.0, z: 10.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                },
+                SpeedType::MMSec,
+                30.0,
+                TermType::FINE,
+                1,
+            ))),
+            PacketPriority::Standard
+        ).await;
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+                11,    
+                Configuration {
+                    u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+                },
+                Position { x: 0.0, y: 10.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                },
+                SpeedType::MMSec,
+                30.0,
+                TermType::FINE,
+                1,
+            ))),
+            PacketPriority::Standard
+        ).await;
+        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+                12,    
+                Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
+                },
+                Position { x: 0.0, y: 0.0, z: -10.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                },
+                SpeedType::MMSec,
+                30.0,
+                TermType::FINE,
+                1,
+            ))),
+            PacketPriority::Standard
+        ).await;
+
+
 
 
         self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(

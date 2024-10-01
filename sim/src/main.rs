@@ -144,16 +144,16 @@ async fn handle_secondary_client(mut socket: TcpStream) -> Result<(), Box<dyn Er
                 Some("FRC_LinearRelative") => json!({
                     "Instruction": "FRC_LinearRelative",
                     "ErrorID": 0,
-                    "SequenceID": seq,
+                    "SequenceID": seq
                 }),
                 _ => response_json            
             };
             // let delimiter: String = "\r\n".to_string();
             let response = serde_json::to_string(&response_json)? + "\r\n";
             socket.write_all(response.as_bytes()).await?;
-            // println!("Sent: {}", response);
+            println!("Sent: {}", response);
             seq += 1;
-            // sleep(Duration::from_millis(1000)).await;
+            sleep(Duration::from_millis(100)).await;
 
         }
     }
