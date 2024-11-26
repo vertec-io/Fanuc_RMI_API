@@ -1,6 +1,6 @@
 # Fanuc_RMI_API
 
-Fanuc_RMI_API is a Rust-based library and example implementations designed to facilitate communication and control of FANUC robots via Remote Method Interface (RMI). This project is in early development and may change dramatically over time, but we hope to stabalize as we build.
+Fanuc_RMI_API is a Rust-based library and example implementations designed to facilitate communication and control of FANUC robots via Remote Motion Interface (RMI). This project is in early development and may change dramatically over time, but we hope to stabalize as we build.
 
 ---
 
