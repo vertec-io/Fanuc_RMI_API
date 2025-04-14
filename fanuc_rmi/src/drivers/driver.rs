@@ -51,6 +51,7 @@ pub struct FanucDriver {
     write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
     queue_tx: mpsc::Sender<DriverPacket>,
+    pub connected: StdArc<RwLock<bool>>,
     pub completed_packet_channel: Arc<Mutex<Receiver<CompletedPacketReturnInfo>>>,
 
 }
@@ -146,6 +147,7 @@ impl FanucDriver {
         let (message_channel, _rx) = broadcast::channel(100);
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
         let latest_sequence = Arc::new(Mutex::new(0));
+        let connected = StdArc::new(RwLock::new(true));
         let (completed_packet_tx, return_info_rx) = mpsc::channel::<CompletedPacketReturnInfo>(100);
         let completed_packet_channel = Arc::new(Mutex::new(return_info_rx));
 
@@ -156,12 +158,12 @@ impl FanucDriver {
             write_half,
             read_half,
             queue_tx,
+            connected,
             completed_packet_channel
         };
 
         let mut driver_clone1 = driver.clone();
         let mut driver_clone2 = driver.clone();
-
 
         let (packets_done_tx, packets_done_rx): (other_mpsc::Sender<u32>, other_mpsc::Receiver<u32>) = other_mpsc::channel();
         
@@ -357,6 +359,11 @@ impl FanucDriver {
             match reader.read(&mut buffer).await {
                 Ok(0) => {
                     self.log_message("Connection closed by peer.").await;
+                    if let Ok(mut connected) = self.connected.write() {
+                        *connected = false;
+                    } else {
+                        self.log_message("Connection status could not be updated due to poisoned lock").await;
+                    }
                     return Err(FrcError::Disconnected());
                 }
                 Ok(n) => {
@@ -391,6 +398,9 @@ impl FanucDriver {
 
                             Some(ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_))) => {
                                 self.log_message("Received a FrcDisconnect packet.").await;
+                                if let Ok(mut connected) = self.connected.write() {
+                                    *connected = false;
+                                }
                                 return Ok(());
                             },
                             Some(ResponsePacket::CommandResponse(CommandResponse::FrcInitialize(resp))) => {
@@ -425,6 +435,11 @@ impl FanucDriver {
                 }
                 Err(e) => {
                     self.log_message(format!("Read error: {}", e)).await;
+                    if let Ok(mut connected) = self.connected.write() {
+                        *connected = false;
+                    } else {
+                        self.log_message("Connection status could not be updated due to poisoned lock").await;
+                    }
                     return Err(FrcError::Disconnected());
                 }
 
