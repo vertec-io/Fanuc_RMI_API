@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use fanuc_rmi::{
-    drivers::{FanucDriver, FanucDriverConfig, FrcLinearMotion, FrcLinearRelative, PacketPriority}, packets::*, Configuration, FrcError, Position, SpeedType, TermType
+    drivers::{FanucDriver, FanucDriverConfig, FrcLinearRelative, PacketPriority}, packets::*, Configuration, FrcError, Position, SpeedType, TermType
 };
 
 use tokio::time::sleep;
@@ -31,7 +31,7 @@ async fn main() -> Result<(), FrcError > {
         },
     };
 
-    let res = driver.initialize().await;
+    let _ = driver.initialize().await;
 
     driver.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
         12,    

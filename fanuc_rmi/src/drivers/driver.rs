@@ -5,11 +5,11 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use tokio::{ net::TcpStream, sync::Mutex, time::sleep};
 use tokio::io::{ AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf, split};
 use std::collections::VecDeque;
-use std::sync::{Arc as StdArc, RwLock};
+use std::sync::Arc;
 use std::sync::mpsc as other_mpsc;
 
 pub use crate::{packets::*, FanucErrorCode};
@@ -18,6 +18,10 @@ pub use crate::commands::*;
 pub use crate::{Configuration, Position, SpeedType, TermType, FrcError };
 
 use super::FanucDriverConfig;
+
+//FIXME: clean up queue naming and systems 
+//FIXME: make messaging work
+//FIXME: get sequence id system working well
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum PacketPriority{
@@ -46,12 +50,12 @@ impl DriverPacket {
 #[derive( Debug, Clone)]
 pub struct FanucDriver {
     pub config: FanucDriverConfig,
-    pub message_channel: tokio::sync::broadcast::Sender<String>,
+    pub log_channel: tokio::sync::broadcast::Sender<String>,
     pub latest_sequence: Arc<Mutex<u32>>,
-    write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
-    read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
-    queue_tx: mpsc::Sender<DriverPacket>,
-    pub connected: StdArc<RwLock<bool>>,
+    fanuc_write: Arc<Mutex<WriteHalf<TcpStream>>>, 
+    fanuc_read: Arc<Mutex<ReadHalf<TcpStream>>>,    
+    pub queue_tx: mpsc::Sender<DriverPacket>,       
+    pub connected: Arc<Mutex<bool>>,
     pub completed_packet_channel: Arc<Mutex<Receiver<CompletedPacketReturnInfo>>>,
 
 }
@@ -147,26 +151,28 @@ impl FanucDriver {
         let (message_channel, _rx) = broadcast::channel(100);
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
         let latest_sequence = Arc::new(Mutex::new(0));
-        let connected = StdArc::new(RwLock::new(true));
+        let connected = Arc::new(Mutex::new(true));
         let (completed_packet_tx, return_info_rx) = mpsc::channel::<CompletedPacketReturnInfo>(100);
         let completed_packet_channel = Arc::new(Mutex::new(return_info_rx));
 
         let driver = Self {
             config,
-            message_channel,
+            log_channel: message_channel,
             latest_sequence,
-            write_half,
-            read_half,
+            fanuc_write: write_half,
+            fanuc_read: read_half,
             queue_tx,
             connected,
             completed_packet_channel
         };
 
-        let mut driver_clone1 = driver.clone();
-        let mut driver_clone2 = driver.clone();
+        let driver_clone1 = driver.clone();
+        let driver_clone2 = driver.clone();
 
         let (packets_done_tx, packets_done_rx): (other_mpsc::Sender<u32>, other_mpsc::Receiver<u32>) = other_mpsc::channel();
         
+
+                
         tokio::spawn(async move {
             if let Err(e) = driver_clone1.send_queue(queue_rx, packets_done_rx).await {
                 eprintln!("send_queue failed: {}", e);
@@ -185,7 +191,7 @@ impl FanucDriver {
 
     async fn log_message<T: Into<String>>(&self, message:T){
         let message = message.into();
-        let _ = self.message_channel.send(message.clone());
+        let _ = self.log_channel.send(message.clone());
         #[cfg(feature="logging")]
         println!("{:?}", message);
     }
@@ -223,7 +229,7 @@ impl FanucDriver {
     }
 
     async fn send_packet(&self, packet: String) -> Result<(), FrcError> {      
-            let mut stream = self.write_half.lock().await;
+            let mut stream = self.fanuc_write.lock().await;
 
             if let Err(e) = stream.write_all(packet.as_bytes()).await {
                 let err = FrcError::FailedToSend(format!("{}",e));
@@ -278,7 +284,6 @@ impl FanucDriver {
     async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<DriverPacket>, packets_done_rx:other_mpsc::Receiver<u32>)-> Result<(), FrcError>{
         let mut packets_sent_number:u32 = 0;
         let mut packets_done_number:u32 = 0;
-        let mut packets_in_queue:u32 = 0;
         let mut queue = VecDeque::new();
 
         let sid = self.latest_sequence.clone();
@@ -290,7 +295,7 @@ impl FanucDriver {
 
         loop {
             // Drain all available incoming packets
-            while let Ok(new_packet) = packets_to_add.try_recv() {
+            if let Ok(new_packet) = packets_to_add.try_recv() {
                 match new_packet.priority {
                     PacketPriority::Low | PacketPriority::Standard => queue.push_back(new_packet.packet),
                     PacketPriority::High | PacketPriority::Immediate => queue.push_front(new_packet.packet),
@@ -306,7 +311,7 @@ impl FanucDriver {
                 packets_done_number = num;
             }
     
-            packets_in_queue = packets_sent_number - packets_done_number;
+            let packets_in_queue = packets_sent_number - packets_done_number;
     
             if packets_to_add.is_closed() && queue.is_empty() {
                 break;
@@ -351,7 +356,7 @@ impl FanucDriver {
     async fn read_queue_responses(&self, completed_packet_tx: mpsc::Sender<CompletedPacketReturnInfo>, packets_done_tx:other_mpsc::Sender<u32>) -> Result<(), FrcError> {
 
         let mut packets_done_number:u32 = 0;
-        let mut reader = self.read_half.lock().await;
+        let mut reader = self.fanuc_read.lock().await;
         let mut buffer = vec![0; 2048];
         let mut temp_buffer = Vec::new();
 
@@ -359,11 +364,8 @@ impl FanucDriver {
             match reader.read(&mut buffer).await {
                 Ok(0) => {
                     self.log_message("Connection closed by peer.").await;
-                    if let Ok(mut connected) = self.connected.write() {
-                        *connected = false;
-                    } else {
-                        self.log_message("Connection status could not be updated due to poisoned lock").await;
-                    }
+                    let mut connected = self.connected.lock().await;
+                    *connected = false;
                     return Err(FrcError::Disconnected());
                 }
                 Ok(n) => {
@@ -398,9 +400,8 @@ impl FanucDriver {
 
                             Some(ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_))) => {
                                 self.log_message("Received a FrcDisconnect packet.").await;
-                                if let Ok(mut connected) = self.connected.write() {
-                                    *connected = false;
-                                }
+                                let mut connected = self.connected.lock().await;
+                                *connected = false;
                                 return Ok(());
                             },
                             Some(ResponsePacket::CommandResponse(CommandResponse::FrcInitialize(resp))) => {
@@ -435,11 +436,8 @@ impl FanucDriver {
                 }
                 Err(e) => {
                     self.log_message(format!("Read error: {}", e)).await;
-                    if let Ok(mut connected) = self.connected.write() {
-                        *connected = false;
-                    } else {
-                        self.log_message("Connection status could not be updated due to poisoned lock").await;
-                    }
+                    let mut connected = self.connected.lock().await;
+                    *connected = false;
                     return Err(FrcError::Disconnected());
                 }
 
