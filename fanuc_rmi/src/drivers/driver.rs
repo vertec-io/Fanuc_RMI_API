@@ -2,7 +2,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-// use tokio::sync::broadcast::Sender;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 
@@ -13,7 +12,6 @@ use std::collections::VecDeque;
 use std::sync::{Arc as StdArc, RwLock};
 use std::sync::mpsc as other_mpsc;
 
-// use crate::ResponsePacket;
 pub use crate::{packets::*, FanucErrorCode};
 pub use crate::instructions::*;
 pub use crate::commands::*;
@@ -53,7 +51,6 @@ pub struct FanucDriver {
     write_half: Arc<Mutex<WriteHalf<TcpStream>>>,
     read_half: Arc<Mutex<ReadHalf<TcpStream>>>,
     queue_tx: mpsc::Sender<DriverPacket>,
-    pub connected: StdArc<RwLock<bool>>,
     pub completed_packet_channel: Arc<Mutex<Receiver<CompletedPacketReturnInfo>>>,
 
 }
@@ -149,7 +146,6 @@ impl FanucDriver {
         let (message_channel, _rx) = broadcast::channel(100);
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
         let latest_sequence = Arc::new(Mutex::new(0));
-        let connected = StdArc::new(RwLock::new(true));
         let (completed_packet_tx, return_info_rx) = mpsc::channel::<CompletedPacketReturnInfo>(100);
         let completed_packet_channel = Arc::new(Mutex::new(return_info_rx));
 
@@ -160,16 +156,24 @@ impl FanucDriver {
             write_half,
             read_half,
             queue_tx,
-            connected,
             completed_packet_channel
         };
 
-        let mut driver_clone = driver.clone();
+        let mut driver_clone1 = driver.clone();
+        let mut driver_clone2 = driver.clone();
+
+
+        let (packets_done_tx, packets_done_rx): (other_mpsc::Sender<u32>, other_mpsc::Receiver<u32>) = other_mpsc::channel();
+        
         tokio::spawn(async move {
-            if let Err(e) = driver_clone.start_program(queue_rx, completed_packet_tx).await {
-                eprintln!("Failed to start program: {:?}", e);
-            } else {
-                println!("Program started successfully");
+            if let Err(e) = driver_clone1.send_queue(queue_rx, packets_done_rx).await {
+                eprintln!("send_queue failed: {}", e);
+            }
+        });
+
+        tokio::spawn(async move {
+            if let Err(e) = driver_clone2.read_queue_responses(completed_packet_tx, packets_done_tx).await {
+                eprintln!("read_queue_responses failed: {}", e);
             }
         });
 
@@ -255,33 +259,6 @@ impl FanucDriver {
     /// let mut driver = FanucDriver::connect(config).await?;
     /// driver.start_program(queue_rx).await?;
     /// ```
-    pub async fn start_program(&mut self, queue_rx: Receiver<DriverPacket>, completed_packet_info_tx: mpsc::Sender<CompletedPacketReturnInfo>) -> Result<(), FrcError> {
-
-
-        let (packets_done_tx, packets_done_rx): (other_mpsc::Sender<u32>, other_mpsc::Receiver<u32>) = other_mpsc::channel();
-        
-        let (res1, res2) = tokio::join!(
-           self.send_queue(queue_rx,packets_done_rx),
-           self.read_queue_responses(completed_packet_info_tx,packets_done_tx)
-        );
-        
-        if let Err(e) = res1 {
-            self.log_message(format!("send_queue failed: {}", e)).await;
-            return Err(e);
-        } else {
-            self.log_message("send_queue completed successfully").await;
-        }
-
-        if let Err(e) = res2 {
-            self.log_message(format!("read_queue_responses failed: {}", e)).await;
-            return Err(e);
-        } else {
-            self.log_message("read_queue_responses completed successfully").await;
-        }
-
-        Ok(())
-    }
-
 
     pub async fn add_to_queue(&self, packet: SendPacket, priority: PacketPriority){
         let sender = self.queue_tx.clone();
@@ -302,318 +279,164 @@ impl FanucDriver {
         let mut packets_in_queue:u32 = 0;
         let mut queue = VecDeque::new();
 
-        println!("started send loop");
-
         let sid = self.latest_sequence.clone();
+
         let mut sid = sid.lock().await;
         *sid = 1; // Ensure this happens only once, ideally during initialization
         drop(sid); // Release the lock
-        loop {   
+
+
+        loop {
+            // Drain all available incoming packets
             while let Ok(new_packet) = packets_to_add.try_recv() {
-                match new_packet.priority{
-                    PacketPriority::Low => queue.push_back(new_packet.packet),
-                    PacketPriority::Standard => queue.push_back(new_packet.packet),
-                    PacketPriority::High => queue.push_front(new_packet.packet),
-                    PacketPriority::Immediate => queue.push_front(new_packet.packet),
+                match new_packet.priority {
+                    PacketPriority::Low | PacketPriority::Standard => queue.push_back(new_packet.packet),
+                    PacketPriority::High | PacketPriority::Immediate => queue.push_front(new_packet.packet),
                     PacketPriority::Termination => {
                         queue.clear();
-                        queue.push_front(new_packet.packet)
-                    },
-                };
+                        queue.push_front(new_packet.packet);
+                    }
+                }
             }
-
-            if packets_in_queue >=8 {continue;}
-            
+    
+            // Drain completed packets
+            while let Ok(num) = packets_done_rx.try_recv() {
+                packets_done_number = num;
+            }
+    
+            packets_in_queue = packets_sent_number - packets_done_number;
+    
+            if packets_to_add.is_closed() && queue.is_empty() {
+                break;
+            }
+    
+            if packets_in_queue >= 8 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                continue;
+            }
+    
             if let Some(packet) = queue.pop_front() {
-                
-                //this will give the instruction packets a sequence number
-                let packet: SendPacket = self.give_sequence_id(packet).await;                
-
-
-                // Serialize the packet
+                let packet: SendPacket = self.give_sequence_id(packet).await;
+    
                 let serialized_packet = match serde_json::to_string(&packet) {
                     Ok(packet_str) => packet_str + "\r\n",
                     Err(e) => {
                         self.log_message(format!("Failed to serialize a packet: {}", e)).await;
-                        break;
+                        return Err(FrcError::Serialization(e.to_string()));
                     }
                 };
-
-                // Send the packet
+    
                 if let Err(e) = self.send_packet(serialized_packet).await {
                     self.log_message(format!("Failed to send a packet: {:?}", e)).await;
                 }
+    
                 packets_sent_number += 1;
-                match packets_done_rx.try_recv(){
-                    Ok(num) => packets_done_number = num,
-                    Err(e) => {
-                        //println!("nothing found: {}", e);
-                        },
+    
+                if packet == SendPacket::Communication(Communication::FrcDisconnect) {
+                    break;
                 }
-                packets_in_queue = packets_sent_number - packets_done_number;
-                println!("{}",packets_in_queue);
-                
-                if packet == SendPacket::Communication(Communication::FrcDisconnect){break;}
             }
-            sleep(Duration::from_millis(10)).await;
-
+    
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    
         self.log_message("Disconnecting from FRC server... closing send queue").await;
-
-        //when 0 is sent it shuts  off the reciever system so we wait one sec so that the response can be sent back and processed
-        // sleep(Duration::from_secs(1)).await;
-
-
-
         Ok(())
+    
     }
     
 
     async fn read_queue_responses(&self, completed_packet_tx: mpsc::Sender<CompletedPacketReturnInfo>, packets_done_tx:other_mpsc::Sender<u32>) -> Result<(), FrcError> {
-        
+
         let mut packets_done_number:u32 = 0;
-
         let mut reader = self.read_half.lock().await;
-
-        // let mut numbers_to_look_for: VecDeque<u32> = VecDeque::new();
         let mut buffer = vec![0; 2048];
         let mut temp_buffer = Vec::new();
-        println!("started recieve loop");
 
         loop {
-            tokio::select! {
-                result = reader.read(&mut buffer) => {
+            match reader.read(&mut buffer).await {
+                Ok(0) => {
+                    self.log_message("Connection closed by peer.").await;
+                    return Err(FrcError::Disconnected());
+                }
+                Ok(n) => {
+                    // Append new data to temp_buffer
+                    temp_buffer.extend_from_slice(&buffer[..n]);
 
-                    match result {
-                        Ok(0) => break Ok(()), // Connection closed
-                        Ok(n) => {
-                            // Append new data to temp_buffer
-                            temp_buffer.extend_from_slice(&buffer[..n]);
+                    while let Some(pos) = temp_buffer.iter().position(|&x| x == b'\n') {
+                        // Split the buffer into the current message and the rest
+                        let request: Vec<u8> = temp_buffer.drain(..=pos).collect();
+                        // Remove the newline character
+                        let request = &request[..request.len() - 1];
 
-                            while let Some(pos) = temp_buffer.iter().position(|&x| x == b'\n') {
-                                // Split the buffer into the current message and the rest
-                                let request: Vec<u8> = temp_buffer.drain(..=pos).collect();
-                                // Remove the newline character
-                                let request = &request[..request.len() - 1];
-
-                                let response_str = String::from_utf8_lossy(request);
-                                self.log_message(format!("recieved: {}", response_str.clone())).await;
-                                packets_done_number += 1;
-                                let _ = packets_done_tx.send(packets_done_number);
-               
-
-                                let response_packet: Option<ResponsePacket> = match serde_json::from_str::<ResponsePacket>(&response_str) {
-                                    Ok(response_packet) => {
-                                        Some(response_packet)},
-                                    Err(e) => {
-                                        self.log_message(format!("Could not parse response into RPE: {}", e)).await;
-                                        None
-                                    }
-                                };
-
-                                // here is packet response handling logic. may be relocated soon
-                                match response_packet {
-                                    Some(ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_))) => {
-                                        println!("Received a FrcDisconnect packet.");
-                                        break
-                                    },
-                                    Some(ResponsePacket::CommandResponse(CommandResponse::FrcInitialize(frc_initialize_response))) => {
-                                        let id = frc_initialize_response.error_id;
-                                        if id != 0 {
-                                            self.add_to_queue(SendPacket::Command(Command::FrcAbort), PacketPriority::Standard).await;
-                                            sleep(Duration::from_millis(1)).await;
-
-                                            self.add_to_queue(SendPacket::Command(Command::FrcInitialize(FrcInitialize::default())), PacketPriority::Standard).await;
-                                        }
-                                        println!("Received a init packet. with eid :{}", id);
-                                        break
-                                    },
-                                    Some(ResponsePacket::InstructionResponse(packet))=>{
-                                        let sequence_id:u32 = packet.get_sequence_id();
-                                        let error_id:u32 = packet.get_error_id();
-                                        match completed_packet_tx.send(CompletedPacketReturnInfo{sequence_id, error_id}).await{
-                                            Ok(_) => println!("returning some info"),
-                                            Err(e) => println!("couldnt send returned packet info{}",e),
-                                        }
-                                    
-                                    }
-                                    _ => {
-                                        // println!("Received a different type of packet.");
-                                        // Handle other types of packets here
-                                    }
-                                }
-                            }
+                        let response_str = String::from_utf8_lossy(request);
+                        self.log_message(format!("recieved: {}", response_str.clone())).await;
+                        packets_done_number += 1;
+                        if let Err(e) = packets_done_tx.send(packets_done_number) {
+                            self.log_message(format!("Failed to send packets_done_number: {}", e)).await;
                         }
-                        Err(e) => {
-                            // let mut connected = self.connected.clone();
-                            let mut err_occured = false;
-                            match self.connected.write() {
-                                Ok(mut connected) => {
-                                    *connected = false;
-                                },
-                                Err(_) => {err_occured = true;},
-                            };
-                          
-                            if err_occured {
-                                self.log_message(format!("The driver stream disconnected in a poisoned state and driver failed to set connection status to false")).await;
+                        
+
+                        let response_packet: Option<ResponsePacket> = match serde_json::from_str::<ResponsePacket>(&response_str) {
+                            Ok(response_packet) => {
+                                Some(response_packet)},
+                            Err(e) => {
+                                self.log_message(format!("Could not parse response into RPE: {}", e)).await;
+                                None
                             }
-                            
-                            self.log_message(format!("Failed to read from stream: {}", e)).await;
-                            break Err(FrcError::Disconnected())
+                        };
+
+                        // here is packet response handling logic. may be relocated soon
+                        match response_packet {
+
+                            Some(ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_))) => {
+                                self.log_message("Received a FrcDisconnect packet.").await;
+                                return Ok(());
+                            },
+                            Some(ResponsePacket::CommandResponse(CommandResponse::FrcInitialize(resp))) => {
+                                let id = resp.error_id;
+                                if id != 0 {
+                                    self.log_message(format!("Init response returned error id: {}. Attempting recovery.", id)).await;
+                                    self.add_to_queue(SendPacket::Command(Command::FrcAbort), PacketPriority::Standard).await;
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                    self.add_to_queue(SendPacket::Command(Command::FrcInitialize(FrcInitialize::default())), PacketPriority::Standard).await;
+                                } else {
+                                    self.log_message("Init successful.").await;
+                                }
+                                continue;
+                            }
+                            Some(ResponsePacket::InstructionResponse(packet))=>{
+                                let sequence_id:u32 = packet.get_sequence_id();
+                                let error_id:u32 = packet.get_error_id();
+                                if let Err(e) = completed_packet_tx.send(CompletedPacketReturnInfo { sequence_id, error_id }).await {
+                                    self.log_message(format!("Failed to forward completed packet info: {}", e)).await;
+                                }
+                            },
+                            None=>{
+                                self.log_message(format!("Failed to parse response: {}", response_str)).await;
+                                println!("Failed to parse response: {}", response_str);
+                            }
+                            _ => {
+                                println!("Received a different type of packet.");
+                                // Handle other types of packets here
+                            }
                         }
                     }
-                    sleep(Duration::from_millis(1)).await;
                 }
+                Err(e) => {
+                    self.log_message(format!("Read error: {}", e)).await;
+                    return Err(FrcError::Disconnected());
+                }
+
+            
             }
+            
         }
 
-        // println!("ended here");
-        // let current_packets: tokio::sync::MutexGuard<i32> = current_packets_in_controllor_queue.lock().await;
-        // self.log_message(format!("driver send queue ended with {} in controller", *current_packets)).await;
-        // Ok(())
+
     }
 
-    //this is just a debug helper function to load the queue automatically
-    pub async fn load_gcode(&self){
-
-
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                10,    
-                Configuration {
-                    u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: 0.0, z: 10.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-            ))),
-            PacketPriority::Standard
-        ).await;
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                11,    
-                Configuration {
-                    u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: 10.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-            ))),
-            PacketPriority::Standard
-        ).await;
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                12,    
-                Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: 0.0, z: -10.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-            ))),
-            PacketPriority::Standard
-        ).await;
-
-
-
-
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                10,    
-                Configuration {
-                    u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: 0.0, z: 10.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-            ))),
-            PacketPriority::Standard
-        ).await;
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                11,    
-                Configuration {
-                    u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: 10.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-            ))),
-            PacketPriority::Standard
-        ).await;
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                12,    
-                Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: 0.0, z: -10.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-            ))),
-            PacketPriority::Standard
-        ).await;
-
-
-
-
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                10,    
-                Configuration {
-                    u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: 0.0, z: 10.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-            ))),
-            PacketPriority::Standard
-        ).await;
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                11,    
-                Configuration {
-                    u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: 10.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-            ))),
-            PacketPriority::Standard
-        ).await;
-        self.add_to_queue(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
-                12,    
-                Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
-                },
-                Position { x: 0.0, y: 0.0, z: -10.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                },
-                SpeedType::MMSec,
-                30.0,
-                TermType::FINE,
-                1,
-            ))),
-            PacketPriority::Standard
-        ).await;
-
-
-
-
-        println!("added 3 packets to queue");
-    }
+   
 
     async fn give_sequence_id(&self, mut packet: SendPacket) -> SendPacket {
 
