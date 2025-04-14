@@ -19,7 +19,6 @@ pub use crate::{Configuration, Position, SpeedType, TermType, FrcError };
 
 use super::FanucDriverConfig;
 
-//FIXME: clean up queue naming and systems 
 //FIXME: make messaging work
 //FIXME: get sequence id system working well
 
@@ -174,16 +173,17 @@ impl FanucDriver {
 
                 
         tokio::spawn(async move {
-            if let Err(e) = driver_clone1.send_queue(queue_rx, packets_done_rx).await {
+            if let Err(e) = driver_clone1.send_queue_to_controller(queue_rx, packets_done_rx).await {
                 eprintln!("send_queue failed: {}", e);
             }
         });
 
         tokio::spawn(async move {
-            if let Err(e) = driver_clone2.read_queue_responses(completed_packet_tx, packets_done_tx).await {
+            if let Err(e) = driver_clone2.read_responses(completed_packet_tx, packets_done_tx).await {
                 eprintln!("read_queue_responses failed: {}", e);
             }
         });
+
 
         Ok(driver)
     }
@@ -198,7 +198,7 @@ impl FanucDriver {
 
     pub async fn abort(&self) -> Result<(), FrcError> {
         let packet = SendPacket::Command(Command::FrcAbort {});
-        self.add_to_queue(packet, PacketPriority::Standard).await;
+        let _ = self.queue_tx.send(DriverPacket::new(PacketPriority::Standard,packet)).await;
         Ok(())
     }
 
@@ -206,7 +206,7 @@ impl FanucDriver {
 
         let packet: SendPacket =  SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()));
 
-        self.add_to_queue(packet, PacketPriority::Standard).await;
+        let _ = self.queue_tx.send(DriverPacket::new(PacketPriority::Standard,packet)).await;
 
         return Ok(());
 
@@ -268,20 +268,9 @@ impl FanucDriver {
     /// driver.start_program(queue_rx).await?;
     /// ```
 
-    pub async fn add_to_queue(&self, packet: SendPacket, priority: PacketPriority){
-        let sender = self.queue_tx.clone();
-        let driver_packet = DriverPacket{priority, packet};
-        if let Err(e) = sender.send(driver_packet).await {
-            // Handle the error properly, e.g., logging it
-            println!("Failed to send packet: {}", e);
-        }
-        else{
-            // println!("sent packet to queue: {:?} ", packet2);
-        }
-    }
 
     //this is an async function that recieves packets and yeets them to the controllor to run
-    async fn send_queue(&self,mut packets_to_add: mpsc::Receiver<DriverPacket>, packets_done_rx:other_mpsc::Receiver<u32>)-> Result<(), FrcError>{
+    async fn send_queue_to_controller(&self,mut packets_to_add: mpsc::Receiver<DriverPacket>, packets_done_rx:other_mpsc::Receiver<u32>)-> Result<(), FrcError>{
         let mut packets_sent_number:u32 = 0;
         let mut packets_done_number:u32 = 0;
         let mut queue = VecDeque::new();
@@ -353,7 +342,7 @@ impl FanucDriver {
     }
     
 
-    async fn read_queue_responses(&self, completed_packet_tx: mpsc::Sender<CompletedPacketReturnInfo>, packets_done_tx:other_mpsc::Sender<u32>) -> Result<(), FrcError> {
+    async fn read_responses(&self, completed_packet_tx: mpsc::Sender<CompletedPacketReturnInfo>, packets_done_tx:other_mpsc::Sender<u32>) -> Result<(), FrcError> {
 
         let mut packets_done_number:u32 = 0;
         let mut reader = self.fanuc_read.lock().await;
@@ -361,6 +350,7 @@ impl FanucDriver {
         let mut temp_buffer = Vec::new();
 
         loop {
+            self.log_message("lopper").await;
             match reader.read(&mut buffer).await {
                 Ok(0) => {
                     self.log_message("Connection closed by peer.").await;
@@ -408,9 +398,9 @@ impl FanucDriver {
                                 let id = resp.error_id;
                                 if id != 0 {
                                     self.log_message(format!("Init response returned error id: {}. Attempting recovery.", id)).await;
-                                    self.add_to_queue(SendPacket::Command(Command::FrcAbort), PacketPriority::Standard).await;
+                                    let _ = self.queue_tx.send(DriverPacket::new(PacketPriority::Standard,SendPacket::Command(Command::FrcAbort))).await;
                                     tokio::time::sleep(Duration::from_millis(100)).await;
-                                    self.add_to_queue(SendPacket::Command(Command::FrcInitialize(FrcInitialize::default())), PacketPriority::Standard).await;
+                                    let _ = self.queue_tx.send(DriverPacket::new(PacketPriority::Standard,SendPacket::Command(Command::FrcInitialize(FrcInitialize::default())))).await;
                                 } else {
                                     self.log_message("Init successful.").await;
                                 }
