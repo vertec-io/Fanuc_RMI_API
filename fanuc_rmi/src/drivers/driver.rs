@@ -196,26 +196,19 @@ impl FanucDriver {
         println!("{:?}", message);
     }
 
-    pub async fn abort(&self) -> Result<(), FrcError> {
+    pub async fn abort(&self) {
         let packet = SendPacket::Command(Command::FrcAbort {});
         let _ = self.send_command(packet, PacketPriority::Standard).await;
-        Ok(())
     }
 
-    pub async fn initialize(&self) -> Result<(), FrcError> {
-
+    pub async fn initialize(&self) {
         let packet: SendPacket =  SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()));
-
         let _ = self.send_command(packet, PacketPriority::Standard,).await;
-
-        return Ok(());
-
     }
 
-    pub async fn disconnect(&self) -> Result<(), FrcError> {
+    pub async fn disconnect(&self){
         let packet = SendPacket::Communication(Communication::FrcDisconnect {});
         let _ = self.send_command(packet, PacketPriority::Standard,).await;
-        Ok(())
     }
 
     async fn send_packet_to_controller(&self, packet: SendPacket) -> Result<(), FrcError> {
