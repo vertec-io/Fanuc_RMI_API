@@ -19,7 +19,7 @@ pub use crate::{Configuration, Position, SpeedType, TermType, FrcError };
 
 use super::FanucDriverConfig;
 
-//FIXME: make messaging work
+
 //FIXME: get sequence id system working well
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -50,13 +50,12 @@ impl DriverPacket {
 pub struct FanucDriver {
     pub config: FanucDriverConfig,
     pub log_channel: tokio::sync::broadcast::Sender<String>,
-    pub latest_sequence: Arc<Mutex<u32>>,
+    latest_sequence: Arc<Mutex<u32>>,
     fanuc_write: Arc<Mutex<WriteHalf<TcpStream>>>, 
     fanuc_read: Arc<Mutex<ReadHalf<TcpStream>>>,    
-    pub queue_tx: mpsc::Sender<DriverPacket>,       
+    queue_tx: mpsc::Sender<DriverPacket>,       
     pub connected: Arc<Mutex<bool>>,
     pub completed_packet_channel: Arc<Mutex<Receiver<CompletedPacketReturnInfo>>>,
-
 }
 
 impl FanucDriver {
@@ -149,7 +148,7 @@ impl FanucDriver {
         let write_half = Arc::new(Mutex::new(write_half));
         let (message_channel, _rx) = broadcast::channel(100);
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
-        let latest_sequence = Arc::new(Mutex::new(0));
+        let latest_sequence = Arc::new(Mutex::new(1));
         let connected = Arc::new(Mutex::new(true));
         let (completed_packet_tx, return_info_rx) = mpsc::channel::<CompletedPacketReturnInfo>(100);
         let completed_packet_channel = Arc::new(Mutex::new(return_info_rx));
@@ -170,7 +169,6 @@ impl FanucDriver {
 
         let (packets_done_tx, packets_done_rx): (other_mpsc::Sender<u32>, other_mpsc::Receiver<u32>) = other_mpsc::channel();
         
-
                 
         tokio::spawn(async move {
             if let Err(e) = driver_clone1.send_queue_to_controller(queue_rx, packets_done_rx).await {
@@ -198,46 +196,74 @@ impl FanucDriver {
 
     pub async fn abort(&self) -> Result<(), FrcError> {
         let packet = SendPacket::Command(Command::FrcAbort {});
-        let _ = self.queue_tx.send(DriverPacket::new(PacketPriority::Standard,packet)).await;
+        let _ = self.send_command(packet, PacketPriority::Standard).await;
         Ok(())
     }
 
-     pub async fn initialize(&self) -> Result<(), FrcError> {
+    pub async fn initialize(&self) -> Result<(), FrcError> {
 
         let packet: SendPacket =  SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()));
 
-        let _ = self.queue_tx.send(DriverPacket::new(PacketPriority::Standard,packet)).await;
+        let _ = self.send_command(packet, PacketPriority::Standard,).await;
 
         return Ok(());
 
     }
 
     pub async fn disconnect(&self) -> Result<(), FrcError> {
-
-        let packet = Communication::FrcDisconnect {};
-        
-        let packet = match serde_json::to_string(&packet) {
-            Ok(serialized_packet) => serialized_packet + "\r\n",
-            Err(_) => return Err(FrcError::Serialization("Disconnect packet didnt serialize correctly".to_string())),
-        };
-
-        self.send_packet(packet.clone()).await?;
-
-
+        let packet = SendPacket::Communication(Communication::FrcDisconnect {});
+        let _ = self.send_command(packet, PacketPriority::Standard,).await;
         Ok(())
-
     }
 
-    async fn send_packet(&self, packet: String) -> Result<(), FrcError> {      
-            let mut stream = self.fanuc_write.lock().await;
+    async fn send_packet_to_controller(&self, packet: SendPacket) -> Result<(), FrcError> {
+        /*
+        this is specifically for sending packets to the controller. It takes a packet and sends it over tcp to the controller.
+        Note: not a public function
+        */        
 
-            if let Err(e) = stream.write_all(packet.as_bytes()).await {
-                let err = FrcError::FailedToSend(format!("{}",e));
-                self.log_message(err.to_string()).await;
-                return Err(err);
-            }            
-            self.log_message(format!("Sent: {}", packet)).await;
-            Ok(())
+        let mut stream = self.fanuc_write.lock().await;
+        
+        let serialized_packet = match serde_json::to_string(&packet) {
+            Ok(packet_str) => packet_str + "\r\n",
+            Err(e) => {
+                self.log_message(format!("Failed to serialize a packet: {}", e)).await;
+                return Err(FrcError::Serialization(e.to_string()));
+            }
+        };
+    
+        if let Err(e) = stream.write_all(serialized_packet.as_bytes()).await {
+            let err = FrcError::FailedToSend(format!("{}", e));
+            self.log_message(err.to_string()).await;
+            return Err(err);
+        }
+            
+        self.log_message(format!("Sent: {}", serialized_packet)).await;
+        Ok(())
+    }
+
+
+    pub async fn send_command(&self, packet: SendPacket, priority: PacketPriority) -> u32{
+        
+        /*
+        This is the method meteorite will use to send a command to the driver this is the abstraction layer that will be called to send a packet and will returna sequence id.
+        */
+
+        let sender = self.queue_tx.clone();
+        
+        let (packet_with_sequence, sequence) = self.give_sequence_id(packet).await;
+        let driver_packet = DriverPacket{priority, packet: packet_with_sequence };
+
+
+        if let Err(e) = sender.send(driver_packet).await {
+            println!("Failed to send packet: {}", e);
+        }
+        else{
+            // println!("sent packet to queue: {:?} ", packet2);
+        }
+
+
+        sequence
     }
 /// Starts the program by spawning two asynchronous tasks: one to handle sending packets to the robot,
     /// and another to handle receiving responses from the robot.
@@ -275,13 +301,6 @@ impl FanucDriver {
         let mut packets_done_number:u32 = 0;
         let mut queue = VecDeque::new();
 
-        let sid = self.latest_sequence.clone();
-
-        let mut sid = sid.lock().await;
-        *sid = 1; // Ensure this happens only once, ideally during initialization
-        drop(sid); // Release the lock
-
-
         loop {
             // Drain all available incoming packets
             if let Ok(new_packet) = packets_to_add.try_recv() {
@@ -312,22 +331,11 @@ impl FanucDriver {
             }
     
             if let Some(packet) = queue.pop_front() {
-                let packet: SendPacket = self.give_sequence_id(packet).await;
-    
-                let serialized_packet = match serde_json::to_string(&packet) {
-                    Ok(packet_str) => packet_str + "\r\n",
-                    Err(e) => {
-                        self.log_message(format!("Failed to serialize a packet: {}", e)).await;
-                        return Err(FrcError::Serialization(e.to_string()));
-                    }
-                };
-    
-                if let Err(e) = self.send_packet(serialized_packet).await {
+                if let Err(e) = self.send_packet_to_controller(packet.clone()).await {
                     self.log_message(format!("Failed to send a packet: {:?}", e)).await;
                 }
-    
                 packets_sent_number += 1;
-    
+                
                 if packet == SendPacket::Communication(Communication::FrcDisconnect) {
                     break;
                 }
@@ -350,7 +358,6 @@ impl FanucDriver {
         let mut temp_buffer = Vec::new();
 
         loop {
-            self.log_message("lopper").await;
             match reader.read(&mut buffer).await {
                 Ok(0) => {
                     self.log_message("Connection closed by peer.").await;
@@ -441,7 +448,7 @@ impl FanucDriver {
 
    
 
-    async fn give_sequence_id(&self, mut packet: SendPacket) -> SendPacket {
+    async fn give_sequence_id(&self, mut packet: SendPacket) ->  (SendPacket, u32) {
 
         let sid = self.latest_sequence.clone();
         let mut sid = sid.lock().await;
@@ -500,35 +507,24 @@ impl FanucDriver {
             }
 
             *sid += 1;
-            // println!("");
-            // println!("Sequence after increment: {}", sid);
-            // println!("");
-
 
         }
-        packet
+        return (packet, current_id)  
+
     }
-
-
-
 }
-
-
-
-
-
-async fn connect_with_retries(addr: &str, retries: u32) -> Result<TcpStream, FrcError> {
-    for attempt in 0..retries {
-        match TcpStream::connect(addr).await {
-            Ok(stream) => return Ok(stream),
-            Err(e) => {
-                eprintln!("Failed to connect (attempt {}): {}", attempt + 1, e);
-                if attempt + 1 == retries {
-                    return Err(FrcError::Disconnected());
+    async fn connect_with_retries(addr: &str, retries: u32) -> Result<TcpStream, FrcError> {
+        for attempt in 0..retries {
+            match TcpStream::connect(addr).await {
+                Ok(stream) => return Ok(stream),
+                Err(e) => {
+                    eprintln!("Failed to connect (attempt {}): {}", attempt + 1, e);
+                    if attempt + 1 == retries {
+                        return Err(FrcError::Disconnected());
+                    }
+                    sleep(Duration::from_secs(2)).await;
                 }
-                sleep(Duration::from_secs(2)).await;
             }
         }
+        return Err(FrcError::Disconnected())
     }
-    return Err(FrcError::Disconnected())
-}
