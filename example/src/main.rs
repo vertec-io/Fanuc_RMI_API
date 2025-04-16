@@ -17,10 +17,8 @@ async fn main() -> Result<(), FrcError > {
     let _ = driver.initialize().await.unwrap();
 
 
-
-    
     let mut x = 1;
-    while x < 5 {
+    while x < 500 {
         x = driver.send_command(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
             0,    
             Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
@@ -32,7 +30,7 @@ async fn main() -> Result<(), FrcError > {
             TermType::FINE,
             1,
         ))), PacketPriority::Standard).await;
-        println!("{}", x);
+        // println!("{}", x);
     }
 
 

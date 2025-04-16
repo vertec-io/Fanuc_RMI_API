@@ -4,6 +4,7 @@ use tokio::sync::broadcast;
 
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::Receiver;
 
 use std::time::Duration;
@@ -151,7 +152,7 @@ impl FanucDriver {
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
         let latest_sequence = Arc::new(Mutex::new(1));
         let connected = Arc::new(Mutex::new(true));
-        let (completed_packet_tx, return_info_rx) = mpsc::channel::<CompletedPacketReturnInfo>(100);
+        let (completed_packet_tx, return_info_rx) = mpsc::channel::<CompletedPacketReturnInfo>(1000);
         let completed_packet_channel = Arc::new(Mutex::new(return_info_rx));
 
         let driver = Self {
@@ -418,8 +419,25 @@ impl FanucDriver {
                             Some(ResponsePacket::InstructionResponse(packet))=>{
                                 let sequence_id:u32 = packet.get_sequence_id();
                                 let error_id:u32 = packet.get_error_id();
-                                if let Err(e) = completed_packet_tx.send(CompletedPacketReturnInfo { sequence_id, error_id }).await {
-                                    self.log_message(format!("Failed to forward completed packet info: {}", e)).await;
+
+
+
+                                match completed_packet_tx.try_send(CompletedPacketReturnInfo { sequence_id, error_id }) {
+                                    Ok(()) => {}
+                                
+                                    // buffer full → drop 1 oldest, then enqueue this one
+                                    Err(TrySendError::Full(info)) => {
+                                        // lock & pop the oldest message
+                                        let mut rx = self.completed_packet_channel.lock().await;
+                                        let _ = rx.try_recv();
+                                        drop(rx);
+                                        // retry sending our new info
+                                        let _ = completed_packet_tx.try_send(info);
+                                    }
+                                
+                                    Err(TrySendError::Closed(_)) => {
+                                        self.log_message("Completed-packet channel closed").await;
+                                    }
                                 }
                             },
                             None=>{
