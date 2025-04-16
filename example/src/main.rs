@@ -16,9 +16,12 @@ async fn main() -> Result<(), FrcError > {
     let driver = FanucDriver::connect(driver_settings.clone()).await.unwrap();
     let _ = driver.initialize().await.unwrap();
 
+
+
+    
     let mut x = 1;
-    while x <= 10 {
-        let _res = driver.send_command(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
+    while x < 5 {
+        x = driver.send_command(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
             0,    
             Configuration { u_tool_number: 1, u_frame_number: 2, front: 1, up: 1, left: 1, flip: 1, turn4: 1, turn5: 1, turn6: 1,
             },
@@ -29,18 +32,15 @@ async fn main() -> Result<(), FrcError > {
             TermType::FINE,
             1,
         ))), PacketPriority::Standard).await;
-        println!("sent");
-        x += 1;
+        println!("{}", x);
     }
 
 
-    // sleep(Duration::from_secs(10));
     println!("about to abort");
     let _ = driver.abort().await?;
-    // sleep(Duration::from_secs(1)).await;
     driver.disconnect().await?;
-    sleep(Duration::from_secs(10));
-    Ok(())
     // this main needs to stay in scope long enough for the background threads to send the data. if it goes out of scope before then the background processes get terminated
+    sleep(Duration::from_secs(100));
+    Ok(())
 }
 

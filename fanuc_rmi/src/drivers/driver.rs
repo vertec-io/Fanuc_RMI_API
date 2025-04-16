@@ -3,6 +3,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::Receiver;
 
 use std::time::Duration;
@@ -55,7 +56,7 @@ pub struct FanucDriver {
     fanuc_read: Arc<Mutex<ReadHalf<TcpStream>>>,    
     queue_tx: mpsc::Sender<DriverPacket>,       
     pub connected: Arc<Mutex<bool>>,
-    pub completed_packet_channel: Arc<Mutex<Receiver<CompletedPacketReturnInfo>>>,
+    completed_packet_channel: Arc<Mutex<Receiver<CompletedPacketReturnInfo>>>,
 }
 
 impl FanucDriver {
@@ -327,6 +328,7 @@ impl FanucDriver {
     
             if packets_in_queue >= 8 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
+                // println!("Queue is full. Waiting for space to send packets.");
                 continue;
             }
     
@@ -512,6 +514,32 @@ impl FanucDriver {
         return (packet, current_id)  
 
     }
+
+    pub async fn wait_on_command_completion(&self, packet_number_to_wait_for: u32) {
+        loop {
+            let guard = self.completed_packet_channel.clone();
+            let mut guard = guard.lock().await;
+            match guard.try_recv() {
+                Ok(most_recent) => {
+                    if most_recent.error_id != 0 {
+                        eprintln!("ROBOT MOTION ERROR: {}", most_recent.error_id);
+                        break;
+                    } else {
+                        if most_recent.sequence_id == packet_number_to_wait_for {
+                                println!("robot move done #{}", most_recent.sequence_id);
+                                break;
+                            
+                        }
+                    }
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => println!("Channel disconnected."),
+            }
+            drop(guard);
+        }
+    }
+
+
 }
     async fn connect_with_retries(addr: &str, retries: u32) -> Result<TcpStream, FrcError> {
         for attempt in 0..retries {
@@ -528,3 +556,5 @@ impl FanucDriver {
         }
         return Err(FrcError::Disconnected())
     }
+
+
