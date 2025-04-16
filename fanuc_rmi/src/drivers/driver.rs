@@ -267,35 +267,6 @@ impl FanucDriver {
 
         sequence
     }
-/// Starts the program by spawning two asynchronous tasks: one to handle sending packets to the robot,
-    /// and another to handle receiving responses from the robot.
-    ///
-    /// This function joins two futures: `send_queue` and `read_queue_responses`, both of which are responsible
-    /// for managing the communication with the Fanuc controller. It logs the outcome of each task and returns
-    /// an error if either task fails.
-    ///
-    /// # Arguments
-    ///
-    /// * `queue_rx` - A `Receiver<DriverPacket>` for receiving packets to be sent to the robot.
-    ///
-    /// # Returns
-    ///
-    /// If successful, returns `Ok(())`. Otherwise, returns an `FrcError` indicating the cause of the failure.
-    ///
-    /// # Errors
-    ///
-    /// This function will return an error if:
-    /// - `send_queue` fails to send packets to the robot.
-    /// - `read_queue_responses` fails to read responses from the robot.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
-    /// let mut driver = FanucDriver::connect(config).await?;
-    /// driver.start_program(queue_rx).await?;
-    /// ```
-
 
     //this is an async function that recieves packets and yeets them to the controllor to run
     async fn send_queue_to_controller(&self,mut packets_to_add: mpsc::Receiver<DriverPacket>, packets_done_rx:other_mpsc::Receiver<u32>)-> Result<(), FrcError>{
