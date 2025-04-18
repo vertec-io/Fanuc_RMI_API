@@ -18,7 +18,7 @@ async fn main() -> Result<(), FrcError > {
 
 
     let mut x = 1;
-    while x < 20
+    while x < 200
      {
         x = driver.send_command(SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative::new(
             0,    

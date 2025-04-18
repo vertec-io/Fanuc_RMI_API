@@ -352,7 +352,7 @@ impl FanucDriver {
                 self.process_line(line, &completed_tx).await?;
             }
 
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            // tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
