@@ -271,11 +271,8 @@ impl FanucDriver {
 
     //this is an async function that recieves packets and yeets them to the controllor to run
     async fn send_queue_to_controller(&self,mut packets_to_add: mpsc::Receiver<DriverPacket>,mut completed_packet_info:broadcast::Receiver<CompletedPacketReturnInfo>)-> Result<(), FrcError>{
-        let mut most_recently_done_packet_seq:u32 = 0;
+
         let mut in_flight: u32 = 0;
-
-        let mut last_sent = 0;
-
         let mut queue = VecDeque::new();
 
         loop {
@@ -334,117 +331,65 @@ impl FanucDriver {
     }
     
 
-    // async fn read_responses(&self, completed_packet_tx: broadcast::Sender<CompletedPacketReturnInfo>) -> Result<(), FrcError> {
+    // Simplified main loop:
+    async fn read_responses(
+        &self,
+        completed_tx: broadcast::Sender<CompletedPacketReturnInfo>
+    ) -> Result<(), FrcError> {
+        let mut reader = self.fanuc_read.lock().await;
+        let mut buf = vec![0; 2048];
+        let mut temp = Vec::new();
 
-    //     let mut reader = self.fanuc_read.lock().await;
-    //     let mut buffer = vec![0; 2048];
-    //     let mut temp_buffer = Vec::new();
+        loop {
+            let n = match reader.read(&mut buf).await {
+                Ok(0) => return Err(FrcError::Disconnected()),
+                Ok(n) => n,
+                Err(_) => return Err(FrcError::Disconnected()),
+            };
 
-    //     loop {
-    //         match reader.read(&mut buffer).await {
-    //             Ok(0) => {
-    //                 self.log_message("Connection closed by peer.").await;
-    //                 let mut connected = self.connected.lock().await;
-    //                 *connected = false;
-    //                 return Err(FrcError::Disconnected());
-    //             }
-    //             Ok(n) => {
-    //                 // Append new data to temp_buffer
-    //                 temp_buffer.extend_from_slice(&buffer[..n]);
+            temp.extend_from_slice(&buf[..n]);
+            for line in extract_lines(&mut temp) {
+                self.process_line(line, &completed_tx).await?;
+            }
 
-    //                 while let Some(pos) = temp_buffer.iter().position(|&x| x == b'\n') {
-    //                     // Split the buffer into the current message and the rest
-    //                     let request: Vec<u8> = temp_buffer.drain(..=pos).collect();
-    //                     // Remove the newline character
-    //                     let request = &request[..request.len() - 1];
-
-    //                     let response_str = String::from_utf8_lossy(request);
-    //                     self.log_message(format!("recieved: {}", response_str.clone())).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
 
 
-    //                     let response_packet: Option<ResponsePacket> = match serde_json::from_str::<ResponsePacket>(&response_str) {
-    //                         Ok(response_packet) => {
-    //                             // println!("Parsed response: {:?}", response_packet.clone());
-    //                             Some(response_packet)},
-    //                         Err(e) => {
-    //                             self.log_message(format!("Could not parse response into RPE: {}", e)).await;
-    //                             None
-    //                         }
-    //                     };
+    // Extract handling of each line into an async helper:
+    async fn process_line(
+        &self,
+        line: String,
+        completed_tx: &broadcast::Sender<CompletedPacketReturnInfo>
+    ) -> Result<(), FrcError> {
+        self.log_message(format!("received: {}", line)).await;
+        if let Ok(packet) = serde_json::from_str::<ResponsePacket>(&line) {
+            match packet {
+                ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_)) => {
+                    self.log_message("Disconnect packet").await;
+                    let mut conn = self.connected.lock().await;
+                    *conn = false;
+                    return Ok(());
+                }
+                ResponsePacket::InstructionResponse(pkt) => {
+                    let info = CompletedPacketReturnInfo {
+                        sequence_id: pkt.get_sequence_id(),
+                        error_id:    pkt.get_error_id(),
+                    };
+                    if let Err(e) = completed_tx.send(info) {
+                        self.log_message(format!("Send error: {}", e)).await;
+                    }
+                }
+                // handle other variants similarly...
+                _ => {}
+            }
+        } else {
+            self.log_message(format!("Invalid JSON: {}", line)).await;
+        }
+        Ok(())
+    }
 
-    //                     // here is packet response handling logic. may be relocated soon
-    //                     match response_packet {
-
-    //                         Some(ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_))) => {
-    //                             self.log_message("Received a FrcDisconnect packet.").await;
-    //                             let mut connected = self.connected.lock().await;
-    //                             *connected = false;
-    //                             return Ok(());
-    //                         },
-    //                         Some(ResponsePacket::CommandResponse(CommandResponse::FrcInitialize(resp))) => {
-    //                             let id = resp.error_id;
-    //                             if id != 0 {
-    //                                 self.log_message(format!("Init response returned error id: {}. Attempting recovery.", id)).await;
-    //                                 let _ = self.queue_tx.send(DriverPacket::new(PacketPriority::Standard,SendPacket::Command(Command::FrcAbort))).await;
-    //                                 tokio::time::sleep(Duration::from_millis(100)).await;
-    //                                 let _ = self.queue_tx.send(DriverPacket::new(PacketPriority::Standard,SendPacket::Command(Command::FrcInitialize(FrcInitialize::default())))).await;
-    //                             } else {
-    //                                 self.log_message("Init successful.").await;
-    //                             }
-    //                             continue;
-    //                         }
-    //                         Some(ResponsePacket::CommandResponse(CommandResponse::FrcGetStatus(resp))) => {
-    //                             let id = resp.error_id;
-    //                             if id != 0 {
-    //                                 self.log_message(format!("FrcGetStatus returned error id: {}.", id)).await;
-    //                             } else {
-    //                                 self.log_message(format!("{:#?}", resp)).await;
-    //                             }
-    //                         }
-    //                         Some(ResponsePacket::InstructionResponse(packet))=>{
-    //                             let sequence_id:u32 = packet.get_sequence_id();
-    //                             let error_id:u32 = packet.get_error_id();
-                                
-    //                             match completed_packet_tx.send(CompletedPacketReturnInfo { sequence_id, error_id }) {
-    //                                 Ok(num ) => {println!("sent the latest to get done which was {}", sequence_id);}
-    //                                 // buffer full → drop 1 oldest, then enqueue this one
-    //                                 Err(e) => {
-    //                                     self.log_message(format!("Failed to send completed packet info: {}", e)).await;
-    //                                 }
-
-    //                             }
-
-
-    //                         },
-    //                         None=>{
-    //                             self.log_message(format!("Failed to parse response: {}", response_str)).await;
-    //                             println!("Failed to parse response: {}", response_str);
-    //                         }
-    //                         _ => {
-    //                             println!("Received a different type of packet.");
-    //                             // Handle other types of packets here
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //             Err(e) => {
-    //                 self.log_message(format!("Read error: {}", e)).await;
-    //                 let mut connected = self.connected.lock().await;
-    //                 *connected = false;
-    //                 return Err(FrcError::Disconnected());
-    //             }
-
-            
-    //         }
-    //         tokio::time::sleep(Duration::from_secs(1)).await;
-
-            
-    //     }
-
-
-    // }
-
-   
 
     async fn give_sequence_id(&self, mut packet: SendPacket) ->  (SendPacket, u32) {
 
@@ -538,94 +483,6 @@ impl FanucDriver {
     }
 
 
-
-
-
-
-
-
-
-// Extract handling of each line into an async helper:
-async fn process_line(
-    &self,
-    line: String,
-    completed_tx: &broadcast::Sender<CompletedPacketReturnInfo>
-) -> Result<(), FrcError> {
-    self.log_message(format!("received: {}", line)).await;
-    if let Ok(packet) = serde_json::from_str::<ResponsePacket>(&line) {
-        match packet {
-            ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_)) => {
-                self.log_message("Disconnect packet").await;
-                let mut conn = self.connected.lock().await;
-                *conn = false;
-                return Ok(());
-            }
-            ResponsePacket::InstructionResponse(pkt) => {
-                let info = CompletedPacketReturnInfo {
-                    sequence_id: pkt.get_sequence_id(),
-                    error_id:    pkt.get_error_id(),
-                };
-                if let Err(e) = completed_tx.send(info) {
-                    self.log_message(format!("Send error: {}", e)).await;
-                }
-            }
-            // handle other variants similarly...
-            _ => {}
-        }
-    } else {
-        self.log_message(format!("Invalid JSON: {}", line)).await;
-    }
-    Ok(())
-}
-
-// Simplified main loop:
-async fn read_responses(
-    &self,
-    completed_tx: broadcast::Sender<CompletedPacketReturnInfo>
-) -> Result<(), FrcError> {
-    let mut reader = self.fanuc_read.lock().await;
-    let mut buf = vec![0; 2048];
-    let mut temp = Vec::new();
-
-    loop {
-        let n = match reader.read(&mut buf).await {
-            Ok(0) => return Err(FrcError::Disconnected()),
-            Ok(n) => n,
-            Err(e) => return Err(FrcError::Disconnected()),
-        };
-
-        temp.extend_from_slice(&buf[..n]);
-        for line in extract_lines(&mut temp) {
-            self.process_line(line, &completed_tx).await?;
-        }
-
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }
     async fn connect_with_retries(addr: &str, retries: u32) -> Result<TcpStream, FrcError> {
         for attempt in 0..retries {
@@ -642,24 +499,6 @@ async fn read_responses(
         }
         return Err(FrcError::Disconnected())
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     // Extract parsing of complete lines into a helper:
