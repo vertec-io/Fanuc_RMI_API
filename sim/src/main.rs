@@ -113,6 +113,18 @@ async fn handle_secondary_client(mut socket: TcpStream) -> Result<(), Box<dyn Er
                     "ErrorID": 0,
                     "GroupMask": 1
                 }),
+                Some("FRC_GetStatus") => json!({
+                    "Command": "FRC_Get_Status",
+                    "ErrorID": 0,
+                    "ServoReady": 1, 
+                    "TPMode": 1, 
+                    "RMIMotionStatus": 0, 
+                    "ProgramStatus": 0, 
+                    "SingleStepMode": 0, 
+                    "NumberUTool": 5,
+                    "NextSequenceID": 3,
+                    "NumberUFrame": 0
+                }),
                 Some("FRC_LinearMotion") => json!({
                     "Status": "Motion started"
                 }),
