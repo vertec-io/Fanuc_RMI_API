@@ -3,8 +3,10 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use tokio::sync::mpsc;
+use tokio::time::error::Elapsed;
 
 use std::time::Duration;
+use std::time::Instant;
 use tokio::{ net::TcpStream, sync::Mutex, time::sleep};
 use tokio::io::{ AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf, split};
 use std::collections::VecDeque;
@@ -16,9 +18,6 @@ pub use crate::commands::*;
 pub use crate::{Configuration, Position, SpeedType, TermType, FrcError };
 
 use super::FanucDriverConfig;
-
-
-//FIXME: get sequence id system working well
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum PacketPriority{
@@ -48,7 +47,7 @@ impl DriverPacket {
 pub struct FanucDriver {
     pub config: FanucDriverConfig,
     pub log_channel: tokio::sync::broadcast::Sender<String>,
-    next_available_sequence_number: Arc<Mutex<u32>>,
+    next_available_sequence_number: Arc<Mutex<u32>>,   // could prop be taken out and just a varible in the send_queue function
     fanuc_write: Arc<Mutex<WriteHalf<TcpStream>>>, 
     fanuc_read: Arc<Mutex<ReadHalf<TcpStream>>>,    
     queue_tx: mpsc::Sender<DriverPacket>,       
@@ -156,9 +155,6 @@ impl FanucDriver {
         let completed_packet_channel = Arc::new(Mutex::new(return_info_rx));
 
 
-
-
-
         let driver = Self {
             config,
             log_channel: message_channel,
@@ -205,18 +201,19 @@ impl FanucDriver {
     pub async fn initialize(&self) {
 
         let packet: SendPacket =  SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()));
-        // self.get_status().await;
+        self.get_status().await;
         let _ = self.send_command(packet, PacketPriority::Standard,).await;
     }
 
-    // pub async fn get_status(&self) {
-    //     let packet: SendPacket =  SendPacket::Command(Command::FrcGetStatus);
-    //     let _ = self.send_command(packet, PacketPriority::Standard,).await;
-    // }
+    pub async fn get_status(&self) {
+        let packet: SendPacket =  SendPacket::Command(Command::FrcGetStatus);
+        let _ = self.send_command(packet, PacketPriority::Standard,).await;
+    }
 
     pub async fn disconnect(&self){
         let packet = SendPacket::Communication(Communication::FrcDisconnect {});
         let _ = self.send_command(packet, PacketPriority::Standard,).await;
+        *self.connected.lock().await = false;
     }
 
     async fn send_packet_to_controller(&self, packet: SendPacket) -> Result<(), FrcError> {
@@ -276,6 +273,8 @@ impl FanucDriver {
         let mut queue = VecDeque::new();
 
         loop {
+            let start_time = Instant::now();
+
             // Drain all available incoming packets
             while let Ok(new_packet) = packets_to_add.try_recv() {
                 match new_packet.priority {
@@ -321,8 +320,17 @@ impl FanucDriver {
                     break;
                 }
             }
-    
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            let current_time = Instant::now();
+            let elapsed = current_time.duration_since(start_time);
+            let maxtime = Duration::from_millis(16);
+            if elapsed < maxtime {
+                let sleep_duration = maxtime - elapsed;
+                tokio::time::sleep(sleep_duration).await;
+            }
+            else{
+                self.log_message(format!("Send loop duration took {:?} exeeding max time:{:?}", elapsed, maxtime)).await;
+            }
+            // tokio::time::sleep(Duration::from_millis(10)).await;
         }
     
         self.log_message("Disconnecting from FRC server... closing send queue").await;
@@ -342,9 +350,15 @@ impl FanucDriver {
 
         loop {
             let n = match reader.read(&mut buf).await {
-                Ok(0) => return Err(FrcError::Disconnected()),
+                Ok(0) => {
+                    *self.connected.lock().await = false;
+                    return Err(FrcError::Disconnected())
+                },
                 Ok(n) => n,
-                Err(_) => return Err(FrcError::Disconnected()),
+                Err(_) => {
+                    *self.connected.lock().await = false;
+                    return Err(FrcError::Disconnected())
+                },
             };
 
             temp.extend_from_slice(&buf[..n]);

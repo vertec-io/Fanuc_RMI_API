@@ -68,9 +68,9 @@ impl Default for Position {
         Self {
             x: 0.0,
             y: 0.0,
-            z: -100.0,
+            z: 0.0,
             w: 0.0,
-            p: 90.0,
+            p: 0.0,
             r: 0.0,
             ext1: 0.0,
             ext2: 0.0,
