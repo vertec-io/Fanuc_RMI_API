@@ -290,7 +290,7 @@ impl FanucDriver {
     
             while let Ok(pkt) = completed_packet_info.try_recv() {
                 in_flight = in_flight.saturating_sub(1);
-                println!("Ack for seq {} received, {} in-flight remaining", pkt.sequence_id, in_flight);
+                // println!("Ack for seq {} received, {} in-flight remaining", pkt.sequence_id, in_flight);
             }
 
             if packets_to_add.is_closed() && queue.is_empty() {
@@ -311,7 +311,7 @@ impl FanucDriver {
                             }
                             if let SendPacket::Instruction(instr) = packet {
                                 let seq = instr.get_sequence_id();
-                                println!("Sent seq {} ({} in-flight)", seq, in_flight + 1);
+                                // println!("Sent seq {} ({} in-flight)", seq, in_flight + 1);
                                 in_flight += 1;
                             }
                         }
