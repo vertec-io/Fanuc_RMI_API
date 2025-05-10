@@ -3,12 +3,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcSetOverride {
     #[serde(rename = "Value")]
-    value: u8,
+    pub value: u8,
 }
 
 impl FrcSetOverride{
     #[allow(unused)]
-    fn new(value: u8) -> Self {
+    pub fn new(value: u8) -> Self {
         Self {
             value
         }
