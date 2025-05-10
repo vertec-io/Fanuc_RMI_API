@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadError {
     #[serde(rename = "Count")]
-    count: u8,
+    pub count: u8,
 }
 
 impl FrcReadError{
-    fn new(count: Option<u8>) -> Self {
+    pub fn new(count: Option<u8>) -> Self {
         let count = match count {
             Some(gm) => gm,
             None => 1
@@ -25,11 +25,11 @@ impl Default for FrcReadError {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct FrcReadErrorResponse {   
+pub struct FrcReadErrorResponse {
     #[serde(rename = "ErrorID")]
-    error_id: u16,
+    pub error_id: u16,
     #[serde(rename = "Count")]
-    count: u8,
+    pub count: u8,
     #[serde(rename = "ErrorData")]
-    error_data: String
+    pub error_data: String
 }

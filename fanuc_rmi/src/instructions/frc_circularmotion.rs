@@ -6,23 +6,22 @@ pub struct FrcCircularMotion {
     #[serde(rename = "SequenceID")]
     pub sequence_id: u32,    
     #[serde(rename = "Configuration")]
-    configuration: Configuration,
+    pub configuration: Configuration,
     #[serde(rename = "Position")]
-    position: Position,
+    pub position: Position,
     #[serde(rename = "ViaConfiguration")]
-    via_configuration: Configuration,
+    pub via_configuration: Configuration,
     #[serde(rename = "ViaPosition")]
-    via_position: Position,
+    pub via_position: Position,
     #[serde(rename = "SpeedType")]
-    speed_type: SpeedType,
+    pub speed_type: SpeedType,
     #[serde(rename = "Speed")]
-    speed: f64,
+    pub speed: f64,
     #[serde(rename = "TermType")]
-    term_type: TermType,
+    pub term_type: TermType,
     #[serde(rename = "TermValue")]
-    term_value: u8,
+    pub term_value: u8,
 }
-
 
 impl FrcCircularMotion{
     pub fn new(    
@@ -35,7 +34,6 @@ impl FrcCircularMotion{
         speed: f64,
         term_type: TermType,
         term_value: u8,
-    
     ) -> Self {
         Self {
             sequence_id,    
@@ -48,7 +46,6 @@ impl FrcCircularMotion{
             term_type,
             term_value,
         }
-
     }
 }
 

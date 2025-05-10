@@ -6,15 +6,15 @@ pub struct FrcWaitDIN {
     #[serde(rename = "SequenceID")]
     pub sequence_id: u32,
     #[serde(rename = "PortNumber")]
-    port_number: u32,
+    pub port_number: u32,
     #[serde(rename = "PortValue")]
-    port_value: OnOff,
+    pub port_value: OnOff,
 }
 
- 
+
 impl FrcWaitDIN{
     #[allow(unused)]
-    fn new(sequence_id:u32,port_number:u32,port_value:OnOff) -> Self {
+    pub fn new(sequence_id:u32,port_number:u32,port_value:OnOff) -> Self {
         Self {
             sequence_id,
             port_number,
@@ -25,7 +25,7 @@ impl FrcWaitDIN{
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct FrcWaitDINResponse { 
+pub struct FrcWaitDINResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     #[serde(rename = "SequenceID")]

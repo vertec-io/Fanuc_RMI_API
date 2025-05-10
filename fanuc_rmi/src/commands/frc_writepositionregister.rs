@@ -4,9 +4,9 @@ use crate::{Configuration, Position};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcWritePositionRegister {
     #[serde(rename = "RegisterNumber")]
-    register_number: u16,
+    pub register_number: u16,
     #[serde(rename = "Configuration")]
-    congifuration: Configuration,
+    pub congifuration: Configuration,
     #[serde(rename = "Position")]
     pub position: Position,
     #[serde(rename = "Group")]
@@ -15,7 +15,7 @@ pub struct FrcWritePositionRegister {
 
 impl FrcWritePositionRegister{
     #[allow(unused)]
-    fn new(group: Option<u8>, register_number:u16, configuration:Configuration , position:Position) -> Self {
+    pub fn new(group: Option<u8>, register_number:u16, configuration:Configuration , position:Position) -> Self {
         Self {
             group: match group {
                 Some(gm) => gm,

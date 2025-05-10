@@ -5,14 +5,14 @@ pub struct FrcCall {
     #[serde(rename = "SequenceID")]
     pub sequence_id: u32,
     #[serde(rename = "ProgramName")]
-    program_name: String,
+    pub program_name: String,
 
 }
 
- 
+
 impl FrcCall{
     #[allow(unused)]
-    fn new(seq:u32, program:String) -> Self {
+    pub fn new(seq:u32, program:String) -> Self {
         Self {
             sequence_id: seq,
             program_name: program,
@@ -22,7 +22,7 @@ impl FrcCall{
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct FrcCallResponse { 
+pub struct FrcCallResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     #[serde(rename = "SequenceID")]

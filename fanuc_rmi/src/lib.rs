@@ -12,12 +12,12 @@ pub use errors::*;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrameData {
-    x: f32,
-    y: f32,
-    z: f32,
-    w: f32,
-    p: f32,
-    r: f32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+    pub p: f32,
+    pub r: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -37,13 +37,13 @@ pub struct Configuration {
 impl Default for Configuration{
     fn default() -> Self {
         Self { u_tool_number: 1,
-               u_frame_number: 1, 
-               front: 1, 
-               up: 1, 
-               left: 1, 
-               flip: 0, 
-               turn4: 0, 
-               turn5: 0, 
+               u_frame_number: 1,
+               front: 1,
+               up: 1,
+               left: 1,
+               flip: 0,
+               turn4: 0,
+               turn5: 0,
                turn6: 0,
             }
     }
@@ -81,15 +81,15 @@ impl Default for Position {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct JointAngles {
-    j1: f32,
-    j2: f32,
-    j3: f32,
-    j4: f32,
-    j5: f32,
-    j6: f32,
-    j7: f32,
-    j8: f32,
-    j9: f32,
+    pub j1: f32,
+    pub j2: f32,
+    pub j3: f32,
+    pub j4: f32,
+    pub j5: f32,
+    pub j6: f32,
+    pub j7: f32,
+    pub j8: f32,
+    pub j9: f32,
 }
 
 
@@ -105,7 +105,7 @@ pub enum TermType {
 ///
 /// This enum provides various units of speed that can be used
 /// to specify movement or duration in different contexts.
-/// 
+///
 /// # Variants
 ///
 /// * `MMSec` - Represents speed in millimeters per second (mm/sec).

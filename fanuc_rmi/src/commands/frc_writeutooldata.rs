@@ -4,16 +4,16 @@ use crate::FrameData;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcWriteUToolData {
     #[serde(rename = "ToolNumber")]
-    tool_number: i8,    
+    pub tool_number: i8,
     #[serde(rename = "Frame")]
-    frame: FrameData,
+    pub frame: FrameData,
     #[serde(rename = "Group")]
-    group: u8,
+    pub group: u8,
 }
 
 impl FrcWriteUToolData{
     #[allow(unused)]
-    fn new(group: Option<u8>, tool_number:i8, frame:FrameData) -> Self {
+    pub fn new(group: Option<u8>, tool_number:i8, frame:FrameData) -> Self {
         Self {
             group: match group {
                 Some(gm) => gm,
@@ -26,9 +26,9 @@ impl FrcWriteUToolData{
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct FrcWriteUToolDataResponse { 
+pub struct FrcWriteUToolDataResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     #[serde(rename = "Group")]
-    group: u8,
+    pub group: u8,
 }

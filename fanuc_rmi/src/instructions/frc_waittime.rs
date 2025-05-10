@@ -5,14 +5,14 @@ pub struct FrcWaitTime {
     #[serde(rename = "SequenceID")]
     pub sequence_id: u32,
     #[serde(rename = "Time")]
-    time: f32,
+    pub time: f32,
 
 }
 
- 
+
 impl FrcWaitTime{
     #[allow(unused)]
-    fn new(sequence_id:u32, time:f32) -> Self {
+    pub fn new(sequence_id:u32, time:f32) -> Self {
         Self {
             sequence_id,
             time,
@@ -22,7 +22,7 @@ impl FrcWaitTime{
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct FrcWaitTimeResponse { 
+pub struct FrcWaitTimeResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     #[serde(rename = "SequenceID")]

@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcInitialize {
     #[serde(rename = "GroupMask")]
-    group_mask: u8,
+    pub group_mask: u8,
 }
 
 impl FrcInitialize{
-    fn new(group_mask: Option<u8>) -> Self {
+    pub fn new(group_mask: Option<u8>) -> Self {
         let group_mask = match group_mask {
             Some(gm) => gm,
             None => 1
@@ -16,7 +16,6 @@ impl FrcInitialize{
         Self {
             group_mask
         }
-
     }
 }
 
@@ -32,5 +31,4 @@ pub struct FrcInitializeResponse {
     pub error_id: u32,
     #[serde(rename = "GroupMask")]
     pub group_mask: u16,
-
 }

@@ -4,11 +4,11 @@ use crate::{Configuration, Position};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadCartesianPosition {
     #[serde(rename = "Group")]
-    group: u8,
+    pub group: u8,
 }
 impl FrcReadCartesianPosition{
     #[allow(unused)]
-    fn new(group: Option<u8>, ) -> Self {
+    pub fn new(group: Option<u8>, ) -> Self {
         Self {
             group: match group {
                 Some(gm) => gm,
@@ -19,7 +19,7 @@ impl FrcReadCartesianPosition{
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct FrcReadCartesianPositionResponse { 
+pub struct FrcReadCartesianPositionResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     #[serde(rename = "TimeTag")]
@@ -29,5 +29,5 @@ pub struct FrcReadCartesianPositionResponse {
     #[serde(rename = "Position")]
     pub pos: Position,
     #[serde(rename = "Group")]
-    group: u8,
+    pub group: u8,
 }

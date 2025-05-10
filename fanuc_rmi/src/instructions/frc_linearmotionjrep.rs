@@ -4,34 +4,34 @@ use crate::{JointAngles, SpeedType, TermType};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcLinearMotionJRep {
     #[serde(rename = "SequenceID")]
-    pub sequence_id: u32,    
+    pub sequence_id: u32,
     #[serde(rename = "JointAngles")]
-    joint_angles: JointAngles,
+    pub joint_angles: JointAngles,
 
     //may need to remove speedtype, it is not included in documentation but seems neccesary may be a typo may not
     #[serde(rename = "SpeedType")]
-    speed_type: SpeedType,
+    pub speed_type: SpeedType,
     #[serde(rename = "Speed")]
-    speed: f64,
+    pub speed: f64,
     #[serde(rename = "TermType")]
-    term_type: TermType,
+    pub term_type: TermType,
     #[serde(rename = "TermValue")]
-    term_value: u8,
+    pub term_value: u8,
 }
 
 
 impl FrcLinearMotionJRep{
-    pub fn new(    
-        sequence_id: u32,    
+    pub fn new(
+        sequence_id: u32,
         joint_angles: JointAngles,
         speed_type: SpeedType,
         speed: f64,
         term_type: TermType,
         term_value: u8,
-    
+
     ) -> Self {
         Self {
-            sequence_id,    
+            sequence_id,
             joint_angles,
             speed_type,
             speed,
@@ -43,7 +43,7 @@ impl FrcLinearMotionJRep{
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct FrcLinearMotionJRepResponse { 
+pub struct FrcLinearMotionJRepResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     #[serde(rename = "SequenceID")]
