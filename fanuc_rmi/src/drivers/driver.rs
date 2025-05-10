@@ -37,10 +37,11 @@ impl DriverPacket {
 pub struct FanucDriver {
     pub config: FanucDriverConfig,
     pub log_channel: tokio::sync::broadcast::Sender<String>,
+    pub response_channel: tokio::sync::broadcast::Sender<ResponsePacket>,
     next_available_sequence_number: Arc<Mutex<u32>>,   // could prop be taken out and just a varible in the send_queue function
-    fanuc_write: Arc<Mutex<WriteHalf<TcpStream>>>, 
-    fanuc_read: Arc<Mutex<ReadHalf<TcpStream>>>,    
-    queue_tx: mpsc::Sender<DriverPacket>,       
+    fanuc_write: Arc<Mutex<WriteHalf<TcpStream>>>,
+    fanuc_read: Arc<Mutex<ReadHalf<TcpStream>>>,
+    queue_tx: mpsc::Sender<DriverPacket>,
     pub connected: Arc<Mutex<bool>>,
     completed_packet_channel: Arc<Mutex<broadcast::Receiver<CompletedPacketReturnInfo>>>,
 }
@@ -53,13 +54,13 @@ impl FanucDriver {
     /// configuration. If the initial connection succeeds, it sends a connection packet to the
     /// controller and waits for a response. If the connection packet is successfully sent and
     /// a valid response is received, it establishes a TCP connection with the controller.
-    /// 
+    ///
     /// The function also spawns two asynchronous tasks:
     /// 1. One task handles sending packets to the robot.
     /// 2. The other task handles receiving responses from the robot.
     ///
     /// # Arguments
-    /// 
+    ///
     /// * `config` - A `FanucDriverConfig` struct containing the address and port of the Fanuc controller.
     ///
     /// # Returns
@@ -128,15 +129,16 @@ impl FanucDriver {
 
         drop(stream);
         let init_addr = format!("{}:{}", config.addr, new_port);
-        let stream = connect_with_retries(&init_addr, 3).await?;        
+        let stream = connect_with_retries(&init_addr, 3).await?;
 
         let (read_half, write_half) = split(stream);
         let read_half = Arc::new(Mutex::new(read_half));
         let write_half = Arc::new(Mutex::new(write_half));
         let (message_channel, _rx) = broadcast::channel(100);
+        let (response_channel, _rx_response) = broadcast::channel(100);
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
         let next_available_sequence_number = Arc::new(Mutex::new(1));
-        
+
         let connected = Arc::new(Mutex::new(true));
 
         let (completed_packet_tx,_)= broadcast::channel(100);
@@ -148,6 +150,7 @@ impl FanucDriver {
         let driver = Self {
             config,
             log_channel: message_channel,
+            response_channel,
             next_available_sequence_number,
             fanuc_write: write_half,
             fanuc_read: read_half,
@@ -157,8 +160,8 @@ impl FanucDriver {
         };
 
         let driver_clone1 = driver.clone();
-        let driver_clone2 = driver.clone();        
-                
+        let driver_clone2 = driver.clone();
+
         tokio::spawn(async move {
             if let Err(e) = driver_clone1.send_queue_to_controller(queue_rx, return_info).await {
                 eprintln!("send_queue failed: {}", e);
@@ -210,10 +213,10 @@ impl FanucDriver {
         /*
         this is specifically for sending packets to the controller. It takes a packet and sends it over tcp to the controller.
         Note: not a public function
-        */        
+        */
 
         let mut stream = self.fanuc_write.lock().await;
-        
+
         let serialized_packet = match serde_json::to_string(&packet) {
             Ok(packet_str) => packet_str + "\r\n",
             Err(e) => {
@@ -221,26 +224,26 @@ impl FanucDriver {
                 return Err(FrcError::Serialization(e.to_string()));
             }
         };
-    
+
         if let Err(e) = stream.write_all(serialized_packet.as_bytes()).await {
             let err = FrcError::FailedToSend(format!("{}", e));
             self.log_message(err.to_string()).await;
             return Err(err);
         }
-            
+
         self.log_message(format!("Sent: {}", serialized_packet)).await;
         Ok(())
     }
 
 
     pub async fn send_command(&self, packet: SendPacket, priority: PacketPriority) -> u32{
-        
+
         /*
         This is the method meteorite will use to send a command to the driver this is the abstraction layer that will be called to send a packet and will returna sequence id.
         */
 
         let sender = self.queue_tx.clone();
-        
+
         let (packet_with_sequence, sequence) = self.give_sequence_id(packet).await;
         let driver_packet = DriverPacket{priority, packet: packet_with_sequence };
         // let driver_packet2 = driver_packet.clone();
@@ -277,7 +280,7 @@ impl FanucDriver {
                     }
                 }
             }
-    
+
             while let Ok(_pkt) = completed_packet_info.try_recv() {
                 in_flight = in_flight.saturating_sub(1);
                 // println!("Ack for seq {} received, {} in-flight remaining", pkt.sequence_id, in_flight);
@@ -286,7 +289,7 @@ impl FanucDriver {
             if packets_to_add.is_closed() && queue.is_empty() {
                 break;
             }
-    
+
             while in_flight < 8 {
                 if let Some(packet) = queue.pop_front() {
                     match self.send_packet_to_controller(packet.clone()).await {
@@ -322,12 +325,12 @@ impl FanucDriver {
             }
             // tokio::time::sleep(Duration::from_millis(10)).await;
         }
-    
+
         self.log_message("Disconnecting from FRC server... closing send queue").await;
         Ok(())
-    
+
     }
-    
+
 
     // Simplified main loop:
     async fn read_responses(
@@ -369,6 +372,11 @@ impl FanucDriver {
     ) -> Result<(), FrcError> {
         self.log_message(format!("received: {}", line)).await;
         if let Ok(packet) = serde_json::from_str::<ResponsePacket>(&line) {
+            // Send the response to the response_channel for all responses
+            if let Err(e) = self.response_channel.send(packet.clone()) {
+                self.log_message(format!("Failed to send to response channel: {}", e)).await;
+            }
+
             match packet {
                 ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_)) => {
                     self.log_message("Disconnect packet").await;
@@ -457,7 +465,7 @@ impl FanucDriver {
             *sid += 1;
 
         }
-        return (packet, current_id)  
+        return (packet, current_id)
 
     }
 
@@ -474,7 +482,7 @@ impl FanucDriver {
                         if most_recent.sequence_id == packet_number_to_wait_for {
                                 println!("robot move done #{}", most_recent.sequence_id);
                                 break;
-                            
+
                         }
                     }
                 }
