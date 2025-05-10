@@ -9,7 +9,6 @@ pub struct FrcReadUFrameData {
     group: u8,
 }
 
-
 impl FrcReadUFrameData{
     #[allow(unused)]
     fn new(group: Option<u8>, frame_number:i8) -> Self {
@@ -20,7 +19,6 @@ impl FrcReadUFrameData{
             },
             frame_number,
         }
-
     }
 }
 
@@ -34,6 +32,4 @@ pub struct FrcReadUFrameDataResponse {
     group: u8,
     #[serde(rename = "Frame")]
     frame: FrameData,
-
-
 }

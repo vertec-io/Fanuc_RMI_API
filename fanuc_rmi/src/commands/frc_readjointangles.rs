@@ -29,5 +29,4 @@ pub struct FrcReadJointAnglesResponse {
     pub joint_angles: JointAngles,
     #[serde(rename = "Group")]
     pub group: u8,
-
 }

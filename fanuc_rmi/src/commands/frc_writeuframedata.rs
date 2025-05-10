@@ -11,7 +11,6 @@ pub struct FrcWriteUFrameData {
     group: u8,
 }
 
-
 impl FrcWriteUFrameData{
     #[allow(unused)]
     fn new(group: Option<u8>, frame_number:i8, frame:FrameData) -> Self {
@@ -23,7 +22,6 @@ impl FrcWriteUFrameData{
             frame_number,
             frame
         }
-
     }
 }
 

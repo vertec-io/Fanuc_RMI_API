@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use crate::{Configuration, Position};
 
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadPositionRegister {
     #[serde(rename = "Group")]
@@ -9,8 +8,6 @@ pub struct FrcReadPositionRegister {
     #[serde(rename = "RegisterNumber")]
     register_number: u16,
 }
-
-
 impl FrcReadPositionRegister{
     #[allow(unused)]
     fn new(group: Option<u8>, register_number:u16) -> Self {
@@ -21,7 +18,6 @@ impl FrcReadPositionRegister{
             },
             register_number
         }
-
     }
 }
 
@@ -37,6 +33,4 @@ pub struct FrcReadPositionRegisterResponse {
     pub position: Position,
     #[serde(rename = "Group")]
     pub group: i16,
-
-
 }

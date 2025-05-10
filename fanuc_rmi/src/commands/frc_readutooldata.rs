@@ -9,7 +9,6 @@ pub struct FrcReadUToolData {
     group: u8,
 }
 
-
 impl FrcReadUToolData{
     #[allow(unused)]
     fn new(group: Option<u8>, frame_number:i8) -> Self {
@@ -19,8 +18,7 @@ impl FrcReadUToolData{
                 None => 1
             },
             frame_number
-            }
-
+        }
     }
 }
 

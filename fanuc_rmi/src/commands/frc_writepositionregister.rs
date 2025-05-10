@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use crate::{Configuration, Position};
 
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcWritePositionRegister {
     #[serde(rename = "RegisterNumber")]
@@ -13,7 +12,6 @@ pub struct FrcWritePositionRegister {
     #[serde(rename = "Group")]
     pub group: u8,
 }
-
 
 impl FrcWritePositionRegister{
     #[allow(unused)]
@@ -27,7 +25,6 @@ impl FrcWritePositionRegister{
             position,
             congifuration: configuration
         }
-
     }
 }
 

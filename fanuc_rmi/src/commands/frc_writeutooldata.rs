@@ -11,7 +11,6 @@ pub struct FrcWriteUToolData {
     group: u8,
 }
 
-
 impl FrcWriteUToolData{
     #[allow(unused)]
     fn new(group: Option<u8>, tool_number:i8, frame:FrameData) -> Self {
@@ -23,7 +22,6 @@ impl FrcWriteUToolData{
             tool_number,
             frame
         }
-
     }
 }
 

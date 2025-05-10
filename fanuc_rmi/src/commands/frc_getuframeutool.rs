@@ -6,7 +6,6 @@ pub struct FrcGetUFrameUTool {
     group: u8,
 }
 
-
 impl FrcGetUFrameUTool{
     #[allow(unused)]
     fn new(group: Option<u8>) -> Self {
@@ -20,7 +19,6 @@ impl FrcGetUFrameUTool{
     }
 }
 
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcGetUFrameUToolResponse { 
     #[serde(rename = "UFrameNumber")]
@@ -31,5 +29,4 @@ pub struct FrcGetUFrameUToolResponse {
     pub error_id: u32,
     #[serde(rename = "Group")]
     pub group: u16,
-
 }

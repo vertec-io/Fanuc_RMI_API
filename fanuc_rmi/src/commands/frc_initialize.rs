@@ -6,7 +6,6 @@ pub struct FrcInitialize {
     group_mask: u8,
 }
 
-
 impl FrcInitialize{
     fn new(group_mask: Option<u8>) -> Self {
         let group_mask = match group_mask {
@@ -26,7 +25,6 @@ impl Default for FrcInitialize {
         FrcInitialize::new(Some(1))
     }
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcInitializeResponse { 

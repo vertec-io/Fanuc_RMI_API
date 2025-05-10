@@ -6,8 +6,6 @@ pub struct FrcReadCartesianPosition {
     #[serde(rename = "Group")]
     group: u8,
 }
-
-
 impl FrcReadCartesianPosition{
     #[allow(unused)]
     fn new(group: Option<u8>, ) -> Self {
@@ -32,7 +30,4 @@ pub struct FrcReadCartesianPositionResponse {
     pub pos: Position,
     #[serde(rename = "Group")]
     group: u8,
-
-
-
 }

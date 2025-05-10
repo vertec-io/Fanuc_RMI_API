@@ -6,8 +6,6 @@ pub struct FrcReadError {
     count: u8,
 }
 
-
-
 impl FrcReadError{
     fn new(count: Option<u8>) -> Self {
         let count = match count {
@@ -17,7 +15,6 @@ impl FrcReadError{
         Self {
             count
         }
-
     }
 }
 
@@ -26,7 +23,6 @@ impl Default for FrcReadError {
         FrcReadError::new(Some(1))
     }
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadErrorResponse {   
