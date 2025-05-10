@@ -191,7 +191,7 @@ impl FanucDriver {
     pub async fn initialize(&self) {
 
         let packet: SendPacket =  SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()));
-        self.get_status().await;
+        // self.get_status().await;
         let _ = self.send_command(packet, PacketPriority::Standard,).await;
     }
 
