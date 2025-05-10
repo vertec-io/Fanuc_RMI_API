@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use fanuc_rmi::{
-    drivers::{FanucDriver, FanucDriverConfig, FrcLinearMotion, FrcLinearRelative, PacketPriority}, packets::*, Configuration, FrcError, Position, SpeedType, TermType
+    drivers::{FanucDriver, FanucDriverConfig}, FrcError
 };
 
 use tokio::time::sleep;

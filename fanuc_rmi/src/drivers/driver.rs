@@ -17,18 +17,10 @@ use std::sync::mpsc as other_mpsc;
 pub use crate::{packets::*, FanucErrorCode};
 pub use crate::instructions::*;
 pub use crate::commands::*;
-pub use crate::{Configuration, Position, SpeedType, TermType, FrcError };
+pub use crate::{Configuration, Position, SpeedType, TermType, FrcError};
 
 use super::FanucDriverConfig;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub enum PacketPriority{
-    Low,
-    Standard,
-    High,
-    Immediate,
-    Termination,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DriverPacket {
@@ -346,7 +338,7 @@ impl FanucDriver {
                 packets_sent_number += 1;
                 match packets_done_rx.try_recv(){
                     Ok(num) => packets_done_number = num,
-                    Err(e) => {
+                    Err(_e) => {
                         //println!("nothing found: {}", e);
                         },
                 }
