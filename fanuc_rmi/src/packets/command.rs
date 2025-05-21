@@ -30,7 +30,7 @@ pub enum Command {
     #[serde(rename = "FrcWritePositionRegister")]
     FrcWritePositionRegister(FrcWritePositionRegister),
 
-    #[serde(rename = "FRC_SetOverride")]
+    #[serde(rename = "FRC_SetOverRide")]
     FrcSetOverride(FrcSetOverride),
 
     #[serde(rename = "FRC_GetStatus")]
@@ -124,7 +124,7 @@ pub enum CommandResponse {
     #[serde(rename = "FRC_ReadJointAngles")]
     FrcReadJointAngles(FrcReadJointAnglesResponse),
     
-    #[serde(rename = "FRC_SetOverride")]
+    #[serde(rename = "FRC_SetOverRide")]
     FrcSetOverride(FrcSetOverrideResponse),
 
     #[serde(rename = "FRC_ReadPositionRegister")]

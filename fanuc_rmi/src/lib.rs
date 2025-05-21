@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-
 pub mod drivers;
 
 pub mod packets;
