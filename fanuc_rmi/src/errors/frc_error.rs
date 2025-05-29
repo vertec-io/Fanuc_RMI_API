@@ -1,15 +1,15 @@
-use std::error::Error;
-use std::fmt;
 use int_enum::IntEnum;
 use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum FrcError{
+pub enum FrcError {
     Serialization(String),
     UnrecognizedPacket,
     FanucErrorCode(FanucErrorCode),
     FailedToSend(String),
-    FailedToRecieve(String),
+    FailedToReceive(String),
     Disconnected(),
     Initialization(String),
 }
@@ -23,11 +23,13 @@ impl fmt::Display for FrcError {
         match *self {
             FrcError::Serialization(ref msg) => write!(f, "Serialization error: {}", msg),
             FrcError::UnrecognizedPacket => write!(f, "Fanuc threw an unrecognized weeoe"),
-            FrcError::FanucErrorCode(ref code) => write!(f, "fanuc returned  error#: {}", code.message()),
+            FrcError::FanucErrorCode(ref code) => {
+                write!(f, "fanuc returned  error#: {}", code.message())
+            }
             FrcError::FailedToSend(ref msg) => write!(f, "SendError: {}", msg),
-            FrcError::FailedToRecieve(ref msg) => write!(f, "RecieveError: {}", msg),
+            FrcError::FailedToReceive(ref msg) => write!(f, "RecieveError: {}", msg),
             FrcError::Disconnected() => write!(f, "Fanuc appears to be disconnected"),
-            FrcError::Initialization(ref msg) => write!(f, "Could not initialize: {}", msg)
+            FrcError::Initialization(ref msg) => write!(f, "Could not initialize: {}", msg),
         }
     }
 }
@@ -151,3 +153,4 @@ impl FanucErrorCode {
         }
     }
 }
+
