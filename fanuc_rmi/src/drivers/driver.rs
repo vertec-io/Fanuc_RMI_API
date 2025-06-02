@@ -16,6 +16,7 @@ pub use crate::instructions::*;
 pub use crate::{packets::*, FanucErrorCode};
 pub use crate::{Configuration, FrcError, Position, SpeedType, TermType};
 
+use super::DriverState;
 use super::FanucDriverConfig;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -270,13 +271,27 @@ impl FanucDriver {
         mut completed_packet_info: broadcast::Receiver<CompletedPacketReturnInfo>,
     ) -> Result<(), FrcError> {
         let mut in_flight: u32 = 0;
-        let mut queue = VecDeque::new();
+        let mut queue: VecDeque<SendPacket> = VecDeque::new();
+        let mut state = DriverState::default();
 
         loop {
             let start_time = Instant::now();
 
             // Drain all available incoming packets
             while let Ok(new_packet) = packets_to_add.try_recv() {
+                
+                match (new_packet.packet.clone(), &state) {
+                    (SendPacket::DriverCommand(DriverCommand::Pause),DriverState::Running) => state = DriverState::Paused,
+                    (SendPacket::DriverCommand(DriverCommand::Unpause),DriverState::Paused) => state = DriverState::Running,
+                    _ => {},
+                }
+
+                if let SendPacket::DriverCommand(_) = new_packet.packet {
+                    println!("GOT A PAUSED COMMAND: {:?}", new_packet.packet);
+                    continue;
+                }
+
+
                 match new_packet.priority {
                     PacketPriority::Low | PacketPriority::Standard => {
                         queue.push_back(new_packet.packet)
@@ -300,7 +315,7 @@ impl FanucDriver {
                 break;
             }
 
-            while in_flight < 8 {
+            while in_flight < 8 && state == DriverState::Running {
                 if let Some(packet) = queue.pop_front() {
                     match self.send_packet_to_controller(packet.clone()).await {
                         Err(e) => {
@@ -337,7 +352,6 @@ impl FanucDriver {
                 ))
                 .await;
             }
-            // tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
         self.log_message("Disconnecting from FRC server... closing send queue")
