@@ -235,6 +235,10 @@ impl FanucDriver {
             self.log_message(err.to_string()).await;
             return Err(err);
         }
+        println!(
+            "Sent individual message to fanuc: {:?}",
+            serialized_packet.clone()
+        );
 
         self.log_message(format!("Sent: {}", serialized_packet))
             .await;
@@ -264,7 +268,7 @@ impl FanucDriver {
         sequence
     }
 
-    //this is an async function that recieves packets and yeets them to the controllor to run
+    //this is an async function that receives packets and yeets them to the controllor to run
     async fn send_queue_to_controller(
         &self,
         mut packets_to_add: mpsc::Receiver<DriverPacket>,
@@ -279,18 +283,24 @@ impl FanucDriver {
 
             // Drain all available incoming packets
             while let Ok(new_packet) = packets_to_add.try_recv() {
-                
+                println!(
+                    "packet hit send_queue_to_controller: {:?}",
+                    new_packet.clone()
+                );
                 match (new_packet.packet.clone(), &state) {
-                    (SendPacket::DriverCommand(DriverCommand::Pause),DriverState::Running) => state = DriverState::Paused,
-                    (SendPacket::DriverCommand(DriverCommand::Unpause),DriverState::Paused) => state = DriverState::Running,
-                    _ => {},
+                    (SendPacket::DriverCommand(DriverCommand::Pause), DriverState::Running) => {
+                        state = DriverState::Paused
+                    }
+                    (SendPacket::DriverCommand(DriverCommand::Unpause), DriverState::Paused) => {
+                        state = DriverState::Running
+                    }
+                    _ => {}
                 }
 
                 if let SendPacket::DriverCommand(_) = new_packet.packet {
                     println!("GOT A PAUSED COMMAND: {:?}", new_packet.packet);
                     continue;
                 }
-
 
                 match new_packet.priority {
                     PacketPriority::Low | PacketPriority::Standard => {
@@ -332,6 +342,11 @@ impl FanucDriver {
                                 let _seq = instr.get_sequence_id();
                                 // println!("Sent seq {} ({} in-flight)", seq, in_flight + 1);
                                 in_flight += 1;
+                            } else {
+                                println!(
+                                    "Succesfully sent speed override packet to Fanuc: {:?}",
+                                    packet.clone()
+                                );
                             }
                         }
                     }
@@ -418,6 +433,11 @@ impl FanucDriver {
                     if let Err(e) = completed_tx.send(info) {
                         self.log_message(format!("Send error: {}", e)).await;
                     }
+                }
+                ResponsePacket::CommandResponse(CommandResponse::FrcSetOverride(
+                    frc_set_override_response,
+                )) => {
+                    println!("Got set override response: {:?}", frc_set_override_response);
                 }
                 // handle other variants similarly...
                 _ => {}
