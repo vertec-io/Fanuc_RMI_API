@@ -190,26 +190,26 @@ impl FanucDriver {
         println!("{:?}", message);
     }
 
-    pub async fn abort(&self) {
+    pub fn abort(&self) {
         let packet = SendPacket::Command(Command::FrcAbort {});
-        let _ = self.send_command(packet, PacketPriority::Standard).await;
+        let _ = self.send_command(packet, PacketPriority::Standard);
     }
 
-    pub async fn initialize(&self) {
+    pub fn initialize(&self) {
         let packet: SendPacket =
             SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()));
         // self.get_status().await;
-        let _ = self.send_command(packet, PacketPriority::Standard).await;
+        let _ = self.send_command(packet, PacketPriority::Standard);
     }
 
-    pub async fn get_status(&self) {
+    pub fn get_status(&self) {
         let packet: SendPacket = SendPacket::Command(Command::FrcGetStatus);
-        let _ = self.send_command(packet, PacketPriority::Standard).await;
+        let _ = self.send_command(packet, PacketPriority::Standard);
     }
 
     pub async fn disconnect(&self) {
         let packet = SendPacket::Communication(Communication::FrcDisconnect {});
-        let _ = self.send_command(packet, PacketPriority::Standard).await;
+        let _ = self.send_command(packet, PacketPriority::Standard);
         *self.connected.lock().await = false;
     }
 
@@ -255,13 +255,18 @@ impl FanucDriver {
         };
         // let driver_packet2 = driver_packet.clone();
 
-        if let Err(e) = sender.send(driver_packet).await {
+        if let Err(e) = sender.try_send(driver_packet) {
             println!("Failed to send packet: {}", e);
+            return Err(format!(
+                "Failed to send packet: {}",
+                e
+            ));
         } else {
             // println!("sent packet to queue: {:?} ", driver_packet2);
+            return Ok(sequence);
         }
 
-        sequence
+        // sequence
     }
 
     //this is an async function that recieves packets and yeets them to the controllor to run
