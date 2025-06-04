@@ -36,7 +36,7 @@ pub struct FanucDriver {
     pub config: FanucDriverConfig,
     pub log_channel: tokio::sync::broadcast::Sender<String>,
     pub response_channel: tokio::sync::broadcast::Sender<ResponsePacket>,
-    next_available_sequence_number: Arc<Mutex<u32>>, // could prop be taken out and just a varible in the send_queue function
+    next_available_sequence_number: Arc<std::sync::Mutex<u32>>, // could prop be taken out and just a varible in the send_queue function
     fanuc_write: Arc<Mutex<WriteHalf<TcpStream>>>,
     fanuc_read: Arc<Mutex<ReadHalf<TcpStream>>>,
     queue_tx: mpsc::Sender<DriverPacket>,
@@ -141,7 +141,7 @@ impl FanucDriver {
         let (message_channel, _rx) = broadcast::channel(100);
         let (response_channel, _rx_response) = broadcast::channel(100);
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
-        let next_available_sequence_number = Arc::new(Mutex::new(1));
+        let next_available_sequence_number = Arc::new(std::sync::Mutex::new(1));
 
         let connected = Arc::new(Mutex::new(true));
 
@@ -241,14 +241,14 @@ impl FanucDriver {
         Ok(())
     }
 
-    pub async fn send_command(&self, packet: SendPacket, priority: PacketPriority) -> u32 {
+    pub fn send_command(&self, packet: SendPacket, priority: PacketPriority) -> Result<u32, String> {
         /*
-        This is the method meteorite will use to send a command to the driver this is the abstraction layer that will be called to send a packet and will returna sequence id.
+        This is the method meteorite will use to send a command to the driver this is the abstraction layer that will be called to send a packet and will return a sequence id.
         */
 
         let sender = self.queue_tx.clone();
 
-        let (packet_with_sequence, sequence) = self.give_sequence_id(packet).await;
+        let (packet_with_sequence, sequence) = self.give_sequence_id(packet)?;
         let driver_packet = DriverPacket {
             priority,
             packet: packet_with_sequence,
@@ -428,9 +428,15 @@ impl FanucDriver {
         Ok(())
     }
 
-    async fn give_sequence_id(&self, mut packet: SendPacket) -> (SendPacket, u32) {
+    fn give_sequence_id(&self, mut packet: SendPacket) -> Result<(SendPacket, u32), String> {
         let sid = self.next_available_sequence_number.clone();
-        let mut sid = sid.lock().await;
+        // let mut sid: Result<std::sync::MutexGuard<'_, u32>, std::sync::PoisonError<std::sync::MutexGuard<'_, u32>>> = sid.lock();
+        
+        let mut sid = match sid.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => return Err(format!("Mutex poisoned: {}", poisoned)),
+        };
+
         let current_id = *sid;
         // let current_id = 11;
 
@@ -488,7 +494,7 @@ impl FanucDriver {
 
             *sid += 1;
         }
-        return (packet, current_id);
+        return Ok((packet, current_id));
     }
 
     pub async fn wait_on_command_completion(&self, packet_number_to_wait_for: u32) {
