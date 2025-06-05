@@ -1,4 +1,3 @@
-use super::Packet;
 use serde::{Serialize, Deserialize};
 
 
