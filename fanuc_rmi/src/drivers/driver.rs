@@ -388,6 +388,7 @@ impl FanucDriver {
 
             temp.extend_from_slice(&buf[..n]);
             for line in extract_lines(&mut temp) {
+                println!(line);
                 self.process_line(line, &completed_tx).await?;
             }
             // tokio::time::sleep(Duration::from_secs(1)).await;
