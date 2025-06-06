@@ -236,7 +236,10 @@ impl FanucDriver {
             return Err(err);
         }
         if let SendPacket::Command(Command::FrcSetOverride(_)) = packet {
-            println!("Sending set override packet to fanuc");
+            println!(
+                "Sending set override packet to fanuc: {}",
+                serialized_packet
+            );
         }
 
         self.log_message(format!("Sent: {}", serialized_packet))
@@ -388,7 +391,7 @@ impl FanucDriver {
 
             temp.extend_from_slice(&buf[..n]);
             for line in extract_lines(&mut temp) {
-                println!(line);
+                println!("{}", line);
                 self.process_line(line, &completed_tx).await?;
             }
             // tokio::time::sleep(Duration::from_secs(1)).await;
