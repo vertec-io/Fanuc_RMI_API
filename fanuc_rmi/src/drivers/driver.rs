@@ -404,16 +404,23 @@ impl FanucDriver {
         completed_tx: &broadcast::Sender<CompletedPacketReturnInfo>,
     ) -> Result<(), FrcError> {
         self.log_message(format!("received: {}", line)).await;
+        println!("received: {}", line);
         if let Ok(packet) = serde_json::from_str::<ResponsePacket>(&line) {
             // Send the response to the response_channel for all responses
             if let Err(e) = self.response_channel.send(packet.clone()) {
                 self.log_message(format!("Failed to send to response channel: {}", e))
                     .await;
-            } else {
                 println!(
+                    "Failed to send message: {:?} to response channel: {}",
+                    packet.clone(),
+                    e
+                )
+            } else {
+                self.log_message(format!(
                     "Sent set override response to bevy backend: {:?}",
                     packet.clone()
-                );
+                ))
+                .await;
             }
 
             match packet {
