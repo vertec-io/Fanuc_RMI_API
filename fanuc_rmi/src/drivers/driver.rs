@@ -410,6 +410,11 @@ impl FanucDriver {
             if let Err(e) = self.response_channel.send(packet.clone()) {
                 self.log_message(format!("Failed to send to response channel: {}", e))
                     .await;
+            } else {
+                println!(
+                    "Sent set override response to bevy backend: {:?}",
+                    packet.clone()
+                );
             }
 
             match packet {
