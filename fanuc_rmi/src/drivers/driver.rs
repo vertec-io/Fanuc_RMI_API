@@ -235,6 +235,9 @@ impl FanucDriver {
             self.log_message(err.to_string()).await;
             return Err(err);
         }
+        if let SendPacket::Command(Command::FrcSetOverride(_)) = packet {
+            println!("Sending set override packet to fanuc");
+        }
 
         self.log_message(format!("Sent: {}", serialized_packet))
             .await;
