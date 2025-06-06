@@ -235,10 +235,6 @@ impl FanucDriver {
             self.log_message(err.to_string()).await;
             return Err(err);
         }
-        println!(
-            "Sent individual message to fanuc: {:?}",
-            serialized_packet.clone()
-        );
 
         self.log_message(format!("Sent: {}", serialized_packet))
             .await;
@@ -283,10 +279,6 @@ impl FanucDriver {
 
             // Drain all available incoming packets
             while let Ok(new_packet) = packets_to_add.try_recv() {
-                println!(
-                    "packet hit send_queue_to_controller: {:?}",
-                    new_packet.clone()
-                );
                 match (new_packet.packet.clone(), &state) {
                     (SendPacket::DriverCommand(DriverCommand::Pause), DriverState::Running) => {
                         state = DriverState::Paused
@@ -342,11 +334,6 @@ impl FanucDriver {
                                 let _seq = instr.get_sequence_id();
                                 // println!("Sent seq {} ({} in-flight)", seq, in_flight + 1);
                                 in_flight += 1;
-                            } else {
-                                println!(
-                                    "Succesfully sent speed override packet to Fanuc: {:?}",
-                                    packet.clone()
-                                );
                             }
                         }
                     }
