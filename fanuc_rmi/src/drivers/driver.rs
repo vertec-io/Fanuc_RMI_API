@@ -421,6 +421,11 @@ impl FanucDriver {
                     packet.clone()
                 ))
                 .await;
+                println!(
+                    "Sent message: {:?} to response channel: {}",
+                    packet.clone(),
+                    e
+                )
             }
 
             match packet {
