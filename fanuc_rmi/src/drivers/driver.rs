@@ -140,7 +140,7 @@ impl FanucDriver {
         let write_half = Arc::new(Mutex::new(write_half));
         let (message_channel, _rx) = broadcast::channel(100);
         let (response_channel, _rx_response) = broadcast::channel(100);
-        let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
+        let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(1000); //FIXME: there isnt a system on meterorite monitoring number of packets sent
         let next_available_sequence_number = Arc::new(std::sync::Mutex::new(1));
 
         let connected = Arc::new(Mutex::new(true));
@@ -346,7 +346,7 @@ impl FanucDriver {
             }
             let current_time = Instant::now();
             let elapsed = current_time.duration_since(start_time);
-            let maxtime = Duration::from_millis(16);
+            let maxtime = Duration::from_millis(8);
             if elapsed < maxtime {
                 let sleep_duration = maxtime - elapsed;
                 tokio::time::sleep(sleep_duration).await;
