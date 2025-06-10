@@ -6,7 +6,7 @@ use tokio::{
     time::sleep,
 };
 
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -429,7 +429,7 @@ impl FanucDriver {
                     packet.clone()
                 ))
                 .await;
-                info!("Sent message to response channel: {:?}", packet.clone())
+                debug!("Sent message to response channel: {:?}", packet.clone())
             }
 
             match packet {
