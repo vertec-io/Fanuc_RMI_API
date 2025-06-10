@@ -37,7 +37,7 @@ impl DriverPacket {
 pub struct FanucDriver {
     pub config: FanucDriverConfig,
     pub log_channel: tokio::sync::broadcast::Sender<String>,
-    pub response_channel: tokio::sync::broadcast::Sender<ResponsePacket>,
+    pub response_tx: tokio::sync::broadcast::Sender<ResponsePacket>,
     next_available_sequence_number: Arc<std::sync::Mutex<u32>>, // could prop be taken out and just a varible in the send_queue function
     fanuc_write: Arc<Mutex<WriteHalf<TcpStream>>>,
     fanuc_read: Arc<Mutex<ReadHalf<TcpStream>>>,
@@ -142,7 +142,7 @@ impl FanucDriver {
         let read_half = Arc::new(Mutex::new(read_half));
         let write_half = Arc::new(Mutex::new(write_half));
         let (message_channel, _rx) = broadcast::channel(100);
-        let (response_channel, _rx_response) = broadcast::channel(100);
+        let (response_tx, _response_rx) = broadcast::channel(100);
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(1000); //FIXME: there isnt a system on meteorite monitoring number of packets sent
         let next_available_sequence_number = Arc::new(std::sync::Mutex::new(1));
 
@@ -156,7 +156,7 @@ impl FanucDriver {
         let driver = Self {
             config,
             log_channel: message_channel,
-            response_channel,
+            response_tx,
             next_available_sequence_number,
             fanuc_write: write_half,
             fanuc_read: read_half,
@@ -415,7 +415,7 @@ impl FanucDriver {
         self.log_message(format!("received: {}", line)).await;
         if let Ok(packet) = serde_json::from_str::<ResponsePacket>(&line) {
             // Send the response to the response_channel for all responses
-            if let Err(e) = self.response_channel.send(packet.clone()) {
+            if let Err(e) = self.response_tx.send(packet.clone()) {
                 self.log_message(format!("Failed to send to response channel: {}", e))
                     .await;
                 info!(

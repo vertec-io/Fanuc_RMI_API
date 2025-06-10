@@ -6,6 +6,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
+use tracing::info;
 
 // #[derive(Serialize, Deserialize, Debug)]
 // struct ConnectResponse {
@@ -140,7 +141,7 @@ async fn handle_secondary_client(
                     "ErrorID": 0,
                 }),
                 Some("FRC_SetOverride") => {
-                    println!("Received on secondary port: {}", request_str);
+                    info!("Received on secondary port: {}", request_str);
                     json!({
                         "Command": "FRC_SetOverride",
                         "ErrorID": 0,
