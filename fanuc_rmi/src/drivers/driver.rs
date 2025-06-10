@@ -392,7 +392,6 @@ impl FanucDriver {
             };
 
             temp.extend_from_slice(&buf[..n]);
-            info!("got line back from fanuc: {:?}", temp);
             for line in extract_lines(&mut temp) {
                 self.process_line(line, &completed_tx).await?;
             }
