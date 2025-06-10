@@ -140,7 +140,7 @@ async fn handle_secondary_client(
                     "Command": "FRC_Reset",
                     "ErrorID": 0,
                 }),
-                Some("FRC_SetOverride") => {
+                Some("FRC_SetOverRide") => {
                     info!("Received on secondary port: {}", request_str);
                     json!({
                         "Command": "FRC_SetOverride",
