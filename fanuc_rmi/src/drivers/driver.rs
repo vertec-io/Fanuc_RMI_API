@@ -6,7 +6,7 @@ use tokio::{
     time::sleep,
 };
 
-use tracing::info;
+use tracing::{error, info};
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -123,7 +123,7 @@ impl FanucDriver {
         }
 
         let response = String::from_utf8_lossy(&buffer[..n]);
-        info!("Sent: {}\nReceived: {}", &serialized_packet, &response);
+        info!("Sent: {}Received: {}", &serialized_packet, &response);
 
         let res: CommunicationResponse = serde_json::from_str(&response)
             .map_err(|e| FrcError::Serialization(format!("Could not parse response: {}", e)))?;
@@ -143,7 +143,7 @@ impl FanucDriver {
         let write_half = Arc::new(Mutex::new(write_half));
         let (message_channel, _rx) = broadcast::channel(100);
         let (response_channel, _rx_response) = broadcast::channel(100);
-        let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(1000); //FIXME: there isnt a system on meterorite monitoring number of packets sent
+        let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(1000); //FIXME: there isnt a system on meteorite monitoring number of packets sent
         let next_available_sequence_number = Arc::new(std::sync::Mutex::new(1));
 
         let connected = Arc::new(Mutex::new(true));
@@ -173,13 +173,13 @@ impl FanucDriver {
                 .send_queue_to_controller(queue_rx, return_info)
                 .await
             {
-                eprintln!("send_queue failed: {}", e);
+                error!("send_queue failed: {}", e);
             }
         });
 
         tokio::spawn(async move {
             if let Err(e) = driver_clone2.read_responses(completed_packet_tx).await {
-                eprintln!("read_queue_responses failed: {}", e);
+                error!("read_queue_responses failed: {}", e);
             }
         });
 
@@ -419,12 +419,13 @@ impl FanucDriver {
                 self.log_message(format!("Failed to send to response channel: {}", e))
                     .await;
                 info!(
-                    "Failed to send message to response channel {:?}",
-                    packet.clone()
+                    "Failed to send message to response channel {:?}: {:?}",
+                    packet.clone(),
+                    e
                 );
             } else {
                 self.log_message(format!(
-                    "Sent set override response to bevy backend: {:?}",
+                    "Sent set response to bevy backend: {:?}",
                     packet.clone()
                 ))
                 .await;
