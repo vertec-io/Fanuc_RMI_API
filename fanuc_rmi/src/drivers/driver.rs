@@ -37,7 +37,7 @@ pub struct FanucDriver {
     pub config: FanucDriverConfig,
     pub log_channel: tokio::sync::broadcast::Sender<String>,
     pub response_channel: tokio::sync::broadcast::Sender<ResponsePacket>,
-    next_available_sequence_number: Arc<Mutex<u32>>, // could prop be taken out and just a varible in the send_queue function
+    next_available_sequence_number: Arc<std::sync::Mutex<u32>>, // could prop be taken out and just a varible in the send_queue function
     fanuc_write: Arc<Mutex<WriteHalf<TcpStream>>>,
     fanuc_read: Arc<Mutex<ReadHalf<TcpStream>>>,
     queue_tx: mpsc::Sender<DriverPacket>,
@@ -142,8 +142,8 @@ impl FanucDriver {
         let write_half = Arc::new(Mutex::new(write_half));
         let (message_channel, _rx) = broadcast::channel(100);
         let (response_channel, _rx_response) = broadcast::channel(100);
-        let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(100);
-        let next_available_sequence_number = Arc::new(Mutex::new(1));
+        let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(1000); //FIXME: there isnt a system on meterorite monitoring number of packets sent
+        let next_available_sequence_number = Arc::new(std::sync::Mutex::new(1));
 
         let connected = Arc::new(Mutex::new(true));
 
@@ -192,26 +192,26 @@ impl FanucDriver {
         println!("{:?}", message);
     }
 
-    pub async fn abort(&self) {
+    pub fn abort(&self) {
         let packet = SendPacket::Command(Command::FrcAbort {});
-        let _ = self.send_command(packet, PacketPriority::Standard).await;
+        let _ = self.send_command(packet, PacketPriority::Standard);
     }
 
-    pub async fn initialize(&self) {
+    pub fn initialize(&self) {
         let packet: SendPacket =
             SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()));
         // self.get_status().await;
-        let _ = self.send_command(packet, PacketPriority::Standard).await;
+        let _ = self.send_command(packet, PacketPriority::Standard);
     }
 
-    pub async fn get_status(&self) {
+    pub fn get_status(&self) {
         let packet: SendPacket = SendPacket::Command(Command::FrcGetStatus);
-        let _ = self.send_command(packet, PacketPriority::Standard).await;
+        let _ = self.send_command(packet, PacketPriority::Standard);
     }
 
     pub async fn disconnect(&self) {
         let packet = SendPacket::Communication(Communication::FrcDisconnect {});
-        let _ = self.send_command(packet, PacketPriority::Standard).await;
+        let _ = self.send_command(packet, PacketPriority::Standard);
         *self.connected.lock().await = false;
     }
 
@@ -249,27 +249,32 @@ impl FanucDriver {
         Ok(())
     }
 
-    pub async fn send_command(&self, packet: SendPacket, priority: PacketPriority) -> u32 {
+    pub fn send_command(&self, packet: SendPacket, priority: PacketPriority) -> Result<u32, String> {
         /*
-        This is the method meteorite will use to send a command to the driver this is the abstraction layer that will be called to send a packet and will returna sequence id.
+        This is the method meteorite will use to send a command to the driver this is the abstraction layer that will be called to send a packet and will return a sequence id.
         */
 
         let sender = self.queue_tx.clone();
 
-        let (packet_with_sequence, sequence) = self.give_sequence_id(packet).await;
+        let (packet_with_sequence, sequence) = self.give_sequence_id(packet)?;
         let driver_packet = DriverPacket {
             priority,
             packet: packet_with_sequence,
         };
         // let driver_packet2 = driver_packet.clone();
 
-        if let Err(e) = sender.send(driver_packet).await {
-            info!("Failed to send packet: {}", e);
+        if let Err(e) = sender.try_send(driver_packet) {
+            println!("Failed to send packet: {}", e);
+            return Err(format!(
+                "Failed to send packet: {}",
+                e
+            ));
         } else {
             // println!("sent packet to queue: {:?} ", driver_packet2);
+            return Ok(sequence);
         }
 
-        sequence
+        // sequence
     }
 
     //this is an async function that receives packets and yeets them to the controllor to run
@@ -351,7 +356,7 @@ impl FanucDriver {
             }
             let current_time = Instant::now();
             let elapsed = current_time.duration_since(start_time);
-            let maxtime = Duration::from_millis(16);
+            let maxtime = Duration::from_millis(8);
             if elapsed < maxtime {
                 let sleep_duration = maxtime - elapsed;
                 tokio::time::sleep(sleep_duration).await;
@@ -454,9 +459,15 @@ impl FanucDriver {
         Ok(())
     }
 
-    async fn give_sequence_id(&self, mut packet: SendPacket) -> (SendPacket, u32) {
+    fn give_sequence_id(&self, mut packet: SendPacket) -> Result<(SendPacket, u32), String> {
         let sid = self.next_available_sequence_number.clone();
-        let mut sid = sid.lock().await;
+        // let mut sid: Result<std::sync::MutexGuard<'_, u32>, std::sync::PoisonError<std::sync::MutexGuard<'_, u32>>> = sid.lock();
+        
+        let mut sid = match sid.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => return Err(format!("Mutex poisoned: {}", poisoned)),
+        };
+
         let current_id = *sid;
         // let current_id = 11;
 
@@ -514,7 +525,7 @@ impl FanucDriver {
 
             *sid += 1;
         }
-        return (packet, current_id);
+        return Ok((packet, current_id));
     }
 
     pub async fn wait_on_command_completion(&self, packet_number_to_wait_for: u32) {

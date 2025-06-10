@@ -115,7 +115,9 @@ pub enum TermType {
 pub enum SpeedType {
     #[serde(rename = "mmSec")]
     MMSec, // Speed in millimeters per second (mm/sec).
+    #[serde(rename = "InchMin")]
     InchMin, // Speed in inches per second.
+    #[serde(rename = "Time")]
     Time, // Time in 0.1 second increments.
     #[serde(rename = "mSec")]
     MilliSeconds, // Time in milliseconds (0.001 seconds).
