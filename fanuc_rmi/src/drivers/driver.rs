@@ -1,8 +1,6 @@
-use serde::Deserialize;
-use serde::Serialize;
-use tokio::sync::broadcast;
+use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, mpsc};
 
-use tokio::sync::mpsc;
 use tracing::info;
 
 use std::collections::VecDeque;
@@ -249,7 +247,11 @@ impl FanucDriver {
         Ok(())
     }
 
-    pub fn send_command(&self, packet: SendPacket, priority: PacketPriority) -> Result<u32, String> {
+    pub fn send_command(
+        &self,
+        packet: SendPacket,
+        priority: PacketPriority,
+    ) -> Result<u32, String> {
         /*
         This is the method meteorite will use to send a command to the driver this is the abstraction layer that will be called to send a packet and will return a sequence id.
         */
@@ -265,10 +267,7 @@ impl FanucDriver {
 
         if let Err(e) = sender.try_send(driver_packet) {
             println!("Failed to send packet: {}", e);
-            return Err(format!(
-                "Failed to send packet: {}",
-                e
-            ));
+            return Err(format!("Failed to send packet: {}", e));
         } else {
             // println!("sent packet to queue: {:?} ", driver_packet2);
             return Ok(sequence);
@@ -462,7 +461,7 @@ impl FanucDriver {
     fn give_sequence_id(&self, mut packet: SendPacket) -> Result<(SendPacket, u32), String> {
         let sid = self.next_available_sequence_number.clone();
         // let mut sid: Result<std::sync::MutexGuard<'_, u32>, std::sync::PoisonError<std::sync::MutexGuard<'_, u32>>> = sid.lock();
-        
+
         let mut sid = match sid.lock() {
             Ok(guard) => guard,
             Err(poisoned) => return Err(format!("Mutex poisoned: {}", poisoned)),
