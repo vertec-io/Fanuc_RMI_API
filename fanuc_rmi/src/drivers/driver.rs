@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc};
+use tokio::{
+    io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
+    net::TcpStream,
+    sync::{broadcast, mpsc, Mutex},
+    time::sleep,
+};
 
 use tracing::info;
 
@@ -7,8 +12,6 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
-use tokio::io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::{net::TcpStream, sync::Mutex, time::sleep};
 
 pub use crate::commands::*;
 pub use crate::instructions::*;
