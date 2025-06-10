@@ -3,6 +3,8 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use tokio::sync::mpsc;
+use tracing::info;
+use tracing::info;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -94,6 +96,7 @@ impl FanucDriver {
     /// }
     /// ```
     pub async fn connect(config: FanucDriverConfig) -> Result<FanucDriver, FrcError> {
+        info!("Connecting fanuc");
         let init_addr = format!("{}:{}", config.addr, config.port);
         let mut stream = connect_with_retries(&init_addr, 3).await?;
 
@@ -120,7 +123,7 @@ impl FanucDriver {
         }
 
         let response = String::from_utf8_lossy(&buffer[..n]);
-        println!("Sent: {}\nReceived: {}", &serialized_packet, &response);
+        info!("Sent: {}\nReceived: {}", &serialized_packet, &response);
 
         let res: CommunicationResponse = serde_json::from_str(&response)
             .map_err(|e| FrcError::Serialization(format!("Could not parse response: {}", e)))?;
@@ -236,14 +239,14 @@ impl FanucDriver {
             return Err(err);
         }
         if let SendPacket::Command(Command::FrcSetOverride(_)) = packet {
-            println!(
+            info!(
                 "Sending set override packet to fanuc: {}",
                 serialized_packet
             );
         }
 
-        self.log_message(format!("Sent: {}", serialized_packet))
-            .await;
+        // self.log_message(format!("Sent: {}", serialized_packet))
+        //     .await;
         Ok(())
     }
 
@@ -262,7 +265,7 @@ impl FanucDriver {
         // let driver_packet2 = driver_packet.clone();
 
         if let Err(e) = sender.send(driver_packet).await {
-            println!("Failed to send packet: {}", e);
+            info!("Failed to send packet: {}", e);
         } else {
             // println!("sent packet to queue: {:?} ", driver_packet2);
         }
@@ -415,7 +418,7 @@ impl FanucDriver {
                     packet.clone()
                 ))
                 .await;
-                println!("Sent message to response channel: {:?}", packet.clone())
+                info!("Sent message to response channel: {:?}", packet.clone())
             }
 
             match packet {
@@ -437,7 +440,7 @@ impl FanucDriver {
                 ResponsePacket::CommandResponse(CommandResponse::FrcSetOverride(
                     frc_set_override_response,
                 )) => {
-                    println!("Got set override response: {:?}", frc_set_override_response);
+                    info!("Got set override response: {:?}", frc_set_override_response);
                 }
                 // handle other variants similarly...
                 _ => {}
@@ -528,9 +531,9 @@ impl FanucDriver {
                     }
                 }
                 Err(broadcast::error::TryRecvError::Empty) => {}
-                Err(broadcast::error::TryRecvError::Closed) => println!("Channel closed."),
+                Err(broadcast::error::TryRecvError::Closed) => info!("Channel closed."),
                 Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
-                    println!("Channel lagged, skipped {} messages.", skipped)
+                    info!("Channel lagged, skipped {} messages.", skipped)
                 }
             }
             drop(guard);

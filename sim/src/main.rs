@@ -1,12 +1,11 @@
-use tokio::net::{TcpListener, TcpStream};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use serde_json::json;
-use tokio::time::sleep;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-
+use tokio::time::sleep;
 
 // #[derive(Serialize, Deserialize, Debug)]
 // struct ConnectResponse {
@@ -16,7 +15,10 @@ use tokio::sync::Mutex;
 //     MinorVersion: Option<u16>,
 // }
 
-async fn handle_client(mut socket: TcpStream, new_port: Arc<Mutex<u16>>) -> Result<u16, Box<dyn Error + Send + Sync>> {
+async fn handle_client(
+    mut socket: TcpStream,
+    new_port: Arc<Mutex<u16>>,
+) -> Result<u16, Box<dyn Error + Send + Sync>> {
     let mut buffer = vec![0; 2048];
     let n = match socket.read(&mut buffer).await {
         Ok(n) => n,
@@ -25,7 +27,7 @@ async fn handle_client(mut socket: TcpStream, new_port: Arc<Mutex<u16>>) -> Resu
             return Err(Box::new(e));
         }
     };
-    
+
     if n == 0 {
         return Ok(0);
     }
@@ -68,7 +70,9 @@ async fn handle_client(mut socket: TcpStream, new_port: Arc<Mutex<u16>>) -> Resu
     Err("Failed to parse port number".into())
 }
 
-async fn handle_secondary_client(mut socket: TcpStream) -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn handle_secondary_client(
+    mut socket: TcpStream,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut seq: u32 = 0;
     let mut buffer = vec![0; 1024];
     let mut temp_buffer = Vec::new();
@@ -97,7 +101,6 @@ async fn handle_secondary_client(mut socket: TcpStream) -> Result<(), Box<dyn Er
             let request = &request[..request.len() - 1];
 
             let request_str = String::from_utf8_lossy(request);
-            println!("Received on secondary port: {}", request_str);
 
             let request_json: serde_json::Value = match serde_json::from_str(&request_str) {
                 Ok(json) => json,
@@ -116,11 +119,11 @@ async fn handle_secondary_client(mut socket: TcpStream) -> Result<(), Box<dyn Er
                 Some("FRC_GetStatus") => json!({
                     "Command": "FRC_Get_Status",
                     "ErrorID": 0,
-                    "ServoReady": 1, 
-                    "TPMode": 1, 
-                    "RMIMotionStatus": 0, 
-                    "ProgramStatus": 0, 
-                    "SingleStepMode": 0, 
+                    "ServoReady": 1,
+                    "TPMode": 1,
+                    "RMIMotionStatus": 0,
+                    "ProgramStatus": 0,
+                    "SingleStepMode": 0,
                     "NumberUTool": 5,
                     "NextSequenceID": 3,
                     "NumberUFrame": 0
@@ -136,6 +139,13 @@ async fn handle_secondary_client(mut socket: TcpStream) -> Result<(), Box<dyn Er
                     "Command": "FRC_Reset",
                     "ErrorID": 0,
                 }),
+                Some("FRC_SetOverride") => {
+                    println!("Received on secondary port: {}", request_str);
+                    json!({
+                        "Command": "FRC_SetOverride",
+                        "ErrorID": 0,
+                    })
+                }
                 _ => json!({}),
             };
 
@@ -144,7 +154,7 @@ async fn handle_secondary_client(mut socket: TcpStream) -> Result<(), Box<dyn Er
                     "Communication": "FRC_Disconnect",
                     "ErrorID": 0,
                 }),
-                _ => response_json
+                _ => response_json,
             };
 
             response_json = match request_json["Instruction"].as_str() {
@@ -158,15 +168,14 @@ async fn handle_secondary_client(mut socket: TcpStream) -> Result<(), Box<dyn Er
                     "ErrorID": 0,
                     "SequenceID": seq
                 }),
-                _ => response_json            
+                _ => response_json,
             };
             // let delimiter: String = "\r\n".to_string();
             let response = serde_json::to_string(&response_json)? + "\r\n";
             socket.write_all(response.as_bytes()).await?;
-            println!("Sent: {}", response);
+            // println!("Sent: {}", response);
             seq += 1;
             sleep(Duration::from_millis(100)).await;
-
         }
     }
 
@@ -225,9 +234,8 @@ async fn start_server(port: u16) -> Result<(), Box<dyn Error + Send + Sync>> {
             Ok(port) if port != 0 => {
                 println!("Starting secondary server on port {}", port);
                 tokio::spawn(start_secondary_server(port));
-
-            },
-            Ok(_) => {},
+            }
+            Ok(_) => {}
             Err(e) => eprintln!("Failed to handle client: {:?}", e),
         };
     }
@@ -238,4 +246,3 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     start_server(16001).await?;
     Ok(())
 }
-
