@@ -392,6 +392,7 @@ impl FanucDriver {
             };
 
             temp.extend_from_slice(&buf[..n]);
+            info!("got line back from fanuc: {:?}", temp);
             for line in extract_lines(&mut temp) {
                 self.process_line(line, &completed_tx).await?;
             }
@@ -411,6 +412,10 @@ impl FanucDriver {
             if let Err(e) = self.response_channel.send(packet.clone()) {
                 self.log_message(format!("Failed to send to response channel: {}", e))
                     .await;
+                info!(
+                    "Failed to send message to response channel {:?}",
+                    packet.clone()
+                );
             } else {
                 self.log_message(format!(
                     "Sent set override response to bevy backend: {:?}",
