@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct FrcSetOverride {
+pub struct FrcSetOverRide {
     #[serde(rename = "Value")]
     pub value: u8,
 }
 
-impl FrcSetOverride {
+impl FrcSetOverRide {
     #[allow(unused)]
     pub fn new(value: u8) -> Self {
         Self { value }
@@ -14,8 +14,7 @@ impl FrcSetOverride {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct FrcSetOverrideResponse {
+pub struct FrcSetOverRideResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u16,
 }
-

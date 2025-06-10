@@ -1,13 +1,13 @@
-use serde::{Serialize, Deserialize};
 use super::Packet;
 use crate::commands::*;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Command")]
 pub enum Command {
     #[serde(rename = "FRC_Initialize")]
     FrcInitialize(FrcInitialize),
-    
+
     #[serde(rename = "FRC_Abort")]
     FrcAbort,
 
@@ -31,7 +31,7 @@ pub enum Command {
     FrcWritePositionRegister(FrcWritePositionRegister),
 
     #[serde(rename = "FRC_SetOverRide")]
-    FrcSetOverride(FrcSetOverride),
+    FrcSetOverRide(FrcSetOverRide),
 
     #[serde(rename = "FRC_GetStatus")]
     FrcGetStatus,
@@ -67,18 +67,12 @@ pub enum Command {
     FrcReadTCPSpeed,
 }
 
-
-
-
-
-
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Command")]
 pub enum CommandResponse {
     #[serde(rename = "FRC_Initialize")]
     FrcInitialize(FrcInitializeResponse),
-    
+
     #[serde(rename = "FRC_Abort")]
     FrcAbort(FrcAbortResponse),
 
@@ -105,7 +99,7 @@ pub enum CommandResponse {
 
     #[serde(rename = "FRC_WriteUFrameData")]
     FrcWriteUFrameData(FrcWriteUFrameDataResponse),
-    
+
     #[serde(rename = "FRC_ReadUToolData")]
     FrcReadUToolData(FrcReadUToolDataResponse),
 
@@ -123,9 +117,9 @@ pub enum CommandResponse {
 
     #[serde(rename = "FRC_ReadJointAngles")]
     FrcReadJointAngles(FrcReadJointAnglesResponse),
-    
+
     #[serde(rename = "FRC_SetOverRide")]
-    FrcSetOverride(FrcSetOverrideResponse),
+    FrcSetOverRide(FrcSetOverRideResponse),
 
     #[serde(rename = "FRC_ReadPositionRegister")]
     FrcReadPositionRegister(FrcReadPositionRegisterResponse),
@@ -138,9 +132,6 @@ pub enum CommandResponse {
 
     #[serde(rename = "FRC_ReadTCPSpeed")]
     FrcReadTCPSpeed(FrcReadTCPSpeedResponse),
-
-
 }
 
-
-impl Packet for Command{}
+impl Packet for Command {}

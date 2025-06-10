@@ -238,7 +238,7 @@ impl FanucDriver {
             self.log_message(err.to_string()).await;
             return Err(err);
         }
-        if let SendPacket::Command(Command::FrcSetOverride(_)) = packet {
+        if let SendPacket::Command(Command::FrcSetOverRide(_)) = packet {
             info!(
                 "Sending set override packet to fanuc: {}",
                 serialized_packet
@@ -448,7 +448,7 @@ impl FanucDriver {
                         self.log_message(format!("Send error: {}", e)).await;
                     }
                 }
-                ResponsePacket::CommandResponse(CommandResponse::FrcSetOverride(
+                ResponsePacket::CommandResponse(CommandResponse::FrcSetOverRide(
                     frc_set_override_response,
                 )) => {
                     info!("Got set override response: {:?}", frc_set_override_response);
