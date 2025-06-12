@@ -541,7 +541,7 @@ impl FanucDriver {
                         eprintln!("ROBOT MOTION ERROR: {}", most_recent.error_id);
                         break;
                     } else {
-                        if most_recent.sequence_id == packet_number_to_wait_for {
+                        if most_recent.sequence_id >= packet_number_to_wait_for {
                             println!("robot move done #{}", most_recent.sequence_id);
                             break;
                         }
