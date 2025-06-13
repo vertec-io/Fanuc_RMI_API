@@ -142,7 +142,7 @@ impl FanucDriver {
         let read_half = Arc::new(Mutex::new(read_half));
         let write_half = Arc::new(Mutex::new(write_half));
         let (message_channel, _rx) = broadcast::channel(100);
-        let (response_tx, _response_rx) = broadcast::channel(100);
+        let (response_tx, response_rx) = broadcast::channel(100);  // Keep the receiver
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(1000); //FIXME: there isnt a system on meteorite monitoring number of packets sent
         let next_available_sequence_number = Arc::new(std::sync::Mutex::new(1));
 
@@ -152,6 +152,14 @@ impl FanucDriver {
         let return_info_rx = completed_packet_tx.subscribe();
         let return_info = completed_packet_tx.subscribe();
         let completed_packet_channel = Arc::new(Mutex::new(return_info_rx));
+
+        // Spawn a task to keep the response channel open
+        tokio::spawn(async move {
+            let mut rx = response_rx;
+            while let Ok(_) = rx.recv().await {
+                // Just consume messages to keep the channel open
+            }
+        });
 
         let driver = Self {
             config,
