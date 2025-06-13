@@ -499,7 +499,7 @@ impl FanucDriver {
                     InstructionResponse::FrcLinearRelative(_),
                 ) = packet
                 {
-                    info!("Sent Motion response back to bevy");
+                    info!("Sent Motion response back to bevy: {:?}", packet);
                 }
                 debug!("Sent message to response channel: {:?}", packet.clone())
             }
@@ -516,7 +516,6 @@ impl FanucDriver {
                         sequence_id: pkt.get_sequence_id(),
                         error_id: pkt.get_error_id(),
                     };
-                    info!("Received Instruction Response: {:?}", pkt);
                     if let Err(e) = completed_tx.send(info) {
                         self.log_message(format!("Send error: {}", e)).await;
                     }
