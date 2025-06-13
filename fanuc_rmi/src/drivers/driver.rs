@@ -233,11 +233,28 @@ impl FanucDriver {
             }
         };
 
-        if let Err(e) = stream.write_all(serialized_packet.as_bytes()).await {
-            let err = FrcError::FailedToSend(format!("{}", e));
-            self.log_message(err.to_string()).await;
-            return Err(err);
+        // Add timeout to write operation - this is still important to prevent blocking
+        // indefinitely if the connection is stalled
+        const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+        
+        match tokio::time::timeout(
+            WRITE_TIMEOUT,
+            stream.write_all(serialized_packet.as_bytes())
+        ).await {
+            Ok(result) => {
+                if let Err(e) = result {
+                    let err = FrcError::FailedToSend(format!("{}", e));
+                    self.log_message(err.to_string()).await;
+                    return Err(err);
+                }
+            },
+            Err(_) => {
+                let err = FrcError::FailedToSend("Write operation timed out".to_string());
+                self.log_message(err.to_string()).await;
+                return Err(err);
+            }
         }
+
         if let SendPacket::Command(Command::FrcSetOverRide(_)) = packet {
             info!(
                 "Sending set override packet to fanuc: {}",
@@ -245,8 +262,6 @@ impl FanucDriver {
             );
         }
 
-        // self.log_message(format!("Sent: {}", serialized_packet))
-        //     .await;
         Ok(())
     }
 
@@ -288,7 +303,12 @@ impl FanucDriver {
         let mut in_flight: u32 = 0;
         let mut queue: VecDeque<SendPacket> = VecDeque::new();
         let mut state = DriverState::default();
-
+        
+        // Standard loop interval
+        const LOOP_INTERVAL: Duration = Duration::from_millis(8);
+        // Maximum in-flight packets (backpressure)
+        const MAX_IN_FLIGHT: u32 = 8;
+        
         loop {
             let start_time = Instant::now();
 
@@ -323,16 +343,24 @@ impl FanucDriver {
                 }
             }
 
-            while let Ok(_pkt) = completed_packet_info.try_recv() {
+            // Process completed packets
+            while let Ok(pkt) = completed_packet_info.try_recv() {
                 in_flight = in_flight.saturating_sub(1);
-                // println!("Ack for seq {} received, {} in-flight remaining", pkt.sequence_id, in_flight);
+                // Log if error occurred
+                if pkt.error_id != 0 {
+                    self.log_message(format!(
+                        "Error in packet {}: error_id={}", 
+                        pkt.sequence_id, pkt.error_id
+                    )).await;
+                }
             }
 
             if packets_to_add.is_closed() && queue.is_empty() {
                 break;
             }
 
-            while in_flight < 8 && state == DriverState::Running {
+            // Send packets with backpressure
+            while in_flight < MAX_IN_FLIGHT && state == DriverState::Running {
                 if let Some(packet) = queue.pop_front() {
                     match self.send_packet_to_controller(packet.clone()).await {
                         Err(e) => {
@@ -356,18 +384,16 @@ impl FanucDriver {
                     break;
                 }
             }
-            let current_time = Instant::now();
-            let elapsed = current_time.duration_since(start_time);
-            let maxtime = Duration::from_millis(8);
-            if elapsed < maxtime {
-                let sleep_duration = maxtime - elapsed;
-                tokio::time::sleep(sleep_duration).await;
+
+            // Maintain consistent loop timing
+            let elapsed = Instant::now().duration_since(start_time);
+            if elapsed < LOOP_INTERVAL {
+                tokio::time::sleep(LOOP_INTERVAL - elapsed).await;
             } else {
                 self.log_message(format!(
-                    "Send loop duration took {:?} exeeding max time:{:?}",
-                    elapsed, maxtime
-                ))
-                .await;
+                    "Send loop duration took {:?} exceeding max time:{:?}",
+                    elapsed, LOOP_INTERVAL
+                )).await;
             }
         }
 
@@ -384,25 +410,41 @@ impl FanucDriver {
         let mut reader = self.fanuc_read.lock().await;
         let mut buf = vec![0; 2048];
         let mut temp = Vec::new();
+        
+        // Standard loop interval for processing
+        const LOOP_INTERVAL: Duration = Duration::from_millis(10);
 
         loop {
+            // Maintain a consistent loop interval for processing
+            let start_time = Instant::now();
+            
+            // Read without timeout - we want to stay connected indefinitely
             let n = match reader.read(&mut buf).await {
                 Ok(0) => {
+                    // Connection closed by peer
                     *self.connected.lock().await = false;
                     return Err(FrcError::Disconnected());
                 }
                 Ok(n) => n,
-                Err(_) => {
+                Err(e) => {
+                    self.log_message(format!("Read error: {}", e)).await;
                     *self.connected.lock().await = false;
-                    return Err(FrcError::Disconnected());
+                    return Err(FrcError::FailedToReceive(e.to_string()));
                 }
             };
 
             temp.extend_from_slice(&buf[..n]);
             for line in extract_lines(&mut temp) {
-                self.process_line(line, &completed_tx).await?;
+                if let Err(e) = self.process_line(line, &completed_tx).await {
+                    self.log_message(format!("Error processing line: {:?}", e)).await;
+                    // Continue processing other lines even if one fails
+                }
             }
-            // tokio::time::sleep(Duration::from_secs(1)).await;
+            
+            let elapsed = Instant::now().duration_since(start_time);
+            if elapsed < LOOP_INTERVAL {
+                tokio::time::sleep(LOOP_INTERVAL - elapsed).await;
+            }
         }
     }
 
@@ -532,7 +574,11 @@ impl FanucDriver {
     }
 
     pub async fn wait_on_command_completion(&self, packet_number_to_wait_for: u32) {
+        const WAIT_INTERVAL: Duration = Duration::from_millis(10);
+        
         loop {
+            let start_time = Instant::now();
+            
             let guard = self.completed_packet_channel.clone();
             let mut guard = guard.lock().await;
             match guard.try_recv() {
@@ -554,6 +600,12 @@ impl FanucDriver {
                 }
             }
             drop(guard);
+            
+            // Maintain consistent loop timing
+            let elapsed = Instant::now().duration_since(start_time);
+            if elapsed < WAIT_INTERVAL {
+                tokio::time::sleep(WAIT_INTERVAL - elapsed).await;
+            }
         }
     }
 }
