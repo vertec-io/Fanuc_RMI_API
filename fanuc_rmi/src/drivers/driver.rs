@@ -107,14 +107,10 @@ impl FanucDriver {
             )
         })? + "\r\n";
 
-        info!("Serialized connect packet to string");
-
         stream
             .write_all(serialized_packet.as_bytes())
             .await
             .map_err(|e| FrcError::FailedToSend(e.to_string()))?;
-
-        info!("Write connect packet to string");
 
         let mut buffer = vec![0; 2048];
         let n = stream
@@ -293,11 +289,6 @@ impl FanucDriver {
             println!("Failed to send packet: {}", e);
             return Err(format!("Failed to send packet: {}", e));
         } else {
-            if let SendPacket::Instruction(Instruction::FrcLinearRelative(_)) =
-                driver_packet.packet.clone()
-            {
-                info!("sent packet to queue: {:?} ", driver_packet);
-            }
             return Ok(sequence);
         }
 
@@ -332,15 +323,6 @@ impl FanucDriver {
                         state = DriverState::Running
                     }
                     _ => {}
-                }
-
-                if let SendPacket::Instruction(Instruction::FrcLinearRelative(_)) =
-                    new_packet.packet.clone()
-                {
-                    info!(
-                        "Fanuc queue received motion command: {:?}",
-                        new_packet.packet
-                    );
                 }
 
                 if let SendPacket::DriverCommand(_) = new_packet.packet {
@@ -394,7 +376,6 @@ impl FanucDriver {
                                 break;
                             }
                             if let SendPacket::Instruction(instr) = packet {
-                                info!("Sent instruction packet to Fanuc controller");
                                 let _seq = instr.get_sequence_id();
                                 // println!("Sent seq {} ({} in-flight)", seq, in_flight + 1);
                                 in_flight += 1;
@@ -436,7 +417,6 @@ impl FanucDriver {
         // Standard loop interval for processing
         const LOOP_INTERVAL: Duration = Duration::from_millis(10);
 
-        info!("Starting Fanuc read response loop");
         loop {
             // Maintain a consistent loop interval for processing
             let start_time = Instant::now();
@@ -495,12 +475,6 @@ impl FanucDriver {
                     packet.clone()
                 ))
                 .await;
-                if let ResponsePacket::InstructionResponse(
-                    InstructionResponse::FrcLinearRelative(_),
-                ) = packet
-                {
-                    info!("Sent Motion response back to bevy: {:?}", packet);
-                }
                 debug!("Sent message to response channel: {:?}", packet.clone())
             }
 
