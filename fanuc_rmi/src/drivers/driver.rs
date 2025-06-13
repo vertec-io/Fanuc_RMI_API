@@ -394,7 +394,7 @@ impl FanucDriver {
                                 break;
                             }
                             if let SendPacket::Instruction(instr) = packet {
-                                info!("Send instruction packet to Fanuc controller");
+                                info!("Sent instruction packet to Fanuc controller");
                                 let _seq = instr.get_sequence_id();
                                 // println!("Sent seq {} ({} in-flight)", seq, in_flight + 1);
                                 in_flight += 1;
@@ -495,6 +495,12 @@ impl FanucDriver {
                     packet.clone()
                 ))
                 .await;
+                if let ResponsePacket::InstructionResponse(
+                    InstructionResponse::FrcLinearRelative(_),
+                ) = packet
+                {
+                    info!("Sent Motion response back to bevy");
+                }
                 debug!("Sent message to response channel: {:?}", packet.clone())
             }
 
@@ -510,6 +516,7 @@ impl FanucDriver {
                         sequence_id: pkt.get_sequence_id(),
                         error_id: pkt.get_error_id(),
                     };
+                    info!("Received Instruction Response: {:?}", pkt);
                     if let Err(e) = completed_tx.send(info) {
                         self.log_message(format!("Send error: {}", e)).await;
                     }
