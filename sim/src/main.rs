@@ -102,6 +102,8 @@ async fn handle_secondary_client(
             let request = &request[..request.len() - 1];
 
             let request_str = String::from_utf8_lossy(request);
+            println!("Received on secondary port: {}", request_str);
+
 
             let request_json: serde_json::Value = match serde_json::from_str(&request_str) {
                 Ok(json) => json,
