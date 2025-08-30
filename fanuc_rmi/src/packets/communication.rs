@@ -1,6 +1,7 @@
 use serde::{Serialize, Deserialize};
 use super::Packet;
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "Communication")]
 pub enum Communication {
@@ -14,6 +15,7 @@ pub enum Communication {
     FrcSystemFault,
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "Communication")]
 pub enum CommunicationResponse {
@@ -27,6 +29,7 @@ pub enum CommunicationResponse {
     FrcSystemFault,
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcConnectResponse {
     #[serde(rename = "ErrorID")]
@@ -38,11 +41,13 @@ pub struct FrcConnectResponse {
     #[serde(rename = "MinorVersion")]
     pub minor_version: u16
 }
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcDisconnectResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
 }
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcSystemFault {
     #[serde(rename = "SequenceID")]

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use crate::packets::OnOff;
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcWaitDIN {
     #[serde(rename = "SequenceID")]
@@ -22,8 +24,10 @@ impl FrcWaitDIN{
         }
 
     }
+
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcWaitDINResponse {
     #[serde(rename = "ErrorID")]

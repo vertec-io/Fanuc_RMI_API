@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{Configuration, Position, SpeedType, TermType};
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcJointMotion {
     #[serde(rename = "SequenceID")]
@@ -44,6 +45,7 @@ impl FrcJointMotion{
     }
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcJointMotionResponse {
     #[serde(rename = "ErrorID")]

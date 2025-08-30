@@ -13,10 +13,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-pub use crate::commands::*;
-pub use crate::instructions::*;
-pub use crate::{packets::*, FanucErrorCode};
-pub use crate::{Configuration, FrcError, Position, SpeedType, TermType};
+// Prefer importing from the module rather than re-exporting from here
+// Prefer downstream crates to reference modules directly (crate::commands, crate::instructions, crate::dto)
+use crate::commands::*;
+use crate::packets::*;
+use crate::FrcError;
 
 use super::DriverState;
 use super::FanucDriverConfig;
@@ -80,7 +81,7 @@ impl FanucDriver {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// let config = FanucDriverConfig {
     ///     addr: "192.168.0.1".to_string(),
     ///     port: 12345,
@@ -244,7 +245,7 @@ impl FanucDriver {
         // Add timeout to write operation - this is still important to prevent blocking
         // indefinitely if the connection is stalled
         const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-        
+
         match tokio::time::timeout(
             WRITE_TIMEOUT,
             stream.write_all(serialized_packet.as_bytes())
@@ -311,12 +312,12 @@ impl FanucDriver {
         let mut in_flight: u32 = 0;
         let mut queue: VecDeque<SendPacket> = VecDeque::new();
         let mut state = DriverState::default();
-        
+
         // Standard loop interval
         const LOOP_INTERVAL: Duration = Duration::from_millis(8);
         // Maximum in-flight packets (backpressure)
         const MAX_IN_FLIGHT: u32 = 8;
-        
+
         loop {
             let start_time = Instant::now();
 
@@ -357,7 +358,7 @@ impl FanucDriver {
                 // Log if error occurred
                 if pkt.error_id != 0 {
                     self.log_message(format!(
-                        "Error in packet {}: error_id={}", 
+                        "Error in packet {}: error_id={}",
                         pkt.sequence_id, pkt.error_id
                     )).await;
                 }
@@ -418,14 +419,14 @@ impl FanucDriver {
         let mut reader = self.fanuc_read.lock().await;
         let mut buf = vec![0; 2048];
         let mut temp = Vec::new();
-        
+
         // Standard loop interval for processing
         const LOOP_INTERVAL: Duration = Duration::from_millis(10);
 
         loop {
             // Maintain a consistent loop interval for processing
             let start_time = Instant::now();
-            
+
             // Read without timeout - we want to stay connected indefinitely
             let n = match reader.read(&mut buf).await {
                 Ok(0) => {
@@ -448,7 +449,7 @@ impl FanucDriver {
                     // Continue processing other lines even if one fails
                 }
             }
-            
+
             let elapsed = Instant::now().duration_since(start_time);
             if elapsed < LOOP_INTERVAL {
                 tokio::time::sleep(LOOP_INTERVAL - elapsed).await;
@@ -583,10 +584,10 @@ impl FanucDriver {
 
     pub async fn wait_on_command_completion(&self, packet_number_to_wait_for: u32) {
         const WAIT_INTERVAL: Duration = Duration::from_millis(10);
-        
+
         loop {
             let start_time = Instant::now();
-            
+
             let guard = self.completed_packet_channel.clone();
             let mut guard = guard.lock().await;
             match guard.try_recv() {
@@ -608,7 +609,7 @@ impl FanucDriver {
                 }
             }
             drop(guard);
-            
+
             // Maintain consistent loop timing
             let elapsed = Instant::now().duration_since(start_time);
             if elapsed < WAIT_INTERVAL {

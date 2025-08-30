@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{Configuration, Position};
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadPositionRegister {
     #[serde(rename = "Group")]
@@ -21,6 +22,7 @@ impl FrcReadPositionRegister{
     }
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcReadPositionRegisterResponse { 
     #[serde(rename = "ErrorID")]

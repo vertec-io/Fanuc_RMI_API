@@ -2,6 +2,7 @@ use super::Packet;
 use crate::instructions::*;
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Instruction")]
 pub enum Instruction {
@@ -77,6 +78,7 @@ impl Instruction {
     }
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Instruction")]
 pub enum InstructionResponse {
@@ -163,6 +165,8 @@ pub struct CompletedPacketReturnInfo {
     pub sequence_id: u32,
     pub error_id: u32,
 }
+
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum OnOff {

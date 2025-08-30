@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::FrameData;
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcWriteUToolData {
     #[serde(rename = "ToolNumber")]
@@ -25,6 +26,7 @@ impl FrcWriteUToolData{
     }
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcWriteUToolDataResponse {
     #[serde(rename = "ErrorID")]

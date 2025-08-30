@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcWaitTime {
     #[serde(rename = "SequenceID")]
@@ -18,9 +20,11 @@ impl FrcWaitTime{
             time,
         }
 
+
     }
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcWaitTimeResponse {
     #[serde(rename = "ErrorID")]

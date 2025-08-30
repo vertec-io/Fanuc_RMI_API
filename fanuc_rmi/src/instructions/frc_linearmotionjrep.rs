@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{JointAngles, SpeedType, TermType};
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcLinearMotionJRep {
     #[serde(rename = "SequenceID")]
@@ -42,6 +43,7 @@ impl FrcLinearMotionJRep{
     }
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcLinearMotionJRepResponse {
     #[serde(rename = "ErrorID")]

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcSetUFrameUTool {
     #[serde(rename = "Group")]
@@ -23,6 +24,7 @@ impl FrcSetUFrameUTool{
         }
     }
 }
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcSetUFrameUToolResponse {
     #[serde(rename = "ErrorID")]

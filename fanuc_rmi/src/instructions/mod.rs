@@ -31,3 +31,41 @@ pub use frc_circularrelative::*;
 pub use frc_jointmotionjrep::*;
 pub use frc_jointrelativejrep::*;
 pub use frc_linearmotionjrep::*;
+
+
+#[cfg(feature = "DTO")]
+pub mod dto {
+    pub use super::frc_waitdin::FrcWaitDINDto as FrcWaitDIN;
+    pub use super::frc_setuframe::FrcSetUFrameDto as FrcSetUFrame;
+    pub use super::frc_setutool::FrcSetUToolDto as FrcSetUTool;
+    pub use super::frc_waittime::FrcWaitTimeDto as FrcWaitTime;
+    pub use super::frc_setpayload::FrcSetPayLoadDto as FrcSetPayLoad;
+    pub use super::frc_call::FrcCallDto as FrcCall;
+    pub use super::frc_linearmotion::FrcLinearMotionDto as FrcLinearMotion;
+    pub use super::frc_linearrelative::FrcLinearRelativeDto as FrcLinearRelative;
+    pub use super::frc_linearrelativejrep::FrcLinearRelativeJRepDto as FrcLinearRelativeJRep;
+    pub use super::frc_jointmotion::FrcJointMotionDto as FrcJointMotion;
+    pub use super::frc_jointrelative::FrcJointRelativeDto as FrcJointRelative;
+    pub use super::frc_circularmotion::FrcCircularMotionDto as FrcCircularMotion;
+    pub use super::frc_circularrelative::FrcCircularRelativeDto as FrcCircularRelative;
+    pub use super::frc_jointmotionjrep::FrcJointMotionJRepDto as FrcJointMotionJRep;
+    pub use super::frc_jointrelativejrep::FrcJointRelativeJRepDto as FrcJointRelativeJRep;
+    pub use super::frc_linearmotionjrep::FrcLinearMotionJRepDto as FrcLinearMotionJRep;
+        pub use super::frc_waitdin::FrcWaitDINResponseDto as FrcWaitDINResponse;
+        pub use super::frc_setuframe::FrcSetUFrameResponseDto as FrcSetUFrameResponse;
+        pub use super::frc_setutool::FrcSetUToolResponseDto as FrcSetUToolResponse;
+        pub use super::frc_waittime::FrcWaitTimeResponseDto as FrcWaitTimeResponse;
+        pub use super::frc_setpayload::FrcSetPayLoadResponseDto as FrcSetPayLoadResponse;
+        pub use super::frc_call::FrcCallResponseDto as FrcCallResponse;
+        pub use super::frc_linearmotion::FrcLinearMotionResponseDto as FrcLinearMotionResponse;
+        pub use super::frc_linearrelative::FrcLinearRelativeResponseDto as FrcLinearRelativeResponse;
+        pub use super::frc_linearrelativejrep::FrcLinearRelativeJRepResponseDto as FrcLinearRelativeJRepResponse;
+        pub use super::frc_jointmotion::FrcJointMotionResponseDto as FrcJointMotionResponse;
+        pub use super::frc_jointrelative::FrcJointRelativeResponseDto as FrcJointRelativeResponse;
+        pub use super::frc_circularmotion::FrcCircularMotionResponseDto as FrcCircularMotionResponse;
+        pub use super::frc_circularrelative::FrcCircularRelativeResponseDto as FrcCircularRelativeResponse;
+        pub use super::frc_jointmotionjrep::FrcJointMotionJRepResponseDto as FrcJointMotionJRepResponse;
+        pub use super::frc_jointrelativejrep::FrcJointRelativeJRepResponseDto as FrcJointRelativeJRepResponse;
+        pub use super::frc_linearmotionjrep::FrcLinearMotionJRepResponseDto as FrcLinearMotionJRepResponse;
+
+}

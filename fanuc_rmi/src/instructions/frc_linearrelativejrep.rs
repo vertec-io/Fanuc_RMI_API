@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{JointAngles, SpeedType, TermType};
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcLinearRelativeJRep {
     #[serde(rename = "SequenceID")]
@@ -40,6 +41,7 @@ impl FrcLinearRelativeJRep{
     }
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcLinearRelativeJRepResponse {
     #[serde(rename = "ErrorID")]

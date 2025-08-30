@@ -2,6 +2,7 @@ use super::Packet;
 use crate::commands::*;
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Command")]
 pub enum Command {
@@ -67,6 +68,7 @@ pub enum Command {
     FrcReadTCPSpeed,
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Command")]
 pub enum CommandResponse {

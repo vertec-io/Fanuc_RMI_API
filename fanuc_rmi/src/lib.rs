@@ -8,7 +8,28 @@ pub mod commands;
 pub mod communication;
 pub mod errors;
 pub use errors::*;
+/// Binary-friendly Data Transfer Objects (DTOs) for application networking.
+///
+/// The `dto` module contains 1:1 mirrored types without serde renaming/tagging
+/// for compact, unambiguous binary serialization (e.g., with `bincode`).
+/// Use `fanuc_rmi::protocol` for the JSON/robot protocol types, and
+/// `fanuc_rmi::dto` for your app's binary wire. Variant and field order in DTOs
+/// affect binary compatibility; prefer additive changes at the end and avoid
+/// reordering existing items.
+#[cfg(feature = "DTO")]
+pub mod dto;
+#[cfg(feature = "DTO")]
+pub use fanuc_rmi_macros::mirror_dto;
 
+
+/// JSON protocol types used to communicate with the FANUC controller.
+/// These retain serde renaming/tagging to match the controller's wire format.
+pub mod protocol {
+    pub use super::*;
+}
+
+
+#[cfg_attr(feature = "DTO", mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrameData {
     pub x: f32,
@@ -19,6 +40,7 @@ pub struct FrameData {
     pub r: f32,
 }
 
+#[cfg_attr(feature = "DTO", mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub struct Configuration {
@@ -48,6 +70,7 @@ impl Default for Configuration{
     }
 }
 
+#[cfg_attr(feature = "DTO", mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone,Copy, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct Position {
@@ -78,6 +101,7 @@ impl Default for Position {
     }
 }
 
+#[cfg_attr(feature = "DTO", mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct JointAngles {
     pub j1: f32,
@@ -122,3 +146,4 @@ pub enum SpeedType {
     #[serde(rename = "mSec")]
     MilliSeconds, // Time in milliseconds (0.001 seconds).
 }
+

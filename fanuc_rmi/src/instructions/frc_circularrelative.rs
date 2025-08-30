@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{Configuration, Position, SpeedType, TermType};
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcCircularRelative {
     #[serde(rename = "SequenceID")]
@@ -51,6 +52,7 @@ impl FrcCircularRelative{
     }
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcCircularRelativeResponse {
     #[serde(rename = "ErrorID")]

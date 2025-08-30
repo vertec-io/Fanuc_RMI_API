@@ -6,11 +6,20 @@ mod driver_command;
 pub use command::*;
 pub use communication::*;
 pub use instruction::*;
+#[cfg(feature = "DTO")]
+pub use instruction::OnOffDto;
+
 pub use driver_command::*;
 
 use serde::{Deserialize, Serialize};
 
 
+
+
+
+
+
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(untagged)]
@@ -21,6 +30,7 @@ pub enum SendPacket {
     DriverCommand(DriverCommand)
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum ResponsePacket {

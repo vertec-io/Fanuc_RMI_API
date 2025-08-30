@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::FrameData;
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadUFrameData {
     #[serde(rename = "FrameNumber")]
@@ -22,6 +23,7 @@ impl FrcReadUFrameData{
     }
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrcReadUFrameDataResponse {
     #[serde(rename = "ErrorID")]

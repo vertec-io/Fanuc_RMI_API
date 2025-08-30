@@ -1,7 +1,7 @@
 use std::time::Duration;
 use tokio::time::sleep;
 use fanuc_rmi::{
-    drivers::{FanucDriver, FanucDriverConfig, FrcLinearRelative, PacketPriority}, packets::*, Configuration, FrcError, Position, SpeedType, TermType
+    drivers::{FanucDriver, FanucDriverConfig}, instructions::FrcLinearRelative, packets::*, Configuration, FrcError, Position, SpeedType, TermType
 };
 
 #[tokio::main]
@@ -56,8 +56,8 @@ async fn main() -> Result<(), FrcError > {
         )),
         PacketPriority::Standard,
     ) {
-        Ok(id) => {
-            // driver.wait_on_command_completion(id).await
+        Ok(_id) => {
+            // driver.wait_on_command_completion(_id).await
         },
         Err(e) => return Err(FrcError::FailedToSend(e)),
     };

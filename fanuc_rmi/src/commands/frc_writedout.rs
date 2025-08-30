@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcWriteDOUT{
     #[serde(rename = "PortNumber")]
@@ -17,6 +18,7 @@ impl FrcWriteDOUT{
     }
 }
 
+#[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcWriteDOUTResponse {    
     #[serde(rename = "ErrorID")]

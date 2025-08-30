@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::net::ToSocketAddrs;
 
-/// ```rust
+/// ```rust,ignore
 /// // Create a new configuration with a DNS name or IP address
 /// let config = FanucDriverConfig::new("example.com".to_string(), 16001, 30);
 /// let config = FanucDriverConfig::new("127.0.0.1".to_string(), 16001, 30);

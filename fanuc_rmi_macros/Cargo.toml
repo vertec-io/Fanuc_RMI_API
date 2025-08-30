@@ -1,0 +1,16 @@
+[package]
+name = "fanuc_rmi_macros"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+
+[features]
+# no features here; the generated code in the target crate is cfg-gated by feature = "DTO"
+

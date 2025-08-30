@@ -3,4 +3,5 @@ members = [
     "example",
     "fanuc_rmi",
     "sim",
+    "fanuc_rmi_macros",
 ]
