@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+// Extract module must be declared first so the macro is available to other modules
+#[macro_use]
+mod extract;
+pub use extract::ExtractInner;
+
 pub mod drivers;
 
 pub mod packets;

@@ -55,3 +55,7 @@ pub struct FrcSystemFault {
 }
 
 impl Packet for Communication{}
+
+// ExtractInner trait implementations for CommunicationResponse
+impl_extract_inner!(CommunicationResponse, FrcConnect, FrcConnectResponse);
+impl_extract_inner!(CommunicationResponse, FrcDisconnect, FrcDisconnectResponse);

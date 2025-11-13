@@ -137,3 +137,26 @@ pub enum CommandResponse {
 }
 
 impl Packet for Command {}
+
+// ExtractInner trait implementations for CommandResponse
+impl_extract_inner!(CommandResponse, FrcInitialize, FrcInitializeResponse);
+impl_extract_inner!(CommandResponse, FrcAbort, FrcAbortResponse);
+impl_extract_inner!(CommandResponse, FrcPause, FrcPauseResponse);
+impl_extract_inner!(CommandResponse, FrcContinue, FrcContinueResponse);
+impl_extract_inner!(CommandResponse, FrcReadError, FrcReadErrorResponse);
+impl_extract_inner!(CommandResponse, FrcSetUFrameUTool, FrcSetUFrameUToolResponse);
+impl_extract_inner!(CommandResponse, FrcGetUFrameUTool, FrcGetUFrameUToolResponse);
+impl_extract_inner!(CommandResponse, FrcGetStatus, FrcGetStatusResponse);
+impl_extract_inner!(CommandResponse, FrcReadUFrameData, FrcReadUFrameDataResponse);
+impl_extract_inner!(CommandResponse, FrcWriteUFrameData, FrcWriteUFrameDataResponse);
+impl_extract_inner!(CommandResponse, FrcReadUToolData, FrcReadUToolDataResponse);
+impl_extract_inner!(CommandResponse, FrcWriteUToolData, FrcWriteUToolData);
+impl_extract_inner!(CommandResponse, FrcReadDIN, FrcReadDINResponse);
+impl_extract_inner!(CommandResponse, FrcReadCartesianPosition, FrcReadCartesianPositionResponse);
+impl_extract_inner!(CommandResponse, FrcWriteDOUT, FrcWriteDOUTResponse);
+impl_extract_inner!(CommandResponse, FrcReadJointAngles, FrcReadJointAnglesResponse);
+impl_extract_inner!(CommandResponse, FrcSetOverRide, FrcSetOverRideResponse);
+impl_extract_inner!(CommandResponse, FrcReadPositionRegister, FrcReadPositionRegisterResponse);
+impl_extract_inner!(CommandResponse, FrcWritePositionRegister, FrcWritePositionRegisterResponse);
+impl_extract_inner!(CommandResponse, FrcReset, FrcResetResponse);
+impl_extract_inner!(CommandResponse, FrcReadTCPSpeed, FrcReadTCPSpeedResponse);

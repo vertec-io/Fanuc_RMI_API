@@ -176,3 +176,21 @@ pub enum OnOff {
 
 impl Packet for Instruction {}
 
+// ExtractInner trait implementations for InstructionResponse
+impl_extract_inner!(InstructionResponse, FrcWaitDIN, FrcWaitDINResponse);
+impl_extract_inner!(InstructionResponse, FrcSetUFrame, FrcSetUFrameResponse);
+impl_extract_inner!(InstructionResponse, FrcSetUTool, FrcSetUToolResponse);
+impl_extract_inner!(InstructionResponse, FrcWaitTime, FrcWaitTimeResponse);
+impl_extract_inner!(InstructionResponse, FrcSetPayLoad, FrcSetPayLoadResponse);
+impl_extract_inner!(InstructionResponse, FrcCall, FrcCallResponse);
+impl_extract_inner!(InstructionResponse, FrcLinearMotion, FrcLinearMotionResponse);
+impl_extract_inner!(InstructionResponse, FrcLinearRelative, FrcLinearRelativeResponse);
+impl_extract_inner!(InstructionResponse, FrcLinearRelativeJRep, FrcLinearRelativeJRepResponse);
+impl_extract_inner!(InstructionResponse, FrcJointMotion, FrcJointMotionResponse);
+impl_extract_inner!(InstructionResponse, FrcJointRelative, FrcJointRelativeResponse);
+impl_extract_inner!(InstructionResponse, FrcCircularMotion, FrcCircularMotionResponse);
+impl_extract_inner!(InstructionResponse, FrcCircularRelative, FrcCircularRelativeResponse);
+impl_extract_inner!(InstructionResponse, FrcJointMotionJRep, FrcJointMotionJRepResponse);
+impl_extract_inner!(InstructionResponse, FrcJointRelativeJRep, FrcJointRelativeJRepResponse);
+impl_extract_inner!(InstructionResponse, FrcLinearMotionJRep, FrcLinearMotionJRepResponse);
+
