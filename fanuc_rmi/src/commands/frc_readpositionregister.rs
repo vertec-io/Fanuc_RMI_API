@@ -11,7 +11,7 @@ pub struct FrcReadPositionRegister {
 }
 impl FrcReadPositionRegister{
     #[allow(unused)]
-    fn new(group: Option<u8>, register_number:u16) -> Self {
+    pub fn new(group: Option<u8>, register_number:u16) -> Self {
         Self {
             group: match group {
                 Some(gm) => gm,
