@@ -27,12 +27,9 @@ async fn main() -> Result<(), FrcError > {
             FrcLinearRelative::new(
                 0,
                 Configuration {
-                    u_tool_number: 4,
-                    u_frame_number: 3,
                     front: 1,
                     up: 1,
                     left: 0,
-                    flip: 1,
                     turn4: 0,
                     turn5: 0,
                     turn6: 0,
