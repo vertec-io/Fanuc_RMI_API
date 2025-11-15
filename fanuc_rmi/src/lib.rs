@@ -47,27 +47,27 @@ pub struct FrameData {
 
 #[cfg_attr(feature = "DTO", mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "PascalCase")]
 pub struct Configuration {
-    pub u_tool_number: u8,
-    pub u_frame_number: u8,
+    #[serde(rename = "F")]
     pub front: u8,
+    #[serde(rename = "U")]
     pub up: u8,
+    #[serde(rename = "T")]
     pub left: u8,
-    pub flip: u8,
+    #[serde(rename = "B1")]
     pub turn4: u8,
+    #[serde(rename = "B2")]
     pub turn5: u8,
+    #[serde(rename = "B3")]
     pub turn6: u8,
 }
 
 impl Default for Configuration{
     fn default() -> Self {
-        Self { u_tool_number: 1,
-               u_frame_number: 1,
+        Self {
                front: 1,
                up: 1,
                left: 1,
-               flip: 0,
                turn4: 0,
                turn5: 0,
                turn6: 0,
@@ -85,8 +85,11 @@ pub struct Position {
     pub w: f32,
     pub p: f32,
     pub r: f32,
+    #[serde(default)]
     pub ext1: f32,
+    #[serde(default)]
     pub ext2: f32,
+    #[serde(default)]
     pub ext3: f32,
 }
 
@@ -108,6 +111,7 @@ impl Default for Position {
 
 #[cfg_attr(feature = "DTO", mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "PascalCase")]
 pub struct JointAngles {
     pub j1: f32,
     pub j2: f32,
@@ -115,8 +119,11 @@ pub struct JointAngles {
     pub j4: f32,
     pub j5: f32,
     pub j6: f32,
+    #[serde(default)]
     pub j7: f32,
+    #[serde(default)]
     pub j8: f32,
+    #[serde(default)]
     pub j9: f32,
 }
 

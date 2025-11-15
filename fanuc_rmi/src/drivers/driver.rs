@@ -143,7 +143,7 @@ impl FanucDriver {
         let read_half = Arc::new(Mutex::new(read_half));
         let write_half = Arc::new(Mutex::new(write_half));
         let (message_channel, _rx) = broadcast::channel(100);
-        let (response_tx, response_rx) = broadcast::channel(100);  // Keep the receiver
+        let (response_tx, _response_rx) = broadcast::channel(100);
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(1000); //FIXME: there isnt a system on meteorite monitoring number of packets sent
         let next_available_sequence_number = Arc::new(std::sync::Mutex::new(1));
 
@@ -153,14 +153,6 @@ impl FanucDriver {
         let return_info_rx = completed_packet_tx.subscribe();
         let return_info = completed_packet_tx.subscribe();
         let completed_packet_channel = Arc::new(Mutex::new(return_info_rx));
-
-        // Spawn a task to keep the response channel open
-        tokio::spawn(async move {
-            let mut rx = response_rx;
-            while let Ok(_) = rx.recv().await {
-                // Just consume messages to keep the channel open
-            }
-        });
 
         let driver = Self {
             config,
@@ -464,51 +456,54 @@ impl FanucDriver {
         completed_tx: &broadcast::Sender<CompletedPacketReturnInfo>,
     ) -> Result<(), FrcError> {
         self.log_message(format!("received: {}", line)).await;
-        if let Ok(packet) = serde_json::from_str::<ResponsePacket>(&line) {
-            // Send the response to the response_channel for all responses
-            if let Err(e) = self.response_tx.send(packet.clone()) {
-                self.log_message(format!("Failed to send to response channel: {}", e))
+        match serde_json::from_str::<ResponsePacket>(&line) {
+            Ok(packet) => {
+                // Send the response to the response_channel for all responses
+                if let Err(e) = self.response_tx.send(packet.clone()) {
+                    self.log_message(format!("Failed to send to response channel: {}", e))
+                        .await;
+                    info!(
+                        "Failed to send message to response channel {:?}: {:?}",
+                        packet.clone(),
+                        e
+                    );
+                } else {
+                    self.log_message(format!(
+                        "Sent set response to bevy backend: {:?}",
+                        packet.clone()
+                    ))
                     .await;
-                info!(
-                    "Failed to send message to response channel {:?}: {:?}",
-                    packet.clone(),
-                    e
-                );
-            } else {
-                self.log_message(format!(
-                    "Sent set response to bevy backend: {:?}",
-                    packet.clone()
-                ))
-                .await;
-                debug!("Sent message to response channel: {:?}", packet.clone())
-            }
+                    debug!("Sent message to response channel: {:?}", packet.clone())
+                }
 
-            match packet {
-                ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_)) => {
-                    self.log_message("Disconnect packet").await;
-                    let mut conn = self.connected.lock().await;
-                    *conn = false;
-                    return Ok(());
-                }
-                ResponsePacket::InstructionResponse(pkt) => {
-                    let info = CompletedPacketReturnInfo {
-                        sequence_id: pkt.get_sequence_id(),
-                        error_id: pkt.get_error_id(),
-                    };
-                    if let Err(e) = completed_tx.send(info) {
-                        self.log_message(format!("Send error: {}", e)).await;
+                match packet {
+                    ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_)) => {
+                        self.log_message("Disconnect packet").await;
+                        let mut conn = self.connected.lock().await;
+                        *conn = false;
+                        return Ok(());
                     }
+                    ResponsePacket::InstructionResponse(pkt) => {
+                        let info = CompletedPacketReturnInfo {
+                            sequence_id: pkt.get_sequence_id(),
+                            error_id: pkt.get_error_id(),
+                        };
+                        if let Err(e) = completed_tx.send(info) {
+                            self.log_message(format!("Send error: {}", e)).await;
+                        }
+                    }
+                    ResponsePacket::CommandResponse(CommandResponse::FrcSetOverRide(
+                        frc_set_override_response,
+                    )) => {
+                        info!("Got set override response: {:?}", frc_set_override_response);
+                    }
+                    // handle other variants similarly...
+                    _ => {}
                 }
-                ResponsePacket::CommandResponse(CommandResponse::FrcSetOverRide(
-                    frc_set_override_response,
-                )) => {
-                    info!("Got set override response: {:?}", frc_set_override_response);
-                }
-                // handle other variants similarly...
-                _ => {}
             }
-        } else {
-            self.log_message(format!("Invalid JSON: {}", line)).await;
+            Err(e) => {
+                self.log_message(format!("Invalid JSON ({}): {}", e, line)).await;
+            }
         }
         Ok(())
     }

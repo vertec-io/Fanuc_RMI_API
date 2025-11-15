@@ -1,12 +1,57 @@
 use serde_json::json;
 use std::error::Error;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use tokio::time::sleep;
-use tracing::info;
+
+mod kinematics;
+use kinematics::CRXKinematics;
+
+// Simulated robot state
+#[derive(Clone, Debug)]
+struct RobotState {
+    joint_angles: [f32; 6],
+    cartesian_position: [f32; 3],
+    cartesian_orientation: [f32; 3],
+    kinematics: CRXKinematics,
+}
+
+impl Default for RobotState {
+    fn default() -> Self {
+        let kinematics = CRXKinematics::default();
+        // Start with a better initial configuration:
+        // J2 = 45° (shoulder up), J3 = -90° (elbow bent)
+        // This places the end effector at a comfortable mid-workspace position
+        let j2_deg: f64 = 45.0;
+        let j3_deg: f64 = -90.0;
+        let joints_f64 = [
+            0.0,                      // J1 = 0° (facing forward)
+            j2_deg.to_radians(),      // J2 = 45° (shoulder up)
+            j3_deg.to_radians(),      // J3 = -90° (elbow bent)
+            0.0,                      // J4 = 0°
+            0.0,                      // J5 = 0°
+            0.0,                      // J6 = 0°
+        ];
+        let (pos, ori) = kinematics.forward_kinematics(&joints_f64);
+
+        // Initial configuration: J2=45°, J3=-90° for mid-workspace position
+
+        Self {
+            joint_angles: [
+                joints_f64[0] as f32,
+                joints_f64[1] as f32,
+                joints_f64[2] as f32,
+                joints_f64[3] as f32,
+                joints_f64[4] as f32,
+                joints_f64[5] as f32,
+            ],
+            cartesian_position: [pos[0] as f32, pos[1] as f32, pos[2] as f32],
+            cartesian_orientation: [ori[0] as f32, ori[1] as f32, ori[2] as f32],
+            kinematics,
+        }
+    }
+}
 
 // #[derive(Serialize, Deserialize, Debug)]
 // struct ConnectResponse {
@@ -34,8 +79,6 @@ async fn handle_client(
     }
 
     let request = String::from_utf8_lossy(&buffer[..n]);
-    println!("Received on primary : {}", request);
-
     let request_json: serde_json::Value = serde_json::from_str(&request)?;
 
     let response_json = match request_json["Communication"].as_str() {
@@ -61,10 +104,8 @@ async fn handle_client(
 
     let response = serde_json::to_string(&response_json)? + "\r\n";
     socket.write_all(response.as_bytes()).await?;
-    println!("Sent: {}", response);
 
     if let Some(port) = response_json["PortNumber"].as_u64() {
-        println!("Port number for new connection: {}", port);
         return Ok(port as u16);
     }
 
@@ -73,6 +114,7 @@ async fn handle_client(
 
 async fn handle_secondary_client(
     mut socket: TcpStream,
+    robot_state: Arc<Mutex<RobotState>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut seq: u32 = 0;
     let mut buffer = vec![0; 1024];
@@ -88,7 +130,6 @@ async fn handle_secondary_client(
         };
 
         if n == 0 {
-            println!("Client disconnected");
             break;
         }
 
@@ -102,8 +143,6 @@ async fn handle_secondary_client(
             let request = &request[..request.len() - 1];
 
             let request_str = String::from_utf8_lossy(request);
-            println!("Received on secondary port: {}", request_str);
-
 
             let request_json: serde_json::Value = match serde_json::from_str(&request_str) {
                 Ok(json) => json,
@@ -120,7 +159,7 @@ async fn handle_secondary_client(
                     "GroupMask": 1
                 }),
                 Some("FRC_GetStatus") => json!({
-                    "Command": "FRC_Get_Status",
+                    "Command": "FRC_GetStatus",
                     "ErrorID": 0,
                     "ServoReady": 1,
                     "TPMode": 1,
@@ -131,6 +170,48 @@ async fn handle_secondary_client(
                     "NextSequenceID": 3,
                     "NumberUFrame": 0
                 }),
+                Some("FRC_ReadJointAngles") => {
+                    let state = robot_state.lock().await;
+                    json!({
+                        "Command": "FRC_ReadJointAngles",
+                        "ErrorID": 0,
+                        "TimeTag": 0,
+                        "JointAngles": {
+                            "J1": state.joint_angles[0],
+                            "J2": state.joint_angles[1],
+                            "J3": state.joint_angles[2],
+                            "J4": state.joint_angles[3],
+                            "J5": state.joint_angles[4],
+                            "J6": state.joint_angles[5],
+                        },
+                        "Group": 1
+                    })
+                },
+                Some("FRC_ReadCartesianPosition") => {
+                    let state = robot_state.lock().await;
+                    json!({
+                        "Command": "FRC_ReadCartesianPosition",
+                        "ErrorID": 0,
+                        "TimeTag": 0,
+                        "Configuration": {
+                            "F": 0,
+                            "U": 0,
+                            "T": 0,
+                            "B1": 0,
+                            "B2": 0,
+                            "B3": 0,
+                        },
+                        "Position": {
+                            "X": state.cartesian_position[0],
+                            "Y": state.cartesian_position[1],
+                            "Z": state.cartesian_position[2],
+                            "W": state.cartesian_orientation[0],
+                            "P": state.cartesian_orientation[1],
+                            "R": state.cartesian_orientation[2],
+                        },
+                        "Group": 1
+                    })
+                },
                 Some("FRC_LinearMotion") => json!({
                     "Status": "Motion started"
                 }),
@@ -142,13 +223,10 @@ async fn handle_secondary_client(
                     "Command": "FRC_Reset",
                     "ErrorID": 0,
                 }),
-                Some("FRC_SetOverRide") => {
-                    info!("Received on secondary port: {}", request_str);
-                    json!({
-                        "Command": "FRC_SetOverride",
-                        "ErrorID": 0,
-                    })
-                }
+                Some("FRC_SetOverRide") => json!({
+                    "Command": "FRC_SetOverRide",
+                    "ErrorID": 0,
+                }),
                 _ => json!({}),
             };
 
@@ -166,37 +244,80 @@ async fn handle_secondary_client(
                     "ErrorID": 0,
                     "SequenceID": seq,
                 }),
-                Some("FRC_LinearRelative") => json!({
-                    "Instruction": "FRC_LinearRelative",
-                    "ErrorID": 0,
-                    "SequenceID": seq
-                }),
+                Some("FRC_LinearRelative") => {
+                    // Parse the Position from the instruction
+                    if let Some(position) = request_json.get("Position") {
+                        let dx = position["X"].as_f64().unwrap_or(0.0);
+                        let dy = position["Y"].as_f64().unwrap_or(0.0);
+                        let dz = position["Z"].as_f64().unwrap_or(0.0);
+
+                        // Update robot state with relative movement
+                        let mut state = robot_state.lock().await;
+
+                        // Update Cartesian position
+                        state.cartesian_position[0] += dx as f32;
+                        state.cartesian_position[1] += dy as f32;
+                        state.cartesian_position[2] += dz as f32;
+
+                        // Calculate joint angles using inverse kinematics
+                        let target_pos = [
+                            state.cartesian_position[0] as f64,
+                            state.cartesian_position[1] as f64,
+                            state.cartesian_position[2] as f64,
+                        ];
+
+                        let current_joints = [
+                            state.joint_angles[0] as f64,
+                            state.joint_angles[1] as f64,
+                            state.joint_angles[2] as f64,
+                            state.joint_angles[3] as f64,
+                            state.joint_angles[4] as f64,
+                            state.joint_angles[5] as f64,
+                        ];
+
+                        let target_ori = Some([
+                            state.cartesian_orientation[0] as f64,
+                            state.cartesian_orientation[1] as f64,
+                            state.cartesian_orientation[2] as f64,
+                        ]);
+
+                        if let Some(new_joints) = state.kinematics.inverse_kinematics(
+                            &target_pos,
+                            target_ori.as_ref(),
+                            &current_joints,
+                        ) {
+                            // Update joint angles
+                            state.joint_angles[0] = new_joints[0] as f32;
+                            state.joint_angles[1] = new_joints[1] as f32;
+                            state.joint_angles[2] = new_joints[2] as f32;
+                            state.joint_angles[3] = new_joints[3] as f32;
+                            state.joint_angles[4] = new_joints[4] as f32;
+                            state.joint_angles[5] = new_joints[5] as f32;
+                        } else {
+                            eprintln!("WARNING: IK solution not found for target position");
+                        }
+                    }
+
+                    json!({
+                        "Instruction": "FRC_LinearRelative",
+                        "ErrorID": 0,
+                        "SequenceID": seq
+                    })
+                },
                 _ => response_json,
             };
-            // let delimiter: String = "\r\n".to_string();
             let response = serde_json::to_string(&response_json)? + "\r\n";
             socket.write_all(response.as_bytes()).await?;
-            // println!("Sent: {}", response);
             seq += 1;
-            sleep(Duration::from_millis(100)).await;
         }
     }
 
     Ok(())
 }
 
-async fn start_secondary_server(port: u16) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let addr = format!("0.0.0.0:{}", port);
-    // let listener = TcpListener::bind(&addr).await;
-    let listener = match TcpListener::bind(&addr).await {
-        Ok(listener) => listener,
-        Err(e) => {
-            eprintln!("Failed to bind to address {}: {}", addr, e);
-            return Err(Box::new(e));
-        }
-    };
-
-    println!("Secondary server listening on port {}", port);
+async fn start_secondary_server_with_listener(_port: u16, listener: TcpListener) -> Result<(), Box<dyn Error + Send + Sync>> {
+    // Create shared robot state for this connection
+    let robot_state = Arc::new(Mutex::new(RobotState::default()));
 
     loop {
         let (socket, _) = match listener.accept().await {
@@ -207,8 +328,9 @@ async fn start_secondary_server(port: u16) -> Result<(), Box<dyn Error + Send + 
             }
         };
 
+        let robot_state_clone = Arc::clone(&robot_state);
         tokio::spawn(async move {
-            if let Err(e) = handle_secondary_client(socket).await {
+            if let Err(e) = handle_secondary_client(socket, robot_state_clone).await {
                 eprintln!("Error handling secondary client: {:?}", e);
             }
         });
@@ -218,7 +340,6 @@ async fn start_secondary_server(port: u16) -> Result<(), Box<dyn Error + Send + 
 async fn start_server(port: u16) -> Result<(), Box<dyn Error + Send + Sync>> {
     let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr).await?;
-    println!("Server listening on port {}", port);
 
     let new_port = Arc::new(Mutex::new(port + 1));
 
@@ -235,8 +356,17 @@ async fn start_server(port: u16) -> Result<(), Box<dyn Error + Send + Sync>> {
 
         match handle_client(socket, new_port).await {
             Ok(port) if port != 0 => {
-                println!("Starting secondary server on port {}", port);
-                tokio::spawn(start_secondary_server(port));
+                // Start the secondary server and wait for it to be ready before continuing
+                // This ensures the server is listening before the client tries to connect
+                let secondary_addr = format!("0.0.0.0:{}", port);
+                match TcpListener::bind(&secondary_addr).await {
+                    Ok(secondary_listener) => {
+                        tokio::spawn(async move {
+                            start_secondary_server_with_listener(port, secondary_listener).await
+                        });
+                    }
+                    Err(e) => eprintln!("Failed to bind secondary server on port {}: {:?}", port, e),
+                }
             }
             Ok(_) => {}
             Err(e) => eprintln!("Failed to handle client: {:?}", e),
