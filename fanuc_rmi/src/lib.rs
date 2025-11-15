@@ -128,6 +128,87 @@ pub struct JointAngles {
 }
 
 
+/// Represents the termination type for robot motion instructions.
+///
+/// The termination type controls how the robot behaves when reaching the end of a motion instruction,
+/// particularly how it transitions between consecutive moves.
+///
+/// # Variants
+///
+/// * `FINE` - Robot comes to a complete stop at the target position (precise positioning)
+/// * `CNT` - Continuous motion that blends smoothly into the next move (corner rounding)
+/// * `CR` - Corner rounding (requires Advanced Constant Path option)
+///
+/// # TermValue (CNT Smoothness)
+///
+/// When using `CNT` termination type, the `term_value` field (1-100) controls the corner blending behavior:
+///
+/// * **CNT100** - Maximum smoothness, largest corner radius, minimal slowdown
+///   - Robot maintains high speed through corners
+///   - Larger deviation from programmed path at corners
+///   - Best for high-speed operations where precision at corners is less critical
+///
+/// * **CNT50** - Medium blending
+///   - Balanced between speed and accuracy
+///   - Moderate corner radius
+///
+/// * **CNT1** - Tight corners, robot slows down significantly
+///   - Robot stays very close to programmed path
+///   - More deceleration/acceleration at corners
+///   - Best when path accuracy is critical
+///
+/// # Important: CNT Motion Execution Behavior
+///
+/// **Critical Rule**: A motion instruction with CNT termination type **will not execute** until the
+/// next motion instruction arrives. This is because the robot controller needs to know the next move
+/// to plan the blending trajectory correctly.
+///
+/// **Implications**:
+/// - Always ensure the last motion instruction uses `FINE` termination type
+/// - If the last instruction is CNT, it will never execute (robot will wait indefinitely)
+/// - For RMI version 5+: Setting the `NoBlend` flag allows CNT moves to execute without waiting
+///
+/// # Buffer System
+///
+/// The FANUC RMI system has specific buffer limits:
+/// - **Ring Buffer Size**: 200 instructions maximum
+/// - **Concurrent Send Limit**: 8 instructions can be sent at a time
+/// - **Execution Dependency**: Instruction N+8 must wait for instruction N to complete before being accepted
+///
+/// When the 201st instruction is sent, it wraps around to the beginning of the ring buffer.
+///
+/// # Examples
+///
+/// ```rust
+/// use fanuc_rmi::{FrcLinearRelative, TermType, SpeedType, Position, Configuration};
+///
+/// // FINE termination - robot stops precisely at target
+/// let fine_move = FrcLinearRelative::new(
+///     1,
+///     Configuration::default(),
+///     Position { x: 100.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, e1: 0.0, e2: 0.0, e3: 0.0 },
+///     SpeedType::MMSec,
+///     50.0,
+///     TermType::FINE,
+///     1, // term_value ignored for FINE
+/// );
+///
+/// // CNT termination - smooth blending (requires next move to execute!)
+/// let cnt_move = FrcLinearRelative::new(
+///     2,
+///     Configuration::default(),
+///     Position { x: 200.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, e1: 0.0, e2: 0.0, e3: 0.0 },
+///     SpeedType::MMSec,
+///     50.0,
+///     TermType::CNT,
+///     100, // Maximum smoothness
+/// );
+/// ```
+///
+/// # See Also
+///
+/// * FANUC RMI Documentation Section 2.4: "TEACH PENDANT PROGRAM INSTRUCTION PACKETS"
+/// * Motion instruction packets: `FrcLinearRelative`, `FrcLinearMotion`, `FrcJointMotion`, etc.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum TermType {
     FINE,
