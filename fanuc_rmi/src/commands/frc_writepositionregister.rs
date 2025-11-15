@@ -7,7 +7,7 @@ pub struct FrcWritePositionRegister {
     #[serde(rename = "RegisterNumber")]
     pub register_number: u16,
     #[serde(rename = "Configuration")]
-    pub congifuration: Configuration,
+    pub configuration: Configuration,
     #[serde(rename = "Position")]
     pub position: Position,
     #[serde(rename = "Group")]
@@ -24,7 +24,7 @@ impl FrcWritePositionRegister{
             },
             register_number,
             position,
-            congifuration: configuration
+            configuration
         }
     }
 }

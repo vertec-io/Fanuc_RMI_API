@@ -60,9 +60,6 @@ async fn main() -> Result<(), FrcError > {
     };
 
 
-
-
-
     driver.abort();
     driver.disconnect().await;
     // this main needs to stay in scope long enough for the background threads to send the data. if it goes out of scope before then the background processes get terminated

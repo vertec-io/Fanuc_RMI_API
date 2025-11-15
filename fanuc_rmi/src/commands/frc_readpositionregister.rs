@@ -5,9 +5,9 @@ use crate::{Configuration, Position};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadPositionRegister {
     #[serde(rename = "Group")]
-    group: u8,
+    pub group: u8,
     #[serde(rename = "RegisterNumber")]
-    register_number: u16,
+    pub register_number: u16,
 }
 impl FrcReadPositionRegister{
     #[allow(unused)]

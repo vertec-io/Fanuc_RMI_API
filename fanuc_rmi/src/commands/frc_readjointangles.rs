@@ -5,7 +5,7 @@ use crate::JointAngles;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadJointAngles{
     #[serde(rename = "Group")]
-    group: u8,
+    pub group: u8,
 }
 
 impl FrcReadJointAngles{
@@ -22,11 +22,11 @@ impl FrcReadJointAngles{
 
 #[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct FrcReadJointAnglesResponse {    
+pub struct FrcReadJointAnglesResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     #[serde(rename = "TimeTag")]
-    pub time_tag: i16,
+    pub time_tag: u32,
     #[serde(rename = "JointAngles")]
     pub joint_angles: JointAngles,
     #[serde(rename = "Group")]
