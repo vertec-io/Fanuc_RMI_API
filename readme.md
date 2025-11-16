@@ -22,6 +22,8 @@ Fanuc_RMI_API is a Rust-based library and example implementations designed to fa
 4. **Instructions**: Contains motion-related instructions such as linear and joint motions.
 5. **Packets**: Defines the structure for communication and instruction packets.
 6. **Errors**: Comprehensive error types and utilities for debugging and recovery.
+7. **Web App**: Modern web-based control interface with real-time monitoring (Leptos + WebSocket).
+8. **Web Server**: WebSocket server bridging FANUC driver and web clients.
 
 ---
 
@@ -89,10 +91,51 @@ cargo run --example main
 For testing and development without access to hardware, use the simulation module:
 
 ```bash
-cargo run --bin sim
+cargo run --bin sim -- --realtime
 ```
 
 This will launch a simulation server to emulate FANUC robot controller behavior.
+
+---
+
+## Web Application
+
+A modern web-based control interface for FANUC robots with real-time monitoring and jog controls.
+
+### Features
+- **Real-time Position Monitoring**: Live X, Y, Z coordinates via WebSocket
+- **Jog Controls**: Interactive buttons for precise robot movement
+- **Robot Status**: Servo ready, TP mode, motion status indicators
+- **Motion Log**: Real-time history of completed movements
+- **Clean UI**: Minimalistic dark mode design inspired by industrial control software
+
+### Quick Start
+
+1. **Start the simulator**:
+```bash
+cargo run -p sim -- --realtime
+```
+
+2. **Start the WebSocket server**:
+```bash
+cargo run -p web_server
+```
+
+3. **Build and serve the web app**:
+```bash
+# Build WASM
+cargo build --target wasm32-unknown-unknown --release -p web_app
+wasm-bindgen --target web --out-dir web_app/pkg --no-typescript target/wasm32-unknown-unknown/release/web_app.wasm
+
+# Serve
+cd web_app && python3 -m http.server 8000
+```
+
+4. **Open in browser**: `http://localhost:8000/`
+
+For detailed documentation, see:
+- [Web App README](web_app/README.md)
+- [Web Server README](web_server/README.md)
 
 ---
 

@@ -1,0 +1,20 @@
+[package]
+name = "web_server"
+version = "0.2.0"
+edition = "2021"
+
+[[bin]]
+name = "web_server"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+fanuc_rmi = { path = "../fanuc_rmi", features = ["DTO", "driver"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
