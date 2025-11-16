@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tokio::time::{sleep, interval};
+use tokio::time::{interval, sleep};
 use fanuc_rmi::{
     drivers::{FanucDriver, FanucDriverConfig},
     instructions::FrcLinearRelative,
@@ -34,7 +34,6 @@ struct JogConfig {
     jog_speed: f64,      // mm/s
     step_distance: f64,  // mm
     mode: MotionMode,
-    max_buffer_size: usize, // Maximum number of pending instructions (FANUC limit: 8)
 }
 
 impl Default for JogConfig {
@@ -43,7 +42,6 @@ impl Default for JogConfig {
             jog_speed: 10.0,
             step_distance: 1.0,
             mode: MotionMode::Step,
-            max_buffer_size: 6, // Conservative limit (FANUC allows 8, we use 6 for safety)
         }
     }
 }
@@ -62,7 +60,15 @@ async fn main() -> Result<(), FrcError> {
     println!("Connecting to robot at {}:{}...", driver_settings.addr, driver_settings.port);
     let driver = FanucDriver::connect(driver_settings.clone()).await?;
     sleep(Duration::from_millis(500)).await;
-    
+
+    // Subscribe to response channel and print responses
+    let mut response_rx = driver.response_tx.subscribe();
+    tokio::spawn(async move {
+        while let Ok(response) = response_rx.recv().await {
+            println!("📥 Response: {:?}", response);
+        }
+    });
+
     println!("Initializing robot...");
     driver.initialize();
     sleep(Duration::from_millis(500)).await;
@@ -257,7 +263,7 @@ async fn handle_jog_step(
     );
 
     let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(instruction));
-    driver.send_command(packet, PacketPriority::Immediate)
+    let _seq_id = driver.send_command(packet, PacketPriority::Immediate)
         .map_err(|e| format!("Failed to send step command: {}", e))?;
 
     println!("→ Step {} ({:.2} mm)", get_direction_name(key), config.step_distance);

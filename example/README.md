@@ -4,9 +4,20 @@ This directory contains example applications demonstrating how to use the FANUC 
 
 ## Examples
 
-### 1. Interactive Jogging Client (`jog_client.rs`)
+### 1. Interactive Jogging Client with TUI (`jog_client_tui.rs`) ⭐ **RECOMMENDED**
 
-An interactive terminal application for jogging a FANUC robot in real-time using keyboard controls.
+A modern terminal user interface (TUI) for jogging a FANUC robot with real-time response display.
+
+**Features:**
+- Clean split-screen interface
+- Real-time configuration display
+- Scrolling response log showing all packets from the simulator
+- No line breaks or scrolling - everything updates in place
+- Visual feedback for active jogs
+
+### 2. Interactive Jogging Client - Simple (`jog_client.rs`)
+
+A simpler command-line interface for jogging. Responses print to console mixed with prompts.
 
 ## Prerequisites
 
@@ -40,7 +51,18 @@ You should see:
 
 ### Step 2: Start the Jog Client
 
-Open a **second terminal** and run the jog client:
+Open a **second terminal** and run the **TUI jog client** (recommended):
+
+```bash
+cargo run -p example --bin jog_client_tui
+```
+
+You'll see a split-screen interface with:
+- **Top panel**: Configuration (speed, distance, mode, active jog, status)
+- **Middle panel**: Response log showing all packets from the simulator
+- **Bottom panel**: Help text with all available commands
+
+Or run the simple command-line version:
 
 ```bash
 cargo run -p example --bin jog_client
