@@ -75,40 +75,6 @@ impl Default for CRXKinematics {
 }
 
 impl CRXKinematics {
-    /// Create a 4x4 homogeneous transformation matrix using Modified DH parameters
-    ///
-    /// # Arguments
-    /// * `a` - Link length a_{i-1}
-    /// * `alpha` - Link twist α_{i-1}
-    /// * `theta` - Joint angle θ_i
-    /// * `r` - Link offset r_i
-    fn dh_transform(a: f64, alpha: f64, theta: f64, r: f64) -> [[f64; 4]; 4] {
-        let ct = theta.cos();
-        let st = theta.sin();
-        let ca = alpha.cos();
-        let sa = alpha.sin();
-
-        [
-            [ct, -st, 0.0, a],
-            [st * ca, ct * ca, -sa, -r * sa],
-            [st * sa, ct * sa, ca, r * ca],
-            [0.0, 0.0, 0.0, 1.0],
-        ]
-    }
-
-    /// Multiply two 4x4 homogeneous transformation matrices
-    fn mat_mult(a: &[[f64; 4]; 4], b: &[[f64; 4]; 4]) -> [[f64; 4]; 4] {
-        let mut result = [[0.0; 4]; 4];
-        for i in 0..4 {
-            for j in 0..4 {
-                for k in 0..4 {
-                    result[i][j] += a[i][k] * b[k][j];
-                }
-            }
-        }
-        result
-    }
-
     /// Forward kinematics: Calculate end effector pose from joint angles
     /// Implements a simplified approach compatible with the simulator
     ///
@@ -292,53 +258,6 @@ impl CRXKinematics {
         }
     }
 
-    /// Convert Cardan angles (W, P, R) to rotation matrix
-    /// Implements Equation (6) from the paper: R = Rz(R) * Ry(P) * Rx(W)
-    fn cardan_to_rotation_matrix(w: f64, p: f64, r: f64) -> [[f64; 3]; 3] {
-        let cw = w.cos();
-        let sw = w.sin();
-        let cp = p.cos();
-        let sp = p.sin();
-        let cr = r.cos();
-        let sr = r.sin();
-
-        [
-            [cr * cp, cr * sp * sw - sr * cw, cr * sp * cw + sr * sw],
-            [sr * cp, sr * sp * sw + cr * cw, sr * sp * cw - cr * sw],
-            [-sp, cp * sw, cp * cw],
-        ]
-    }
-
-    /// Extract 3x3 rotation matrix from 4x4 homogeneous transformation
-    fn extract_rotation(t: &[[f64; 4]; 4]) -> [[f64; 3]; 3] {
-        [
-            [t[0][0], t[0][1], t[0][2]],
-            [t[1][0], t[1][1], t[1][2]],
-            [t[2][0], t[2][1], t[2][2]],
-        ]
-    }
-
-    /// Transpose a 3x3 matrix
-    fn transpose_3x3(m: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
-        [
-            [m[0][0], m[1][0], m[2][0]],
-            [m[0][1], m[1][1], m[2][1]],
-            [m[0][2], m[1][2], m[2][2]],
-        ]
-    }
-
-    /// Multiply two 3x3 matrices
-    fn mult_3x3(a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
-        let mut result = [[0.0; 3]; 3];
-        for i in 0..3 {
-            for j in 0..3 {
-                for k in 0..3 {
-                    result[i][j] += a[i][k] * b[k][j];
-                }
-            }
-        }
-        result
-    }
 }
 
 #[cfg(test)]
