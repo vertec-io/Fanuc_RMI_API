@@ -2,9 +2,11 @@ use leptos::*;
 
 mod components;
 mod websocket;
+mod robot_models;
 
 use components::*;
 use websocket::WebSocketManager;
+pub use robot_models::RobotModel;
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -58,15 +60,18 @@ fn Header() -> impl IntoView {
                         <p class="text-[#888888] text-xs">"Real-time Robot Monitoring & Control"</p>
                     </div>
                 </div>
-                <div class="flex items-center space-x-2">
-                    <div class={move || if connected.get() {
-                        "w-2 h-2 bg-[#00d9ff] rounded-full animate-pulse"
-                    } else {
-                        "w-2 h-2 bg-[#666666] rounded-full"
-                    }}></div>
-                    <span class="text-[#cccccc] text-xs font-medium">
-                        {move || if connected.get() { "Connected" } else { "Disconnected" }}
-                    </span>
+                <div class="flex items-center space-x-4">
+                    <Settings/>
+                    <div class="flex items-center space-x-2">
+                        <div class={move || if connected.get() {
+                            "w-2 h-2 bg-[#00d9ff] rounded-full animate-pulse"
+                        } else {
+                            "w-2 h-2 bg-[#666666] rounded-full"
+                        }}></div>
+                        <span class="text-[#cccccc] text-xs font-medium">
+                            {move || if connected.get() { "Connected" } else { "Disconnected" }}
+                        </span>
+                    </div>
                 </div>
             </div>
         </header>

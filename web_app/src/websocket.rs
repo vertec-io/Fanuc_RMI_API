@@ -17,6 +17,7 @@ pub struct WebSocketManager {
     pub error_log: ReadSignal<Vec<String>>,
     set_error_log: WriteSignal<Vec<String>>,
     ws: StoredValue<Option<WebSocket>>,
+    ws_url: StoredValue<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -34,6 +35,7 @@ impl WebSocketManager {
         let (motion_log, set_motion_log) = create_signal(Vec::new());
         let (error_log, set_error_log) = create_signal(Vec::new());
         let ws = store_value(None);
+        let ws_url = store_value("ws://127.0.0.1:9000".to_string());
 
         let manager = Self {
             connected,
@@ -47,6 +49,7 @@ impl WebSocketManager {
             error_log,
             set_error_log,
             ws,
+            ws_url,
         };
 
         manager.connect();
@@ -54,7 +57,14 @@ impl WebSocketManager {
     }
 
     fn connect(&self) {
-        let ws = WebSocket::new("ws://127.0.0.1:9000").expect("Failed to create WebSocket");
+        let url = self.ws_url.get_value();
+        let ws = match WebSocket::new(&url) {
+            Ok(ws) => ws,
+            Err(e) => {
+                log::error!("Failed to create WebSocket: {:?}", e);
+                return;
+            }
+        };
         ws.set_binary_type(BinaryType::Arraybuffer);
 
         let set_connected = self.set_connected;
@@ -144,6 +154,26 @@ impl WebSocketManager {
                 let _ = ws.send_with_u8_array(&binary);
             }
         }
+    }
+
+    pub fn reconnect(&self, new_url: &str) {
+        // Close existing connection
+        if let Some(ws) = self.ws.get_value() {
+            let _ = ws.close();
+        }
+
+        // Update URL
+        self.ws_url.set_value(new_url.to_string());
+
+        // Set disconnected
+        self.set_connected.set(false);
+
+        // Clear data
+        self.set_position.set(None);
+        self.set_status.set(None);
+
+        // Reconnect
+        self.connect();
     }
 }
 
