@@ -86,21 +86,70 @@ Returns all valid IK solutions (typically 2-4 solutions for the simplified model
 - **Elbow Down**: J3 < 0
 - **Base Rotation**: J1 and J1 ± 180°
 
-## Research Paper vs. Implementation
+## Implementation Status
 
-### Full Geometric Approach (Paper)
+### ✅ Implemented Features
 
-The research paper describes a 7-step geometric approach that can find 0, 4, 8, 12, or 16 solutions:
+#### 1. **Helper Functions for DHm Transformations**
+- `dh_transform()` - Create 4x4 homogeneous transformation matrices
+- `mat_mult()` - Multiply transformation matrices
+- `extract_rotation()` - Extract 3x3 rotation from 4x4 transformation
+- `transpose_3x3()` - Transpose 3x3 matrices
+- `mult_3x3()` - Multiply 3x3 matrices
+- `cardan_to_rotation_matrix()` - Convert Cardan angles (W, P, R) to rotation matrix
+- `rotation_matrix_to_cardan()` - Extract Cardan angles from rotation matrix
 
-1. **Step 1**: Position points O6 and O5 in frame R0
-2. **Step 2**: Position candidate-points O4 in frame R0
-3. **Step 3**: Position candidate-points O3 in frame R0
-4. **Step 4**: Perpendicularity of O3O4 and O4O5 vectors
-5. **Step 5**: Determination of J1, J2, J3
-6. **Step 6**: Determination of J4, J5, J6
-7. **Step 7**: Finding all IK solutions by dual property
+#### 2. **Simplified Geometric IK Solver** (Production-Ready)
+- `inverse_kinematics()` - Returns single best solution closest to current configuration
+- `inverse_kinematics_geometric()` - Returns all 2-4 solutions (elbow up/down, base rotation)
+- Achieves sub-millimeter accuracy
+- Fast and reliable for real-time control
+- Used by the simulator and web application
 
-### Simplified Implementation (Current)
+#### 3. **Full 7-Step IK Solver Foundation** (Work in Progress)
+- `inverse_kinematics_full()` - Framework for complete algorithm
+- `solve_j2_j3()` - Solve for J2 and J3 with posture parameter
+- `solve_wrist_angles()` - Solve for J4, J5, J6 from rotation matrices
+- `compute_dual_solution()` - Generate dual solutions
+- `validate_solution()` - Verify solutions with forward kinematics
+
+### 🚧 Full Geometric Approach (From Research Paper)
+
+The research paper describes a complete 7-step geometric approach that can find 0, 4, 8, 12, or 16 solutions:
+
+#### **Step 1**: Position points O6 and O5 in frame R0
+- ✅ Implemented: O6 is the TCP position (given)
+- ✅ Implemented: O5 computed from O6 using r6 offset and orientation
+
+#### **Step 2**: Position candidate-points O4 in frame R0
+- 🚧 Partial: O4 lies on sphere centered at O5 with radius |r5|
+- ❌ TODO: Find all candidate O4 points satisfying geometric constraints
+- ❌ TODO: Implement perpendicularity constraints
+
+#### **Step 3**: Determine J1 values
+- ✅ Implemented: Primary J1 solutions from O5 projection
+- ❌ TODO: Additional J1 solutions from geometric analysis
+- ❌ TODO: Up to 4 J1 solutions possible
+
+#### **Step 4**: Determine J2 and J3 with posture parameter δ
+- ✅ Implemented: Basic J2/J3 solver with UP/DW posture
+- ❌ TODO: Refine O4 position calculation
+- ❌ TODO: Proper handling of all geometric cases
+
+#### **Step 5**: Determine J4 value
+- ✅ Implemented: J4 from rotation matrix decomposition
+- ❌ TODO: Handle all singularity cases
+
+#### **Step 6**: Determine J5 and J6 values
+- ✅ Implemented: J5/J6 from R36 matrix
+- ❌ TODO: All solution branches for wrist singularities
+
+#### **Step 7**: Apply dual property for all solutions
+- ✅ Implemented: Basic dual solution generation
+- ❌ TODO: Verify dual property for all 16 solutions
+- ❌ TODO: Proper dual transformation for CRX geometry
+
+### Simplified Implementation (Current Production Use)
 
 The current implementation uses a simplified geometric approach that:
 - Provides 2-4 solutions (elbow up/down, base rotation)
@@ -113,15 +162,67 @@ The current implementation uses a simplified geometric approach that:
 - Position: < 1 mm error
 - Orientation: Simplified (suitable for most applications)
 
-## Future Enhancements
+## Future Work: Complete 7-Step Algorithm
 
-To implement the full geometric approach from the paper:
+### Phase 1: Geometric Constraint Implementation
+1. **Candidate Point O4 Generation**
+   - Implement sphere intersection for O4 candidates
+   - Apply perpendicularity constraints between O3O4 and O4O5
+   - Find all valid O4 positions (up to 4)
 
-1. **Complete DHm Transformation**: Implement full 4x4 homogeneous transformation matrices
-2. **Rotation Matrix Decomposition**: Proper Cardan angle extraction from rotation matrices
-3. **All 16 Solutions**: Implement Steps 2-7 to find all possible configurations
-4. **Dual Property**: Apply Equation (23) to generate dual solutions
-5. **Workspace Analysis**: Characterize domains with specific numbers of solutions
+2. **Complete J1 Solution Set**
+   - Geometric analysis for all J1 candidates
+   - Handle special cases (singularities, workspace boundaries)
+   - Validate against paper's examples
+
+### Phase 2: Wrist Kinematics Refinement
+3. **Enhanced Wrist Angle Solver**
+   - Complete R36 decomposition for all cases
+   - Handle all singularity configurations
+   - Multiple J5 solutions (±acos)
+
+4. **Dual Solution Property**
+   - Verify dual transformation for CRX geometry
+   - Ensure all 16 solutions are found
+   - Validate dual pairs give identical poses
+
+### Phase 3: Validation and Testing
+5. **Test Against Paper Examples**
+   - 8-solution case (Section 3.1)
+   - 12-solution case (Section 3.2)
+   - 16-solution case (Section 3.3)
+   - Verify sub-millidegree accuracy
+
+6. **Workspace Analysis**
+   - Characterize workspace domains by solution count
+   - Define boundaries between 4, 8, 12, 16 solution regions
+   - Implement aspect changes and transitions
+
+### Phase 4: Optimization
+7. **Performance Optimization**
+   - Minimize redundant calculations
+   - Cache transformation matrices
+   - Parallel solution validation
+
+8. **Solution Selection Logic**
+   - Minimum joint motion criterion
+   - Joint limit avoidance
+   - Singularity avoidance
+   - User-defined preferences
+
+## Current Recommendation
+
+**For Production Use**: Use `inverse_kinematics()` or `inverse_kinematics_geometric()`
+- ✅ Proven accuracy (sub-millimeter)
+- ✅ Fast and reliable
+- ✅ Finds 2-4 solutions (sufficient for most applications)
+- ✅ Well-tested and validated
+
+**For Research/Development**: Use `inverse_kinematics_full()`
+- 🚧 Work in progress
+- 🚧 Foundation in place, needs geometric refinement
+- 🚧 Will eventually find all 16 solutions
+- 🚧 Requires additional development and testing
 
 ## Testing
 
@@ -131,9 +232,11 @@ cargo test -p sim --lib kinematics -- --nocapture
 ```
 
 **Test Coverage:**
-- Forward kinematics at zero position
-- Inverse kinematics roundtrip (FK → IK → FK)
-- Multiple IK solutions verification
+- ✅ Forward kinematics at zero position
+- ✅ Inverse kinematics roundtrip (FK → IK → FK)
+- ✅ Multiple IK solutions verification (2-4 solutions)
+- ✅ Full IK solver framework (foundation tests)
+- ✅ Both CRX-10iA and CRX-30iA robot models
 
 ## References
 

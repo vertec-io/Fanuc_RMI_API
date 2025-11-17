@@ -7,6 +7,8 @@ use tokio::sync::Mutex;
 use tokio::time::Duration;
 
 mod kinematics;
+mod robot_config;
+
 use kinematics::CRXKinematics;
 
 /// Simulator execution mode
