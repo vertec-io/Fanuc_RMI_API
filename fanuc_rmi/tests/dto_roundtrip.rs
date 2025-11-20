@@ -5,7 +5,17 @@ use fanuc_rmi::{dto, protocol};
 #[test]
 fn roundtrip_simple_structs() {
     let pos = dto::Position { x: 1.0, y: 2.0, z: 3.0, w: 4.0, p: 5.0, r: 6.0, ext1: 0.1, ext2: 0.2, ext3: 0.3 };
-    let conf = dto::Configuration { front: 1, up: 1, left: 1, turn4: 0, turn5: 0, turn6: 0 };
+    let conf = dto::Configuration {
+        u_tool_number: 1,
+        u_frame_number: 1,
+        front: 1,
+        up: 1,
+        left: 1,
+        flip: 0,
+        turn4: 0,
+        turn5: 0,
+        turn6: 0
+    };
 
     // Serialize with bincode and deserialize
     let enc = bincode::serialize(&pos).unwrap();
@@ -20,7 +30,17 @@ fn roundtrip_simple_structs() {
 #[test]
 fn roundtrip_read_cartesian_response() {
     let pos = dto::Position { x: 1.0, y: 2.0, z: 3.0, w: 4.0, p: 5.0, r: 6.0, ext1: 0.0, ext2: 0.0, ext3: 0.0 };
-    let conf = dto::Configuration { front: 1, up: 1, left: 1, turn4: 0, turn5: 0, turn6: 0 };
+    let conf = dto::Configuration {
+        u_tool_number: 1,
+        u_frame_number: 1,
+        front: 1,
+        up: 1,
+        left: 1,
+        flip: 0,
+        turn4: 0,
+        turn5: 0,
+        turn6: 0
+    };
     let resp = dto::FrcReadCartesianPositionResponse { error_id: 0, time_tag: 123, config: conf, pos, group: 1 };
 
     let enc = bincode::serialize(&resp).unwrap();

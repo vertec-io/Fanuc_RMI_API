@@ -45,33 +45,79 @@ pub struct FrameData {
     pub r: f32,
 }
 
+/// Robot configuration data structure
+///
+/// Corresponds to the "Configuration" object in FANUC RMI JSON packets.
+/// Reference: FANUC B-84184EN_02 specification
+///
+/// # JSON Format
+/// ```json
+/// "Configuration": {
+///     "UToolNumber": byteValue1,
+///     "UFrameNumber": byteValue2,
+///     "Front": byteValue3,
+///     "Up": byteValue4,
+///     "Left": byteValue5,
+///     "Flip": byteValue6,
+///     "Turn4": byteValue7,
+///     "Turn5": byteValue8,
+///     "Turn6": byteValue9
+/// }
+/// ```
 #[cfg_attr(feature = "DTO", mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
 pub struct Configuration {
-    #[serde(rename = "F")]
+    /// User Tool Number (1-based index)
+    /// Corresponds to "UToolNumber" in FANUC JSON
+    pub u_tool_number: u8,
+
+    /// User Frame Number (1-based index)
+    /// Corresponds to "UFrameNumber" in FANUC JSON
+    pub u_frame_number: u8,
+
+    /// Front configuration bit
+    /// Corresponds to "Front" in FANUC JSON
     pub front: u8,
-    #[serde(rename = "U")]
+
+    /// Up configuration bit
+    /// Corresponds to "Up" in FANUC JSON
     pub up: u8,
-    #[serde(rename = "T")]
+
+    /// Left configuration bit
+    /// Corresponds to "Left" in FANUC JSON
     pub left: u8,
-    #[serde(rename = "B1")]
+
+    /// Flip configuration bit
+    /// Corresponds to "Flip" in FANUC JSON
+    pub flip: u8,
+
+    /// Turn4 configuration bit (wrist axis 1)
+    /// Corresponds to "Turn4" in FANUC JSON
     pub turn4: u8,
-    #[serde(rename = "B2")]
+
+    /// Turn5 configuration bit (wrist axis 2)
+    /// Corresponds to "Turn5" in FANUC JSON
     pub turn5: u8,
-    #[serde(rename = "B3")]
+
+    /// Turn6 configuration bit (wrist axis 3)
+    /// Corresponds to "Turn6" in FANUC JSON
     pub turn6: u8,
 }
 
-impl Default for Configuration{
+impl Default for Configuration {
     fn default() -> Self {
         Self {
-               front: 1,
-               up: 1,
-               left: 1,
-               turn4: 0,
-               turn5: 0,
-               turn6: 0,
-            }
+            u_tool_number: 1,
+            u_frame_number: 1,
+            front: 1,
+            up: 1,
+            left: 1,
+            flip: 0,
+            turn4: 0,
+            turn5: 0,
+            turn6: 0,
+        }
     }
 }
 
@@ -180,13 +226,13 @@ pub struct JointAngles {
 /// # Examples
 ///
 /// ```rust
-/// use fanuc_rmi::{FrcLinearRelative, TermType, SpeedType, Position, Configuration};
+/// use fanuc_rmi::{instructions::FrcLinearRelative, TermType, SpeedType, Position, Configuration};
 ///
 /// // FINE termination - robot stops precisely at target
 /// let fine_move = FrcLinearRelative::new(
 ///     1,
 ///     Configuration::default(),
-///     Position { x: 100.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, e1: 0.0, e2: 0.0, e3: 0.0 },
+///     Position { x: 100.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0 },
 ///     SpeedType::MMSec,
 ///     50.0,
 ///     TermType::FINE,
@@ -197,7 +243,7 @@ pub struct JointAngles {
 /// let cnt_move = FrcLinearRelative::new(
 ///     2,
 ///     Configuration::default(),
-///     Position { x: 200.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, e1: 0.0, e2: 0.0, e3: 0.0 },
+///     Position { x: 200.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0 },
 ///     SpeedType::MMSec,
 ///     50.0,
 ///     TermType::CNT,

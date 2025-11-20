@@ -13,9 +13,12 @@ pub fn JogControls() -> impl IntoView {
             FrcLinearRelative {
                 sequence_id: (js_sys::Date::now() as u32) % 1000000,
                 configuration: Configuration {
+                    u_tool_number: 1,
+                    u_frame_number: 1,
                     front: 1,
                     up: 1,
                     left: 0,
+                    flip: 0,
                     turn4: 0,
                     turn5: 0,
                     turn6: 0,
