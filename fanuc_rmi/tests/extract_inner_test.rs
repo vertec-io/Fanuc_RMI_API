@@ -49,6 +49,8 @@ fn test_command_response_into_inner() {
         single_step_mode: 0,
         number_utool: 1,
         number_uframe: 1,
+        next_sequence_id: 1,
+        override_value: 100,
     });
 
     // Test into_inner with correct type

@@ -28,7 +28,7 @@ impl Default for FrcInitialize {
 
 #[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct FrcInitializeResponse { 
+pub struct FrcInitializeResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     #[serde(rename = "GroupMask")]

@@ -281,6 +281,35 @@ Send order: 1 → 2 → 3  ✅ CONSECUTIVE!
 
 ---
 
+## Important Note: Commands vs Instructions
+
+**Question**: Does polling (FrcGetStatus, FrcReadCartesianPosition) increment sequence IDs?
+
+**Answer**: ✅ **NO** - Only Instructions have sequence IDs and increment the counter.
+
+The web server polls every 100ms with:
+- `FrcReadCartesianPosition` (Command)
+- `FrcGetStatus` (Command)
+
+These are **Commands**, not **Instructions**. The sequence ID assignment code correctly filters:
+
+```rust
+if let SendPacket::Instruction(ref mut instruction) = packet {
+    // Only Instructions enter this block
+    let current_id = { /* ... increment counter ... */ };
+    // Assign sequence ID to instruction
+}
+// Commands and Communications skip this block entirely
+```
+
+**SendPacket variants:**
+- `Communication` - No sequence ID (e.g., FrcConnect, FrcDisconnect)
+- `Command` - No sequence ID (e.g., FrcGetStatus, FrcReadCartesianPosition)
+- `Instruction` - Has sequence ID (e.g., FrcLinearRelative, FrcJointMotion)
+- `DriverCommand` - Internal only, no sequence ID
+
+**Result**: Polling Commands do NOT cause sequence ID gaps. ✅
+
 ## Testing Status
 
 ### Build Status ✅

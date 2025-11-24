@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 
 #[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct FrcGetStatusResponse { 
+pub struct FrcGetStatusResponse {
     // #[serde(rename = "Command")]
-    // pub command: Command,    
+    // pub command: Command,
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     #[serde(rename = "ServoReady")]
@@ -21,4 +21,8 @@ pub struct FrcGetStatusResponse {
     pub number_utool: i8,
     #[serde(rename = "NumberUFrame")]
     pub number_uframe: i8,
+    #[serde(rename = "NextSequenceID")]
+    pub next_sequence_id: u32,
+    #[serde(rename = "Override")]
+    pub override_value: u32,
 }

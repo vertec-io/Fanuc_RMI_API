@@ -132,6 +132,8 @@ impl WebSocketManager {
                         },
                         _ => {}
                     }
+                }else {
+                    log::error!("Failed to deserialize response:");
                 }
             }
         }) as Box<dyn FnMut(MessageEvent)>);

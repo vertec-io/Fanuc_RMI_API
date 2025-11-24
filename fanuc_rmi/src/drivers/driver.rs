@@ -533,6 +533,28 @@ impl FanucDriver {
                             self.log_message(format!("Send error: {}", e)).await;
                         }
                     }
+                    ResponsePacket::CommandResponse(CommandResponse::FrcGetStatus(status_response)) => {
+                        // Update sequence counter to match FANUC's NextSequenceID
+                        // Only update if we haven't initialized yet (counter is still at 1)
+                        let next_seq = status_response.next_sequence_id;
+                        let should_log = if let Ok(mut seq_id) = self.next_available_sequence_number.lock() {
+                            if *seq_id == 1 {
+                                *seq_id = next_seq;
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }; // MutexGuard dropped here
+
+                        if should_log {
+                            self.log_message(format!(
+                                "Initialized sequence counter to {} from FRC_GetStatus",
+                                next_seq
+                            )).await;
+                        }
+                    }
                     ResponsePacket::CommandResponse(CommandResponse::FrcSetOverRide(
                         frc_set_override_response,
                     )) => {
