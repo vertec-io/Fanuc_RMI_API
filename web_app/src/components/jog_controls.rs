@@ -11,7 +11,7 @@ pub fn JogControls() -> impl IntoView {
     let send_jog = move |dx: f32, dy: f32, dz: f32| {
         let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(
             FrcLinearRelative {
-                sequence_id: (js_sys::Date::now() as u32) % 1000000,
+                sequence_id: 0, // Will be assigned by driver
                 configuration: Configuration {
                     u_tool_number: 1,
                     u_frame_number: 1,

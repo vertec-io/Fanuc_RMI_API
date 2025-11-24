@@ -273,26 +273,26 @@ impl FanucDriver {
     ) -> Result<u32, String> {
         /*
         This is the method meteorite will use to send a command to the driver this is the abstraction layer that will be called to send a packet and will return a sequence id.
+
+        NOTE: For Instructions, sequence IDs are assigned later in send_queue_to_controller()
+        to ensure they're consecutive in send order, not queue insertion order.
+        This function returns 0 for Instructions as a placeholder.
         */
 
         let sender = self.queue_tx.clone();
 
-        let (packet_with_sequence, sequence) = self.give_sequence_id(packet)?;
         let driver_packet = DriverPacket {
             priority,
-            packet: packet_with_sequence,
+            packet,
         };
-        // let driver_packet2 = driver_packet.clone();
 
         if let Err(e) = sender.try_send(driver_packet) {
             println!("Failed to send packet: {}", e);
             return Err(format!("Failed to send packet: {}", e));
         } else {
-            // println!("sent packet to queue: {:?} ", driver_packet2);
-            return Ok(sequence);
+            // Return 0 as placeholder - actual sequence ID assigned at send time
+            return Ok(0);
         }
-
-        // sequence
     }
 
     //this is an async function that receives packets and yeets them to the controllor to run
@@ -362,7 +362,48 @@ impl FanucDriver {
 
             // Send packets with backpressure
             while in_flight < MAX_IN_FLIGHT && state == DriverState::Running {
-                if let Some(packet) = queue.pop_front() {
+                if let Some(mut packet) = queue.pop_front() {
+                    // Assign sequence ID right before sending (ensures consecutive IDs in send order)
+                    if let SendPacket::Instruction(ref mut instruction) = packet {
+                        let current_id = {
+                            // Lock, increment, and immediately drop the guard
+                            match self.next_available_sequence_number.lock() {
+                                Ok(mut sid) => {
+                                    let id = *sid;
+                                    *sid += 1;
+                                    id
+                                }
+                                Err(poisoned) => {
+                                    // Can't await here, so just log to stderr and break
+                                    eprintln!("Sequence ID mutex poisoned: {}", poisoned);
+                                    break;
+                                }
+                            }
+                        }; // MutexGuard dropped here
+
+                        // Assign sequence ID to instruction
+                        match instruction {
+                            Instruction::FrcWaitDIN(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcSetUFrame(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcSetUTool(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcWaitTime(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcSetPayLoad(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcCall(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcLinearMotion(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcLinearRelative(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcLinearRelativeJRep(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcJointMotion(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcJointRelative(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcCircularMotion(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcCircularRelative(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcJointMotionJRep(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcJointRelativeJRep(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcLinearMotionJRep(ref mut instr) => instr.sequence_id = current_id,
+                        }
+
+                        // println!("Assigned seq {} to instruction", current_id);
+                    }
+
                     match self.send_packet_to_controller(packet.clone()).await {
                         Err(e) => {
                             self.log_message(format!("Failed to send packet: {:?}", e))
@@ -508,9 +549,12 @@ impl FanucDriver {
         Ok(())
     }
 
+    // DEPRECATED: Sequence IDs are now assigned in send_queue_to_controller()
+    // This ensures consecutive sequence IDs in send order, not queue insertion order.
+    // Keeping this function for reference but it's no longer used.
+    #[allow(dead_code)]
     fn give_sequence_id(&self, mut packet: SendPacket) -> Result<(SendPacket, u32), String> {
         let sid = self.next_available_sequence_number.clone();
-        // let mut sid: Result<std::sync::MutexGuard<'_, u32>, std::sync::PoisonError<std::sync::MutexGuard<'_, u32>>> = sid.lock();
 
         let mut sid = match sid.lock() {
             Ok(guard) => guard,
@@ -518,7 +562,6 @@ impl FanucDriver {
         };
 
         let current_id = *sid;
-        // let current_id = 11;
 
         if let SendPacket::Instruction(ref mut instruction) = packet {
             match instruction {
