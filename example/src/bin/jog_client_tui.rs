@@ -591,14 +591,13 @@ async fn handle_key_event(
 }
 
 fn get_direction_vector(key: char, distance: f64) -> Position {
-    let dist = distance as f32;
     match key {
-        'k' => Position { z: dist, ..Default::default() },  // Up (+Z)
-        'j' => Position { z: -dist, ..Default::default() }, // Down (-Z)
-        'h' => Position { y: -dist, ..Default::default() }, // Left (-Y)
-        'l' => Position { y: dist, ..Default::default() },  // Right (+Y)
-        'f' => Position { x: dist, ..Default::default() },  // Forward (+X)
-        'b' => Position { x: -dist, ..Default::default() }, // Backward (-X)
+        'k' => Position { z: distance, ..Default::default() },  // Up (+Z)
+        'j' => Position { z: -distance, ..Default::default() }, // Down (-Z)
+        'h' => Position { y: -distance, ..Default::default() }, // Left (-Y)
+        'l' => Position { y: distance, ..Default::default() },  // Right (+Y)
+        'f' => Position { x: distance, ..Default::default() },  // Forward (+X)
+        'b' => Position { x: -distance, ..Default::default() }, // Backward (-X)
         _ => Position::default(),
     }
 }

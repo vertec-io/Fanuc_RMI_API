@@ -28,24 +28,54 @@ fn handle_response(response: CommandResponse) {
 
 ## Documentation Structure
 
-### Architecture
+### 📚 Core Documentation
+
+**Current & Active:**
+- **[Sequence ID Migration Guide](SEQUENCE_ID_MIGRATION_GUIDE.md)** - ⚠️ **IMPORTANT** - Migration guide for correlation ID system (v0.3.0+)
+- **[Position Precision Fix](POSITION_PRECISION_FIX.md)** - Detailed explanation of f32→f64 precision improvement
+- **[Position Precision Summary](POSITION_PRECISION_SUMMARY.md)** - Quick reference for position precision changes
+- **[Robot Configuration](ROBOT_CONFIGURATION.md)** - Supported robot models for the simluator and kinematic parameters
+- **[Correlation ID Implementation](CORRELATION_ID_IMPLEMENTATION_SUMMARY.md)** - Technical details of correlation ID system
+
+**Legacy/Historical:**
+- **[Implementation Summary](IMPLEMENTATION_SUMMARY.md)** - Historical implementation notes
+- **[Final Update Summary](FINAL_UPDATE_SUMMARY.md)** - Historical update notes
+
+### 🏗️ Architecture
 
 Understanding the core design and patterns:
 
 - **[Protocol and DTO System](architecture/protocol_dto_system.md)** - How protocol types and DTO types work together, what gets generated automatically, and when to use each
 - **[Message Relay Patterns](architecture/message_relay_patterns.md)** - Three-tier architecture for routing messages in your application
 
-### Examples
+### 📖 Examples
 
 Framework-agnostic code examples:
 
 - **[Basic Usage](examples/basic_usage.md)** - Pattern matching, ExtractInner trait, generic functions, network serialization
+- **[Correlation ID Usage](examples/correlation_id_usage.rs)** - Complete examples of all correlation ID patterns
 
-### Reference Implementations
+### 🔧 Reference Implementations
 
 Complete working examples for specific frameworks:
 
 - **[Bevy ECS Three-Tier Relay](reference_implementations/bevy_ecs_three_tier_relay.md)** - Complete reference implementation showing how to build a three-tier message relay system with dual internal/network buses using Bevy ECS
+
+### 📝 Release Notes
+
+- **[v0.3.0](releases/RELEASE_NOTES_v0.3.0.md)** - ExtractInner trait, DTO enums, comprehensive documentation
+- **[v0.2.0 Web App](releases/RELEASE_NOTES_v0.2.0_WEB_APP.md)** - Web application redesign with dark mode UI
+
+### 🔍 Historical Fixes
+
+Documentation of past issues and their solutions (for reference):
+
+- **[Configuration Fix](historical-fixes/CONFIGURATION_FIX_SUMMARY.md)** - Configuration struct compatibility fix
+- **[Sequence ID Fixes](historical-fixes/FINAL_SEQUENCE_ID_FIX.md)** - Complete sequence ID bug fixes (3 root causes)
+- **[Sequence ID Fix Summary](historical-fixes/SEQUENCE_ID_FIX_SUMMARY.md)** - Initial sequence ID investigation
+- **[Jog Functionality Fix](historical-fixes/JOG_FUNCTIONALITY_FIX.md)** - Simulator state tracking implementation
+- **[IK Implementation](historical-fixes/FULL_IK_IMPLEMENTATION_SUMMARY.md)** - 7-step geometric IK solver
+- **[Kinematics Update](historical-fixes/KINEMATICS_UPDATE_SUMMARY.md)** - CRX-10iA kinematics alignment
 
 ## Key Concepts
 

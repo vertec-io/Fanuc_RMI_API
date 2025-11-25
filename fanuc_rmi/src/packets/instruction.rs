@@ -166,6 +166,22 @@ pub struct CompletedPacketReturnInfo {
     pub error_id: u32,
 }
 
+/// Information about an instruction that was sent to the FANUC controller
+///
+/// This struct is broadcast on the `sent_instruction_tx` channel when an instruction
+/// is assigned a sequence ID and sent to the controller. It allows callers to correlate
+/// their send requests (identified by correlation_id) with the actual sequence IDs
+/// assigned by the driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SentInstructionInfo {
+    /// The correlation ID returned from send_command()
+    pub correlation_id: u64,
+    /// The sequence ID assigned to the instruction by the driver
+    pub sequence_id: u32,
+    /// When the instruction was sent
+    pub timestamp: std::time::Instant,
+}
+
 #[cfg_attr(feature = "DTO", crate::mirror_dto)]
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

@@ -37,12 +37,12 @@ pub mod protocol {
 #[cfg_attr(feature = "DTO", mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FrameData {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub w: f32,
-    pub p: f32,
-    pub r: f32,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub w: f64,
+    pub p: f64,
+    pub r: f64,
 }
 
 /// Robot configuration data structure
@@ -125,18 +125,18 @@ impl Default for Configuration {
 #[derive(Serialize, Deserialize, Debug, Clone,Copy, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct Position {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub w: f32,
-    pub p: f32,
-    pub r: f32,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub w: f64,
+    pub p: f64,
+    pub r: f64,
     #[serde(default)]
-    pub ext1: f32,
+    pub ext1: f64,
     #[serde(default)]
-    pub ext2: f32,
+    pub ext2: f64,
     #[serde(default)]
-    pub ext3: f32,
+    pub ext3: f64,
 }
 
 impl Default for Position {

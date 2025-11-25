@@ -1,4 +1,5 @@
 use leptos::*;
+use wasm_bindgen::prelude::*;
 
 mod components;
 mod websocket;
@@ -7,6 +8,14 @@ mod robot_models;
 use components::*;
 use websocket::WebSocketManager;
 pub use robot_models::RobotModel;
+
+#[wasm_bindgen(start)]
+pub fn main() {
+    _ = console_log::init_with_level(log::Level::Debug);
+    console_error_panic_hook::set_once();
+
+    mount_to_body(|| view! { <App/> })
+}
 
 #[component]
 pub fn App() -> impl IntoView {

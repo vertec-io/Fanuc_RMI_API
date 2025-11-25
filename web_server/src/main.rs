@@ -37,6 +37,7 @@ async fn main() {
     };
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    driver.abort();
     driver.initialize();
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 

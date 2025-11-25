@@ -10,8 +10,12 @@ use tracing::{debug, error, info};
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::time::Instant;
+
+// Global correlation ID counter
+static CORRELATION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 // Prefer importing from the module rather than re-exporting from here
 // Prefer downstream crates to reference modules directly (crate::commands, crate::instructions, crate::dto)
@@ -26,11 +30,12 @@ use super::FanucDriverConfig;
 pub struct DriverPacket {
     pub priority: PacketPriority,
     pub packet: SendPacket,
+    pub correlation_id: u64,
 }
 
 impl DriverPacket {
-    pub fn new(priority: PacketPriority, packet: SendPacket) -> Self {
-        Self { priority, packet }
+    pub fn new(priority: PacketPriority, packet: SendPacket, correlation_id: u64) -> Self {
+        Self { priority, packet, correlation_id }
     }
 }
 
@@ -39,6 +44,12 @@ pub struct FanucDriver {
     pub config: FanucDriverConfig,
     pub log_channel: tokio::sync::broadcast::Sender<String>,
     pub response_tx: tokio::sync::broadcast::Sender<ResponsePacket>,
+    /// Broadcast channel for sent instruction notifications
+    ///
+    /// Subscribe to this channel to receive notifications when instructions are assigned
+    /// sequence IDs and sent to the controller. This allows correlating send_command()
+    /// calls (via correlation_id) with actual sequence IDs.
+    pub sent_instruction_tx: tokio::sync::broadcast::Sender<SentInstructionInfo>,
     next_available_sequence_number: Arc<std::sync::Mutex<u32>>, // could prop be taken out and just a varible in the send_queue function
     fanuc_write: Arc<Mutex<WriteHalf<TcpStream>>>,
     fanuc_read: Arc<Mutex<ReadHalf<TcpStream>>>,
@@ -144,6 +155,7 @@ impl FanucDriver {
         let write_half = Arc::new(Mutex::new(write_half));
         let (message_channel, _rx) = broadcast::channel(100);
         let (response_tx, _response_rx) = broadcast::channel(100);
+        let (sent_instruction_tx, _sent_rx) = broadcast::channel(100);
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(1000); //FIXME: there isnt a system on meteorite monitoring number of packets sent
         let next_available_sequence_number = Arc::new(std::sync::Mutex::new(1));
 
@@ -158,6 +170,7 @@ impl FanucDriver {
             config,
             log_channel: message_channel,
             response_tx,
+            sent_instruction_tx,
             next_available_sequence_number,
             fanuc_write: write_half,
             fanuc_read: read_half,
@@ -266,43 +279,57 @@ impl FanucDriver {
         Ok(())
     }
 
+    /// Send a packet to the FANUC controller
+    ///
+    /// Returns a correlation ID that can be used to track when the packet is sent
+    /// and correlate it with responses. For Instructions, subscribe to `sent_instruction_tx`
+    /// to receive notifications when the instruction is assigned a sequence ID and sent.
+    ///
+    /// # Arguments
+    /// * `packet` - The packet to send (Communication, Command, or Instruction)
+    /// * `priority` - The priority level for queue insertion
+    ///
+    /// # Returns
+    /// * `Ok(correlation_id)` - A unique correlation ID for this send request
+    /// * `Err(String)` - Error message if the packet could not be queued
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let correlation_id = driver.send_command(packet, PacketPriority::Standard)?;
+    /// // Subscribe to sent_instruction_tx to get the sequence ID when it's assigned
+    /// ```
     pub fn send_command(
         &self,
         packet: SendPacket,
         priority: PacketPriority,
-    ) -> Result<u32, String> {
-        /*
-        This is the method meteorite will use to send a command to the driver this is the abstraction layer that will be called to send a packet and will return a sequence id.
-
-        NOTE: For Instructions, sequence IDs are assigned later in send_queue_to_controller()
-        to ensure they're consecutive in send order, not queue insertion order.
-        This function returns 0 for Instructions as a placeholder.
-        */
+    ) -> Result<u64, String> {
+        // Generate unique correlation ID
+        let correlation_id = CORRELATION_COUNTER.fetch_add(1, Ordering::Relaxed);
 
         let sender = self.queue_tx.clone();
 
         let driver_packet = DriverPacket {
             priority,
             packet,
+            correlation_id,
         };
 
         if let Err(e) = sender.try_send(driver_packet) {
             println!("Failed to send packet: {}", e);
             return Err(format!("Failed to send packet: {}", e));
-        } else {
-            // Return 0 as placeholder - actual sequence ID assigned at send time
-            return Ok(0);
         }
+
+        Ok(correlation_id)
     }
 
-    //this is an async function that receives packets and yeets them to the controllor to run
+    //this is an async function that receives packets and forwards them to the controller
     async fn send_queue_to_controller(
         &self,
         mut packets_to_add: mpsc::Receiver<DriverPacket>,
         mut completed_packet_info: broadcast::Receiver<CompletedPacketReturnInfo>,
     ) -> Result<(), FrcError> {
         let mut in_flight: u32 = 0;
-        let mut queue: VecDeque<SendPacket> = VecDeque::new();
+        let mut queue: VecDeque<DriverPacket> = VecDeque::new();
         let mut state = DriverState::default();
 
         // Standard loop interval
@@ -332,14 +359,14 @@ impl FanucDriver {
 
                 match new_packet.priority {
                     PacketPriority::Low | PacketPriority::Standard => {
-                        queue.push_back(new_packet.packet)
+                        queue.push_back(new_packet)
                     }
                     PacketPriority::High | PacketPriority::Immediate => {
-                        queue.push_front(new_packet.packet)
+                        queue.push_front(new_packet)
                     }
                     PacketPriority::Termination => {
                         queue.clear();
-                        queue.push_front(new_packet.packet);
+                        queue.push_front(new_packet);
                     }
                 }
             }
@@ -362,9 +389,9 @@ impl FanucDriver {
 
             // Send packets with backpressure
             while in_flight < MAX_IN_FLIGHT && state == DriverState::Running {
-                if let Some(mut packet) = queue.pop_front() {
+                if let Some(mut driver_packet) = queue.pop_front() {
                     // Assign sequence ID right before sending (ensures consecutive IDs in send order)
-                    if let SendPacket::Instruction(ref mut instruction) = packet {
+                    if let SendPacket::Instruction(ref mut instruction) = driver_packet.packet {
                         let current_id = {
                             // Lock, increment, and immediately drop the guard
                             match self.next_available_sequence_number.lock() {
@@ -401,23 +428,27 @@ impl FanucDriver {
                             Instruction::FrcLinearMotionJRep(ref mut instr) => instr.sequence_id = current_id,
                         }
 
-                        // println!("Assigned seq {} to instruction", current_id);
+                        // Broadcast sent instruction info
+                        let _ = self.sent_instruction_tx.send(SentInstructionInfo {
+                            correlation_id: driver_packet.correlation_id,
+                            sequence_id: current_id,
+                            timestamp: Instant::now(),
+                        });
                     }
 
-                    match self.send_packet_to_controller(packet.clone()).await {
+                    match self.send_packet_to_controller(driver_packet.packet.clone()).await {
                         Err(e) => {
                             self.log_message(format!("Failed to send packet: {:?}", e))
                                 .await;
                         }
                         Ok(()) => {
-                            if packet == SendPacket::Communication(Communication::FrcDisconnect) {
+                            if driver_packet.packet == SendPacket::Communication(Communication::FrcDisconnect) {
                                 // immediate shutdown
                                 queue.clear();
                                 break;
                             }
-                            if let SendPacket::Instruction(instr) = packet {
+                            if let SendPacket::Instruction(instr) = driver_packet.packet {
                                 let _seq = instr.get_sequence_id();
-                                // println!("Sent seq {} ({} in-flight)", seq, in_flight + 1);
                                 in_flight += 1;
                             }
                         }
@@ -642,7 +673,20 @@ impl FanucDriver {
         return Ok((packet, current_id));
     }
 
-    pub async fn wait_on_command_completion(&self, packet_number_to_wait_for: u32) {
+    /// Wait for an instruction to complete by sequence ID
+    ///
+    /// This is the renamed version of `wait_on_command_completion` for clarity.
+    /// Polls the completed packet channel until an instruction with the given
+    /// sequence ID (or higher) completes.
+    ///
+    /// # Arguments
+    /// * `sequence_id` - The sequence ID to wait for
+    ///
+    /// # Behavior
+    /// - Breaks immediately if an error occurs (error_id != 0)
+    /// - Breaks when sequence_id >= the target sequence ID
+    /// - Polls every 10ms
+    pub async fn wait_on_instruction_completion(&self, sequence_id: u32) {
         const WAIT_INTERVAL: Duration = Duration::from_millis(10);
 
         loop {
@@ -656,7 +700,7 @@ impl FanucDriver {
                         eprintln!("ROBOT MOTION ERROR: {}", most_recent.error_id);
                         break;
                     } else {
-                        if most_recent.sequence_id >= packet_number_to_wait_for {
+                        if most_recent.sequence_id >= sequence_id {
                             println!("robot move done #{}", most_recent.sequence_id);
                             break;
                         }
@@ -676,6 +720,84 @@ impl FanucDriver {
                 tokio::time::sleep(WAIT_INTERVAL - elapsed).await;
             }
         }
+    }
+
+    /// Deprecated: Use `wait_on_instruction_completion` instead
+    ///
+    /// This function is kept for backward compatibility but will be removed in a future version.
+    #[deprecated(since = "0.1.0", note = "Use wait_on_instruction_completion instead")]
+    pub async fn wait_on_command_completion(&self, packet_number_to_wait_for: u32) {
+        self.wait_on_instruction_completion(packet_number_to_wait_for).await;
+    }
+
+    /// Wait for an instruction to complete using its correlation ID
+    ///
+    /// This is a convenience function that:
+    /// 1. Subscribes to sent_instruction_tx to get the sequence ID
+    /// 2. Waits for the instruction with that sequence ID to complete
+    ///
+    /// # Arguments
+    /// * `correlation_id` - The correlation ID returned from send_command()
+    ///
+    /// # Returns
+    /// * `Ok(sequence_id)` - The sequence ID that was assigned to the instruction
+    /// * `Err(String)` - Error if the sent notification was not received
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let correlation_id = driver.send_command(packet, PacketPriority::Standard)?;
+    /// let sequence_id = driver.wait_on_correlation_completion(correlation_id).await?;
+    /// println!("Instruction {} completed", sequence_id);
+    /// ```
+    pub async fn wait_on_correlation_completion(&self, correlation_id: u64) -> Result<u32, String> {
+        // Subscribe to sent notifications
+        let mut sent_rx = self.sent_instruction_tx.subscribe();
+
+        // Wait for our instruction to be sent and get its sequence ID
+        let sequence_id = loop {
+            match sent_rx.recv().await {
+                Ok(sent_info) if sent_info.correlation_id == correlation_id => {
+                    break sent_info.sequence_id;
+                }
+                Ok(_) => continue, // Not our instruction
+                Err(e) => return Err(format!("Failed to receive sent notification: {}", e)),
+            }
+        };
+
+        // Wait for completion
+        self.wait_on_instruction_completion(sequence_id).await;
+
+        Ok(sequence_id)
+    }
+
+    /// Send an instruction and wait for it to complete
+    ///
+    /// This is a convenience function that combines send_command() and
+    /// wait_on_correlation_completion() into a single call.
+    ///
+    /// # Arguments
+    /// * `packet` - The packet to send (should be an Instruction)
+    /// * `priority` - The priority level for queue insertion
+    ///
+    /// # Returns
+    /// * `Ok(sequence_id)` - The sequence ID that was assigned to the instruction
+    /// * `Err(String)` - Error if send or wait failed
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let sequence_id = driver.send_and_wait_for_completion(
+    ///     SendPacket::Instruction(instruction),
+    ///     PacketPriority::Standard
+    /// ).await?;
+    /// println!("Instruction {} completed", sequence_id);
+    /// ```
+    pub async fn send_and_wait_for_completion(
+        &self,
+        packet: SendPacket,
+        priority: PacketPriority,
+    ) -> Result<u32, String> {
+        let correlation_id = self.send_command(packet, priority)?;
+        self.wait_on_correlation_completion(correlation_id).await
     }
 }
 async fn connect_with_retries(addr: &str, retries: u32) -> Result<TcpStream, FrcError> {

@@ -4,7 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FANUC RMI Control</title>
-    <link data-trunk rel="rust" data-wasm-opt="z" />
+    
+<script type="module">
+import init, * as bindings from '/web_app-738ebc7e80f6b4a3.js';
+const wasm = await init({ module_or_path: '/web_app-738ebc7e80f6b4a3_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -38,7 +49,7 @@
             background: #444444;
         }
     </style>
-</head>
+<link rel="modulepreload" href="/web_app-738ebc7e80f6b4a3.js" crossorigin="anonymous" integrity="sha384-sQVLsu8hwY7qlvj68v/ZIZ4BO9pWAQPFERRcr63R+ZqWcJ+h7N1BF/dm4Y30D8FX"><link rel="preload" href="/web_app-738ebc7e80f6b4a3_bg.wasm" crossorigin="anonymous" integrity="sha384-vi5GH982FU4P5/aFHHNQnb5LmSpvZXXOECL1W/znAfw4XYaRins9y4iViEdrFsOj" as="fetch" type="application/wasm"></head>
 <body>
 </body>
 </html>

@@ -490,7 +490,7 @@ dependencies = [
 
 [[package]]
 name = "fanuc_rmi"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bincode",
  "fanuc_rmi_macros",

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The FANUC RMI API now supports multiple FANUC CRX robot models with accurate kinematic parameters based on the research paper "Geometric Approach for Inverse Kinematics of the FANUC CRX Collaborative Robot" by Manel Abbes and Gérard Poisson (Robotics 2024, 13, 91).
+The FANUC RMI API simulator now supports multiple FANUC CRX robot models with accurate kinematic parameters based on the research paper "Geometric Approach for Inverse Kinematics of the FANUC CRX Collaborative Robot" by Manel Abbes and Gérard Poisson (Robotics 2024, 13, 91).
 
 ## Supported Robot Models
 

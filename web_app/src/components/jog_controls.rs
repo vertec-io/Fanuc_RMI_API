@@ -8,13 +8,13 @@ pub fn JogControls() -> impl IntoView {
     let (jog_speed, set_jog_speed) = create_signal(10.0);
     let (step_distance, set_step_distance) = create_signal(1.0);
 
-    let send_jog = move |dx: f32, dy: f32, dz: f32| {
+    let send_jog = move |dx: f64, dy: f64, dz: f64| {
         let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(
             FrcLinearRelative {
                 sequence_id: 0, // Will be assigned by driver
                 configuration: Configuration {
-                    u_tool_number: 1,
-                    u_frame_number: 1,
+                    u_tool_number: 4, // Update to match your physical robot
+                    u_frame_number: 3, // Update to match your physical robot
                     front: 1,
                     up: 1,
                     left: 0,
@@ -89,7 +89,7 @@ pub fn JogControls() -> impl IntoView {
                     <div></div>
                     <button
                         class="bg-[#1a1a1a] hover:bg-[#00d9ff] border border-[#ffffff08] hover:border-[#00d9ff] text-white hover:text-black font-semibold py-3 px-4 rounded transition-colors"
-                        on:click=move |_| send_jog.with_value(|f| f(0.0, step_distance.get_untracked() as f32, 0.0))
+                        on:click=move |_| send_jog.with_value(|f| f(0.0, step_distance.get_untracked(), 0.0))
                     >
                         <div class="text-xl">"↑"</div>
                         <div class="text-[10px] mt-0.5">"Y+"</div>
@@ -100,21 +100,21 @@ pub fn JogControls() -> impl IntoView {
                 <div class="col-span-3 grid grid-cols-3 gap-2">
                     <button
                         class="bg-[#1a1a1a] hover:bg-[#00d9ff] border border-[#ffffff08] hover:border-[#00d9ff] text-white hover:text-black font-semibold py-3 px-4 rounded transition-colors"
-                        on:click=move |_| send_jog.with_value(|f| f(-step_distance.get_untracked() as f32, 0.0, 0.0))
+                        on:click=move |_| send_jog.with_value(|f| f(-step_distance.get_untracked(), 0.0, 0.0))
                     >
                         <div class="text-xl">"←"</div>
                         <div class="text-[10px] mt-0.5">"X-"</div>
                     </button>
                     <button
                         class="bg-[#1a1a1a] hover:bg-[#00d9ff] border border-[#ffffff08] hover:border-[#00d9ff] text-white hover:text-black font-semibold py-3 px-4 rounded transition-colors"
-                        on:click=move |_| send_jog.with_value(|f| f(0.0, 0.0, step_distance.get_untracked() as f32))
+                        on:click=move |_| send_jog.with_value(|f| f(0.0, 0.0, step_distance.get_untracked()))
                     >
                         <div class="text-xl">"▲"</div>
                         <div class="text-[10px] mt-0.5">"Z+"</div>
                     </button>
                     <button
                         class="bg-[#1a1a1a] hover:bg-[#00d9ff] border border-[#ffffff08] hover:border-[#00d9ff] text-white hover:text-black font-semibold py-3 px-4 rounded transition-colors"
-                        on:click=move |_| send_jog.with_value(|f| f(step_distance.get_untracked() as f32, 0.0, 0.0))
+                        on:click=move |_| send_jog.with_value(|f| f(step_distance.get_untracked(), 0.0, 0.0))
                     >
                         <div class="text-xl">"→"</div>
                         <div class="text-[10px] mt-0.5">"X+"</div>
@@ -125,14 +125,14 @@ pub fn JogControls() -> impl IntoView {
                     <div></div>
                     <button
                         class="bg-[#1a1a1a] hover:bg-[#00d9ff] border border-[#ffffff08] hover:border-[#00d9ff] text-white hover:text-black font-semibold py-3 px-4 rounded transition-colors"
-                        on:click=move |_| send_jog.with_value(|f| f(0.0, -step_distance.get_untracked() as f32, 0.0))
+                        on:click=move |_| send_jog.with_value(|f| f(0.0, -step_distance.get_untracked(), 0.0))
                     >
                         <div class="text-xl">"↓"</div>
                         <div class="text-[10px] mt-0.5">"Y-"</div>
                     </button>
                     <button
                         class="bg-[#1a1a1a] hover:bg-[#00d9ff] border border-[#ffffff08] hover:border-[#00d9ff] text-white hover:text-black font-semibold py-3 px-4 rounded transition-colors"
-                        on:click=move |_| send_jog.with_value(|f| f(0.0, 0.0, -step_distance.get_untracked() as f32))
+                        on:click=move |_| send_jog.with_value(|f| f(0.0, 0.0, -step_distance.get_untracked()))
                     >
                         <div class="text-xl">"▼"</div>
                         <div class="text-[10px] mt-0.5">"Z-"</div>
