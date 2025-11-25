@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::time::Instant;
 
-// Global correlation ID counter
-static CORRELATION_COUNTER: AtomicU64 = AtomicU64::new(1);
+// Global request ID counter
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 // Prefer importing from the module rather than re-exporting from here
 // Prefer downstream crates to reference modules directly (crate::commands, crate::instructions, crate::dto)
@@ -30,12 +30,12 @@ use super::FanucDriverConfig;
 pub struct DriverPacket {
     pub priority: PacketPriority,
     pub packet: SendPacket,
-    pub correlation_id: u64,
+    pub request_id: u64,
 }
 
 impl DriverPacket {
-    pub fn new(priority: PacketPriority, packet: SendPacket, correlation_id: u64) -> Self {
-        Self { priority, packet, correlation_id }
+    pub fn new(priority: PacketPriority, packet: SendPacket, request_id: u64) -> Self {
+        Self { priority, packet, request_id }
     }
 }
 
@@ -47,8 +47,8 @@ pub struct FanucDriver {
     /// Broadcast channel for sent instruction notifications
     ///
     /// Subscribe to this channel to receive notifications when instructions are assigned
-    /// sequence IDs and sent to the controller. This allows correlating send_command()
-    /// calls (via correlation_id) with actual sequence IDs.
+    /// sequence IDs and sent to the controller. This allows correlating send_packet()
+    /// calls (via request_id) with actual sequence IDs.
     pub sent_instruction_tx: tokio::sync::broadcast::Sender<SentInstructionInfo>,
     next_available_sequence_number: Arc<std::sync::Mutex<u32>>, // could prop be taken out and just a varible in the send_queue function
     fanuc_write: Arc<Mutex<WriteHalf<TcpStream>>>,
@@ -200,34 +200,252 @@ impl FanucDriver {
         Ok(driver)
     }
 
-    async fn log_message<T: Into<String>>(&self, message: T) {
-        let message = message.into();
+    /// Log an error message (always shown if logging feature enabled)
+    async fn log_error<T: Into<String>>(&self, message: T) {
+        let message = format!("[ERROR] {}", message.into());
         let _ = self.log_channel.send(message.clone());
         #[cfg(feature = "logging")]
-        println!("{:?}", message);
+        if self.config.log_level >= crate::drivers::driver_config::LogLevel::Error {
+            eprintln!("{}", message);
+        }
     }
 
-    pub fn abort(&self) {
+    /// Log a warning message (shown if log_level >= Warn)
+    async fn log_warn<T: Into<String>>(&self, message: T) {
+        let message = format!("[WARN] {}", message.into());
+        let _ = self.log_channel.send(message.clone());
+        #[cfg(feature = "logging")]
+        if self.config.log_level >= crate::drivers::driver_config::LogLevel::Warn {
+            println!("{}", message);
+        }
+    }
+
+    /// Log an info message (shown if log_level >= Info, which is default)
+    async fn log_info<T: Into<String>>(&self, message: T) {
+        let message = format!("[INFO] {}", message.into());
+        let _ = self.log_channel.send(message.clone());
+        #[cfg(feature = "logging")]
+        if self.config.log_level >= crate::drivers::driver_config::LogLevel::Info {
+            println!("{}", message);
+        }
+    }
+
+    /// Log a debug message (only shown if log_level == Debug)
+    async fn log_debug<T: Into<String>>(&self, message: T) {
+        let message = format!("[DEBUG] {}", message.into());
+        let _ = self.log_channel.send(message.clone());
+        #[cfg(feature = "logging")]
+        if self.config.log_level >= crate::drivers::driver_config::LogLevel::Debug {
+            println!("{}", message);
+        }
+    }
+
+    /// Send an abort command to the FANUC controller
+    ///
+    /// Returns the request ID for tracking this request.
+    pub fn send_abort(&self) -> Result<u64, String> {
         let packet = SendPacket::Command(Command::FrcAbort {});
-        let _ = self.send_command(packet, PacketPriority::Standard);
+        self.send_packet(packet, PacketPriority::Standard)
     }
 
-    pub fn initialize(&self) {
+    /// Send an abort command and wait for the response
+    ///
+    /// This is an async convenience method that sends the abort command and waits
+    /// for the response from the FANUC controller.
+    ///
+    /// **Note:** This method waits for the **next** FrcAbortResponse. Do not call
+    /// this method concurrently for the same command type. For concurrent usage,
+    /// use `send_abort()` and subscribe to `response_tx` manually.
+    ///
+    /// # Returns
+    /// * `Ok(FrcAbortResponse)` - The abort response from the controller
+    /// * `Err(String)` - Error if the command could not be sent or timeout (5 seconds)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use fanuc_rmi::drivers::FanucDriver;
+    /// # async fn example(driver: &FanucDriver) -> Result<(), String> {
+    /// let response = driver.abort().await?;
+    /// if response.error_id == 0 {
+    ///     println!("Abort successful");
+    /// } else {
+    ///     println!("Abort failed with error: {}", response.error_id);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn abort(&self) -> Result<FrcAbortResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+        let _request_id = self.send_abort()?;
+
+        // Wait up to 5 seconds for response
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommandResponse(CommandResponse::FrcAbort(abort_response)) = response {
+                    return Ok(abort_response);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for abort response".to_string())?
+    }
+
+    /// Send an initialize command to the FANUC controller
+    ///
+    /// Returns the request ID for tracking this request.
+    pub fn send_initialize(&self) -> Result<u64, String> {
         let packet: SendPacket =
             SendPacket::Command(Command::FrcInitialize(FrcInitialize::default()));
-        // self.get_status().await;
-        let _ = self.send_command(packet, PacketPriority::Standard);
+        self.send_packet(packet, PacketPriority::Standard)
     }
 
-    pub fn get_status(&self) {
+    /// Send an initialize command and wait for the response
+    ///
+    /// This is an async convenience method that sends the initialize command and waits
+    /// for the response from the FANUC controller.
+    ///
+    /// **Note:** This method waits for the **next** FrcInitializeResponse. Do not call
+    /// this method concurrently for the same command type. For concurrent usage,
+    /// use `send_initialize()` and subscribe to `response_tx` manually.
+    ///
+    /// # Returns
+    /// * `Ok(FrcInitializeResponse)` - The initialize response from the controller
+    /// * `Err(String)` - Error if the command could not be sent or timeout (5 seconds)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use fanuc_rmi::drivers::FanucDriver;
+    /// # async fn example(driver: &FanucDriver) -> Result<(), String> {
+    /// let response = driver.initialize().await?;
+    /// if response.error_id == 0 {
+    ///     println!("Initialize successful, group_mask: {}", response.group_mask);
+    /// } else {
+    ///     println!("Initialize failed with error: {}", response.error_id);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn initialize(&self) -> Result<FrcInitializeResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+        let _request_id = self.send_initialize()?;
+
+        // Wait up to 5 seconds for response
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommandResponse(CommandResponse::FrcInitialize(init_response)) = response {
+                    return Ok(init_response);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for initialize response".to_string())?
+    }
+
+    /// Send a get status command to the FANUC controller
+    ///
+    /// Returns the request ID for tracking this request.
+    pub fn send_get_status(&self) -> Result<u64, String> {
         let packet: SendPacket = SendPacket::Command(Command::FrcGetStatus);
-        let _ = self.send_command(packet, PacketPriority::Standard);
+        self.send_packet(packet, PacketPriority::Standard)
     }
 
-    pub async fn disconnect(&self) {
+    /// Send a get status command and wait for the response
+    ///
+    /// This is an async convenience method that sends the get status command and waits
+    /// for the response from the FANUC controller.
+    ///
+    /// **Note:** This method waits for the **next** FrcGetStatusResponse. Do not call
+    /// this method concurrently for the same command type. For concurrent usage,
+    /// use `send_get_status()` and subscribe to `response_tx` manually.
+    ///
+    /// # Returns
+    /// * `Ok(FrcGetStatusResponse)` - The status response from the controller
+    /// * `Err(String)` - Error if the command could not be sent or timeout (5 seconds)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use fanuc_rmi::drivers::FanucDriver;
+    /// # async fn example(driver: &FanucDriver) -> Result<(), String> {
+    /// let status = driver.get_status().await?;
+    /// if status.error_id == 0 {
+    ///     println!("Servo ready: {}", status.servo_ready);
+    ///     println!("Next sequence ID: {}", status.next_sequence_id);
+    /// } else {
+    ///     println!("Get status failed with error: {}", status.error_id);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_status(&self) -> Result<FrcGetStatusResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+        let _request_id = self.send_get_status()?;
+
+        // Wait up to 5 seconds for response
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommandResponse(CommandResponse::FrcGetStatus(status_response)) = response {
+                    return Ok(status_response);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for get status response".to_string())?
+    }
+
+    /// Send a disconnect communication to the FANUC controller
+    ///
+    /// Returns the request ID for tracking this request.
+    pub async fn send_disconnect(&self) -> Result<u64, String> {
         let packet = SendPacket::Communication(Communication::FrcDisconnect {});
-        let _ = self.send_command(packet, PacketPriority::Standard);
+        let request_id = self.send_packet(packet, PacketPriority::Standard)?;
         *self.connected.lock().await = false;
+        Ok(request_id)
+    }
+
+    /// Send a disconnect communication and wait for the response
+    ///
+    /// This is an async convenience method that sends the disconnect communication and waits
+    /// for the response from the FANUC controller.
+    ///
+    /// **Note:** This method waits for the **next** FrcDisconnectResponse. Do not call
+    /// this method concurrently. For concurrent usage, use `send_disconnect()` and
+    /// subscribe to `response_tx` manually.
+    ///
+    /// # Returns
+    /// * `Ok(FrcDisconnectResponse)` - The disconnect response from the controller
+    /// * `Err(String)` - Error if the command could not be sent or timeout (5 seconds)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use fanuc_rmi::drivers::FanucDriver;
+    /// # async fn example(driver: &FanucDriver) -> Result<(), String> {
+    /// let response = driver.disconnect().await?;
+    /// if response.error_id == 0 {
+    ///     println!("Disconnect successful");
+    /// } else {
+    ///     println!("Disconnect failed with error: {}", response.error_id);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn disconnect(&self) -> Result<FrcDisconnectResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+        let _request_id = self.send_disconnect().await?;
+
+        // Wait up to 5 seconds for response
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(disconnect_response)) = response {
+                    return Ok(disconnect_response);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for disconnect response".to_string())?
     }
 
     async fn send_packet_to_controller(&self, packet: SendPacket) -> Result<(), FrcError> {
@@ -241,7 +459,7 @@ impl FanucDriver {
         let serialized_packet = match serde_json::to_string(&packet) {
             Ok(packet_str) => packet_str + "\r\n",
             Err(e) => {
-                self.log_message(format!("Failed to serialize a packet: {}", e))
+                self.log_error(format!("Failed to serialize packet: {}", e))
                     .await;
                 return Err(FrcError::Serialization(e.to_string()));
             }
@@ -258,22 +476,15 @@ impl FanucDriver {
             Ok(result) => {
                 if let Err(e) = result {
                     let err = FrcError::FailedToSend(format!("{}", e));
-                    self.log_message(err.to_string()).await;
+                    self.log_error(err.to_string()).await;
                     return Err(err);
                 }
             },
             Err(_) => {
                 let err = FrcError::FailedToSend("Write operation timed out".to_string());
-                self.log_message(err.to_string()).await;
+                self.log_error(err.to_string()).await;
                 return Err(err);
             }
-        }
-
-        if let SendPacket::Command(Command::FrcSetOverRide(_)) = packet {
-            info!(
-                "Sending set override packet to fanuc: {}",
-                serialized_packet
-            );
         }
 
         Ok(())
@@ -281,7 +492,7 @@ impl FanucDriver {
 
     /// Send a packet to the FANUC controller
     ///
-    /// Returns a correlation ID that can be used to track when the packet is sent
+    /// Returns a request ID that can be used to track when the packet is sent
     /// and correlate it with responses. For Instructions, subscribe to `sent_instruction_tx`
     /// to receive notifications when the instruction is assigned a sequence ID and sent.
     ///
@@ -290,28 +501,28 @@ impl FanucDriver {
     /// * `priority` - The priority level for queue insertion
     ///
     /// # Returns
-    /// * `Ok(correlation_id)` - A unique correlation ID for this send request
+    /// * `Ok(request_id)` - A unique request ID for this send request
     /// * `Err(String)` - Error message if the packet could not be queued
     ///
     /// # Example
     /// ```rust,ignore
-    /// let correlation_id = driver.send_command(packet, PacketPriority::Standard)?;
+    /// let request_id = driver.send_packet(packet, PacketPriority::Standard)?;
     /// // Subscribe to sent_instruction_tx to get the sequence ID when it's assigned
     /// ```
-    pub fn send_command(
+    pub fn send_packet(
         &self,
         packet: SendPacket,
         priority: PacketPriority,
     ) -> Result<u64, String> {
-        // Generate unique correlation ID
-        let correlation_id = CORRELATION_COUNTER.fetch_add(1, Ordering::Relaxed);
+        // Generate unique request ID
+        let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
 
         let sender = self.queue_tx.clone();
 
         let driver_packet = DriverPacket {
             priority,
             packet,
-            correlation_id,
+            request_id,
         };
 
         if let Err(e) = sender.try_send(driver_packet) {
@@ -319,7 +530,20 @@ impl FanucDriver {
             return Err(format!("Failed to send packet: {}", e));
         }
 
-        Ok(correlation_id)
+        Ok(request_id)
+    }
+
+    /// Send a packet to the FANUC controller
+    ///
+    /// **DEPRECATED:** Use `send_packet()` instead. This method name is misleading
+    /// as it sends any packet type (Communication, Command, or Instruction), not just Commands.
+    #[deprecated(since = "0.5.0", note = "Use send_packet instead - send_command is misleading as it sends any packet type")]
+    pub fn send_command(
+        &self,
+        packet: SendPacket,
+        priority: PacketPriority,
+    ) -> Result<u64, String> {
+        self.send_packet(packet, priority)
     }
 
     //this is an async function that receives packets and forwards them to the controller
@@ -376,7 +600,7 @@ impl FanucDriver {
                 in_flight = in_flight.saturating_sub(1);
                 // Log if error occurred
                 if pkt.error_id != 0 {
-                    self.log_message(format!(
+                    self.log_error(format!(
                         "Error in packet {}: error_id={}",
                         pkt.sequence_id, pkt.error_id
                     )).await;
@@ -430,7 +654,7 @@ impl FanucDriver {
 
                         // Broadcast sent instruction info
                         let _ = self.sent_instruction_tx.send(SentInstructionInfo {
-                            correlation_id: driver_packet.correlation_id,
+                            request_id: driver_packet.request_id,
                             sequence_id: current_id,
                             timestamp: Instant::now(),
                         });
@@ -438,7 +662,7 @@ impl FanucDriver {
 
                     match self.send_packet_to_controller(driver_packet.packet.clone()).await {
                         Err(e) => {
-                            self.log_message(format!("Failed to send packet: {:?}", e))
+                            self.log_error(format!("Failed to send packet: {:?}", e))
                                 .await;
                         }
                         Ok(()) => {
@@ -463,14 +687,14 @@ impl FanucDriver {
             if elapsed < LOOP_INTERVAL {
                 tokio::time::sleep(LOOP_INTERVAL - elapsed).await;
             } else {
-                self.log_message(format!(
+                self.log_warn(format!(
                     "Send loop duration took {:?} exceeding max time:{:?}",
                     elapsed, LOOP_INTERVAL
                 )).await;
             }
         }
 
-        self.log_message("Disconnecting from FRC server... closing send queue")
+        self.log_info("Disconnecting from FRC server... closing send queue")
             .await;
         Ok(())
     }
@@ -500,7 +724,7 @@ impl FanucDriver {
                 }
                 Ok(n) => n,
                 Err(e) => {
-                    self.log_message(format!("Read error: {}", e)).await;
+                    self.log_error(format!("Read error: {}", e)).await;
                     *self.connected.lock().await = false;
                     return Err(FrcError::FailedToReceive(e.to_string()));
                 }
@@ -509,7 +733,7 @@ impl FanucDriver {
             temp.extend_from_slice(&buf[..n]);
             for line in extract_lines(&mut temp) {
                 if let Err(e) = self.process_line(line, &completed_tx).await {
-                    self.log_message(format!("Error processing line: {:?}", e)).await;
+                    self.log_error(format!("Error processing line: {:?}", e)).await;
                     // Continue processing other lines even if one fails
                 }
             }
@@ -527,12 +751,14 @@ impl FanucDriver {
         line: String,
         completed_tx: &broadcast::Sender<CompletedPacketReturnInfo>,
     ) -> Result<(), FrcError> {
-        self.log_message(format!("received: {}", line)).await;
+        // HOT PATH: Only log at debug level to avoid flooding terminal
+        self.log_debug(format!("Received: {}", line)).await;
+
         match serde_json::from_str::<ResponsePacket>(&line) {
             Ok(packet) => {
                 // Send the response to the response_channel for all responses
                 if let Err(e) = self.response_tx.send(packet.clone()) {
-                    self.log_message(format!("Failed to send to response channel: {}", e))
+                    self.log_error(format!("Failed to send to response channel: {}", e))
                         .await;
                     info!(
                         "Failed to send message to response channel {:?}: {:?}",
@@ -540,8 +766,9 @@ impl FanucDriver {
                         e
                     );
                 } else {
-                    self.log_message(format!(
-                        "Sent set response to bevy backend: {:?}",
+                    // HOT PATH: Only log at debug level
+                    self.log_debug(format!(
+                        "Sent response to backend: {:?}",
                         packet.clone()
                     ))
                     .await;
@@ -550,7 +777,7 @@ impl FanucDriver {
 
                 match packet {
                     ResponsePacket::CommunicationResponse(CommunicationResponse::FrcDisconnect(_)) => {
-                        self.log_message("Disconnect packet").await;
+                        self.log_info("Received disconnect packet").await;
                         let mut conn = self.connected.lock().await;
                         *conn = false;
                         return Ok(());
@@ -561,7 +788,7 @@ impl FanucDriver {
                             error_id: pkt.get_error_id(),
                         };
                         if let Err(e) = completed_tx.send(info) {
-                            self.log_message(format!("Send error: {}", e)).await;
+                            self.log_error(format!("Failed to send completion info: {}", e)).await;
                         }
                     }
                     ResponsePacket::CommandResponse(CommandResponse::FrcGetStatus(status_response)) => {
@@ -580,7 +807,7 @@ impl FanucDriver {
                         }; // MutexGuard dropped here
 
                         if should_log {
-                            self.log_message(format!(
+                            self.log_info(format!(
                                 "Initialized sequence counter to {} from FRC_GetStatus",
                                 next_seq
                             )).await;
@@ -596,7 +823,7 @@ impl FanucDriver {
                 }
             }
             Err(e) => {
-                self.log_message(format!("Invalid JSON ({}): {}", e, line)).await;
+                self.log_error(format!("Invalid JSON ({}): {}", e, line)).await;
             }
         }
         Ok(())
@@ -730,14 +957,14 @@ impl FanucDriver {
         self.wait_on_instruction_completion(packet_number_to_wait_for).await;
     }
 
-    /// Wait for an instruction to complete using its correlation ID
+    /// Wait for an instruction to complete using its request ID
     ///
     /// This is a convenience function that:
     /// 1. Subscribes to sent_instruction_tx to get the sequence ID
     /// 2. Waits for the instruction with that sequence ID to complete
     ///
     /// # Arguments
-    /// * `correlation_id` - The correlation ID returned from send_command()
+    /// * `request_id` - The request ID returned from send_packet()
     ///
     /// # Returns
     /// * `Ok(sequence_id)` - The sequence ID that was assigned to the instruction
@@ -745,18 +972,18 @@ impl FanucDriver {
     ///
     /// # Example
     /// ```rust,ignore
-    /// let correlation_id = driver.send_command(packet, PacketPriority::Standard)?;
-    /// let sequence_id = driver.wait_on_correlation_completion(correlation_id).await?;
+    /// let request_id = driver.send_packet(packet, PacketPriority::Standard)?;
+    /// let sequence_id = driver.wait_on_request_completion(request_id).await?;
     /// println!("Instruction {} completed", sequence_id);
     /// ```
-    pub async fn wait_on_correlation_completion(&self, correlation_id: u64) -> Result<u32, String> {
+    pub async fn wait_on_request_completion(&self, request_id: u64) -> Result<u32, String> {
         // Subscribe to sent notifications
         let mut sent_rx = self.sent_instruction_tx.subscribe();
 
         // Wait for our instruction to be sent and get its sequence ID
         let sequence_id = loop {
             match sent_rx.recv().await {
-                Ok(sent_info) if sent_info.correlation_id == correlation_id => {
+                Ok(sent_info) if sent_info.request_id == request_id => {
                     break sent_info.sequence_id;
                 }
                 Ok(_) => continue, // Not our instruction
@@ -770,10 +997,19 @@ impl FanucDriver {
         Ok(sequence_id)
     }
 
+    /// Wait for an instruction to complete using its request ID
+    ///
+    /// **DEPRECATED:** Use `wait_on_request_completion()` instead. "request_id" is industry
+    /// standard terminology (HTTP/2, gRPC, AWS SDK).
+    #[deprecated(since = "0.5.0", note = "Use wait_on_request_completion instead - request_id is industry standard terminology")]
+    pub async fn wait_on_correlation_completion(&self, correlation_id: u64) -> Result<u32, String> {
+        self.wait_on_request_completion(correlation_id).await
+    }
+
     /// Send an instruction and wait for it to complete
     ///
-    /// This is a convenience function that combines send_command() and
-    /// wait_on_correlation_completion() into a single call.
+    /// This is a convenience function that combines send_packet() and
+    /// wait_on_request_completion() into a single call.
     ///
     /// # Arguments
     /// * `packet` - The packet to send (should be an Instruction)
@@ -796,8 +1032,8 @@ impl FanucDriver {
         packet: SendPacket,
         priority: PacketPriority,
     ) -> Result<u32, String> {
-        let correlation_id = self.send_command(packet, priority)?;
-        self.wait_on_correlation_completion(correlation_id).await
+        let request_id = self.send_packet(packet, priority)?;
+        self.wait_on_request_completion(request_id).await
     }
 }
 async fn connect_with_retries(addr: &str, retries: u32) -> Result<TcpStream, FrcError> {

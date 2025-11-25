@@ -2,7 +2,7 @@
 
 A comprehensive Rust library for communicating with and controlling FANUC robots via the Remote Motion Interface (RMI) protocol. Includes driver implementation, web-based control interface, and simulation capabilities.
 
-**Current Version**: 0.4.0
+**Current Version**: 0.5.0
 **Status**: Active Development
 **License**: See LICENSE file
 
@@ -10,18 +10,24 @@ A comprehensive Rust library for communicating with and controlling FANUC robots
 
 ## ⚠️ Important Updates
 
-### Latest Changes (v0.4.0) - 2025-11-25
+### Latest Changes (v0.5.0) - 2025-11-25
+
+**API Improvements (No Breaking Changes):**
+- ✨ **Async Command Methods**: `abort()`, `initialize()`, `get_status()`, `disconnect()` now wait for responses
+- ✨ **Proper Error Handling**: Access FANUC error codes directly from responses
+- ✨ **Industry Standard Terminology**: `correlation_id` → `request_id`
+- ✨ **Clearer Method Names**: `send_command()` → `send_packet()`
+- 🐛 **No More Arbitrary Sleeps**: Async methods eliminate manual delay guessing
+
+**Migration:** See [v0.5.0 Migration Guide](docs/NAMING_MIGRATION_GUIDE_v0.5.0.md) - All old methods still work (deprecated)
+
+### Previous Changes (v0.4.0)
 
 **Breaking Changes:**
-- 💥 **Position Precision Fix**: Changed position fields from `f32` to `f64` for sub-millimeter accuracy. See [Position Precision Fix](docs/POSITION_PRECISION_FIX.md)
-- 💥 **Correlation ID System**: `send_command()` now returns correlation ID (u64) instead of sequence ID (u32). See [Migration Guide](docs/SEQUENCE_ID_MIGRATION_GUIDE.md)
+- 💥 **Position Precision Fix**: Changed position fields from `f32` to `f64` for sub-millimeter accuracy
+- 💥 **Request ID System**: `send_command()` returns request ID (u64) for tracking async operations
 
-**New Features:**
-- ✨ Helper functions: `send_and_wait_for_completion()`, `wait_on_correlation_completion()`
-- ✨ High-precision position data (f64) eliminates JSON rounding errors
-- 🐛 Fixed invalid sequence ID errors (RMIT-029)
-
-**Migration Required:** See [v0.4.0 Release Notes](docs/releases/RELEASE_NOTES_v0.4.0.md)
+See [v0.4.0 Release Notes](docs/releases/RELEASE_NOTES_v0.4.0.md) for details
 
 ---
 
@@ -71,7 +77,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-fanuc_rmi = { version = "0.4", features = ["driver", "DTO"] }
+fanuc_rmi = { version = "0.5", features = ["driver", "DTO"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -79,38 +85,40 @@ tokio = { version = "1", features = ["full"] }
 
 ```rust
 use fanuc_rmi::drivers::{FanucDriver, FanucDriverConfig};
-use fanuc_rmi::packets::PacketPriority;
+use fanuc_rmi::packets::{SendPacket, PacketPriority, Instruction};
 use fanuc_rmi::instructions::FrcLinearRelative;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Configure driver
+    // Configure and connect
     let config = FanucDriverConfig {
-        addr: "192.168.1.100".to_string(),  // Robot IP
-        port: 18735,                         // RMI port
+        addr: "192.168.1.100".to_string(),
+        port: 18735,
         max_messages: 30,
     };
-
-    // Connect and initialize
     let driver = FanucDriver::connect(config).await?;
-    driver.abort().await?;      // Clear any previous state
-    driver.initialize().await?; // Initialize RMI
 
-    // Send a motion command (returns correlation ID)
-    let correlation_id = driver.send_command(
-        FrcLinearRelative { /* ... */ },
+    // Initialize with response handling (v0.5.0+)
+    let init_response = driver.initialize().await?;
+    if init_response.error_id == 0 {
+        println!("✓ Robot initialized");
+    }
+
+    // Send motion and wait for completion
+    let instruction = FrcLinearRelative::new(/* ... */);
+    let sequence_id = driver.send_and_wait_for_completion(
+        SendPacket::Instruction(Instruction::FrcLinearRelative(instruction)),
         PacketPriority::Standard
-    )?;
+    ).await?;
+    println!("Motion completed: seq {}", sequence_id);
 
-    // Wait for completion using correlation ID
-    let sequence_id = driver.wait_on_correlation_completion(correlation_id).await?;
-    println!("Motion completed with sequence ID: {}", sequence_id);
-
-    // Disconnect
+    // Disconnect with confirmation
     driver.disconnect().await?;
     Ok(())
 }
 ```
+
+**New in v0.5.0:** Async methods (`abort()`, `initialize()`, `get_status()`, `disconnect()`) now wait for responses and return FANUC error codes for proper error handling. No more arbitrary sleep delays!
 
 See [docs/examples/](docs/examples/) for more examples.
 

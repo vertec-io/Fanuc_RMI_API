@@ -149,14 +149,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         addr: "127.0.0.1".to_string(),
         port: 16001,
         max_messages: 30,
+        log_level: fanuc_rmi::drivers::LogLevel::Info,
     };
 
     let driver = FanucDriver::connect(driver_settings.clone()).await
         .map_err(|e| format!("Failed to connect: {}", e))?;
     sleep(Duration::from_millis(500)).await;
 
-    driver.initialize();
-    sleep(Duration::from_millis(500)).await;
+    // Initialize and wait for response
+    match driver.initialize().await {
+        Ok(response) => {
+            if response.error_id == 0 {
+                // Success - continue
+            } else {
+                return Err(format!("Initialize failed with error: {}", response.error_id).into());
+            }
+        }
+        Err(e) => {
+            return Err(format!("Initialize error: {}", e).into());
+        }
+    }
 
     // Create shared state
     let app_state = Arc::new(Mutex::new(AppState::new()));
@@ -223,13 +235,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             interval.tick().await;
 
             // Request position (uses new() constructor, not default())
-            let _ = driver_clone.send_command(
+            let _ = driver_clone.send_packet(
                 SendPacket::Command(Command::FrcReadCartesianPosition(FrcReadCartesianPosition::new(None))),
                 PacketPriority::Low
             );
 
             // Request status (unit variant - no arguments)
-            let _ = driver_clone.send_command(
+            let _ = driver_clone.send_packet(
                 SendPacket::Command(Command::FrcGetStatus),
                 PacketPriority::Low
             );
@@ -287,10 +299,9 @@ async fn run_app(
     *active_jog.lock().await = None;
     sleep(Duration::from_millis(200)).await;
 
-    driver.abort();
-    sleep(Duration::from_millis(100)).await;
-    driver.disconnect().await;
-    sleep(Duration::from_millis(500)).await;
+    // Abort and disconnect with response handling
+    let _ = driver.abort().await;
+    let _ = driver.disconnect().await;
 
     Ok(())
 }
@@ -631,7 +642,7 @@ async fn handle_jog_step(
     );
 
     let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(instruction));
-    driver.send_command(packet, PacketPriority::Immediate)
+    driver.send_packet(packet, PacketPriority::Immediate)
         .map_err(|e| format!("Failed to send step command: {}", e))?;
 
     Ok(())
@@ -677,7 +688,7 @@ async fn handle_jog_continuous_start(
                     1,
                 );
                 let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(instruction));
-                let _ = driver_clone.send_command(packet, PacketPriority::Immediate);
+                let _ = driver_clone.send_packet(packet, PacketPriority::Immediate);
                 break;
             }
 
@@ -693,7 +704,7 @@ async fn handle_jog_continuous_start(
                 100,
             );
             let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(instruction));
-            let _ = driver_clone.send_command(packet, PacketPriority::Immediate);
+            let _ = driver_clone.send_packet(packet, PacketPriority::Immediate);
         }
     });
 

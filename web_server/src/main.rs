@@ -2,7 +2,7 @@
 // Run with: cargo run --manifest-path web_app/Cargo_server.toml
 
 use fanuc_rmi::{
-    drivers::{FanucDriver, FanucDriverConfig},
+    drivers::{FanucDriver, FanucDriverConfig, LogLevel},
     dto,
     packets::PacketPriority,
 };
@@ -21,6 +21,7 @@ async fn main() {
         addr: "127.0.0.1".to_string(),
         port: 16001,
         max_messages: 30,
+        log_level: LogLevel::Error,
     };
 
     info!("Connecting to robot at {}:{}", driver_config.addr, driver_config.port);
@@ -37,9 +38,33 @@ async fn main() {
     };
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    driver.abort();
-    driver.initialize();
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Abort and initialize with response handling
+    match driver.abort().await {
+        Ok(response) => {
+            if response.error_id == 0 {
+                info!("Abort successful");
+            } else {
+                error!("Abort failed with error: {}", response.error_id);
+            }
+        }
+        Err(e) => error!("Abort error: {}", e),
+    }
+
+    match driver.initialize().await {
+        Ok(response) => {
+            if response.error_id == 0 {
+                info!("Initialize successful");
+            } else {
+                error!("Initialize failed with error: {}", response.error_id);
+                return;
+            }
+        }
+        Err(e) => {
+            error!("Initialize error: {}", e);
+            return;
+        }
+    }
 
     let driver = Arc::new(driver);
     let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(100);
@@ -69,10 +94,10 @@ async fn main() {
             let packet: fanuc_rmi::packets::SendPacket = dto::SendPacket::Command(dto::Command::FrcReadCartesianPosition(
                 dto::FrcReadCartesianPosition { group: 1 }
             )).into();
-            let _ = driver_clone.send_command(packet, PacketPriority::Low);
+            let _ = driver_clone.send_packet(packet, PacketPriority::Low);
 
             let packet: fanuc_rmi::packets::SendPacket = dto::SendPacket::Command(dto::Command::FrcGetStatus).into();
-            let _ = driver_clone.send_command(packet, PacketPriority::Low);
+            let _ = driver_clone.send_packet(packet, PacketPriority::Low);
         }
     });
 
@@ -122,7 +147,7 @@ async fn handle_connection(
                     if let Ok(dto_packet) = bincode::deserialize::<dto::SendPacket>(&data) {
                         info!("Received command from client: {:?}", dto_packet);
                         let packet: fanuc_rmi::packets::SendPacket = dto_packet.into();
-                        let _ = driver.send_command(packet, PacketPriority::Standard);
+                        let _ = driver.send_packet(packet, PacketPriority::Standard);
                     } else {
                         warn!("Failed to deserialize packet from client");
                     }

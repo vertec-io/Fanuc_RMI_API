@@ -55,6 +55,7 @@ async fn main() -> Result<(), FrcError> {
         addr: "127.0.0.1".to_string(),
         port: 16001,
         max_messages: 30,
+        log_level: fanuc_rmi::drivers::LogLevel::Info,
     };
 
     println!("Connecting to robot at {}:{}...", driver_settings.addr, driver_settings.port);
@@ -70,8 +71,21 @@ async fn main() -> Result<(), FrcError> {
     });
 
     println!("Initializing robot...");
-    driver.initialize();
-    sleep(Duration::from_millis(500)).await;
+    // Initialize and wait for response
+    match driver.initialize().await {
+        Ok(response) => {
+            if response.error_id == 0 {
+                println!("✓ Initialize successful");
+            } else {
+                eprintln!("✗ Initialize failed with error: {}", response.error_id);
+                return Err(FrcError::FailedToSend(format!("Initialize failed: {}", response.error_id)));
+            }
+        }
+        Err(e) => {
+            eprintln!("✗ Initialize error: {}", e);
+            return Err(FrcError::FailedToSend(e));
+        }
+    }
 
     let config = Arc::new(Mutex::new(JogConfig::default()));
     let active_jog = Arc::new(Mutex::new(None::<char>));
@@ -99,10 +113,13 @@ async fn main() -> Result<(), FrcError> {
         match cmd {
             'q' => {
                 println!("\nShutting down...");
-                driver.abort();
-                sleep(Duration::from_millis(100)).await;
-                driver.disconnect().await;
-                sleep(Duration::from_millis(500)).await;
+                // Abort and disconnect with response handling
+                if let Err(e) = driver.abort().await {
+                    eprintln!("✗ Abort error: {}", e);
+                }
+                if let Err(e) = driver.disconnect().await {
+                    eprintln!("✗ Disconnect error: {}", e);
+                }
                 break;
             }
             's' => {
@@ -262,7 +279,7 @@ async fn handle_jog_step(
     );
 
     let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(instruction));
-    let _seq_id = driver.send_command(packet, PacketPriority::Immediate)
+    let _seq_id = driver.send_packet(packet, PacketPriority::Immediate)
         .map_err(|e| format!("Failed to send step command: {}", e))?;
 
     println!("→ Step {} ({:.2} mm)", get_direction_name(key), config.step_distance);
@@ -318,7 +335,7 @@ async fn handle_jog_continuous_start(
                 );
 
                 let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(instruction));
-                let _ = driver_clone.send_command(packet, PacketPriority::Termination);
+                let _ = driver_clone.send_packet(packet, PacketPriority::Termination);
                 println!("→ Continuous {} stopped", get_direction_name(key));
                 break;
             }
@@ -336,7 +353,7 @@ async fn handle_jog_continuous_start(
             );
 
             let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(instruction));
-            if let Err(e) = driver_clone.send_command(packet, PacketPriority::Immediate) {
+            if let Err(e) = driver_clone.send_packet(packet, PacketPriority::Immediate) {
                 eprintln!("Failed to send continuous move: {}", e);
                 break;
             }

@@ -68,8 +68,14 @@ async fn live_example() {
     use fanuc_rmi::packets::{Instruction, PacketPriority, SendPacket};
     use fanuc_rmi::instructions::FrcWaitTime;
     use std::time::Duration;
+    use fanuc_rmi::drivers::LogLevel;
 
-    let cfg = FanucDriverConfig { addr: "127.0.0.1".into(), port: 16001, max_messages: 100 };
+    let cfg = FanucDriverConfig {
+        addr: "127.0.0.1".into(),
+        port: 16001,
+        max_messages: 100,
+        log_level: LogLevel::Info,
+    };
 
     let driver = match FanucDriver::connect(cfg).await {
         Ok(d) => {
@@ -85,13 +91,26 @@ async fn live_example() {
 
     let mut rx = driver.response_tx.subscribe();
 
-    driver.initialize();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Initialize and wait for response
+    match driver.initialize().await {
+        Ok(response) => {
+            if response.error_id == 0 {
+                println!("✓ Initialize successful");
+            } else {
+                eprintln!("✗ Initialize failed with error: {}", response.error_id);
+                return;
+            }
+        }
+        Err(e) => {
+            eprintln!("✗ Initialize error: {}", e);
+            return;
+        }
+    }
 
     let wait = FrcWaitTime::new(123, 1.0);
     let pkt = SendPacket::Instruction(Instruction::FrcWaitTime(wait));
     println!("1) Sending FrcWaitTime(seq=123, time=1.0s)");
-    if let Err(e) = driver.send_command(pkt, PacketPriority::Standard) {
+    if let Err(e) = driver.send_packet(pkt, PacketPriority::Standard) {
         println!("   Failed to send command: {}", e);
         return;
     }
@@ -127,7 +146,17 @@ async fn live_example() {
     assert_eq!(protocol_packet, protocol_back);
     println!("✓ Live roundtrip successful");
 
-    driver.disconnect().await;
+    // Disconnect and wait for response
+    match driver.disconnect().await {
+        Ok(response) => {
+            if response.error_id == 0 {
+                println!("✓ Disconnect successful");
+            } else {
+                eprintln!("✗ Disconnect failed with error: {}", response.error_id);
+            }
+        }
+        Err(e) => eprintln!("✗ Disconnect error: {}", e),
+    }
     println!("✓ Disconnected");
 }
 
