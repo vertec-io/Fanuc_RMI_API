@@ -23,6 +23,7 @@ pub struct FrcGetStatusResponse {
     pub number_uframe: i8,
     #[serde(rename = "NextSequenceID")]
     pub next_sequence_id: u32,
+    // Not in B-84184EN_02 docs, but Robot CRX-30iA returns it. 
     #[serde(rename = "Override")]
     pub override_value: u32,
 }

@@ -210,7 +210,8 @@ async fn handle_secondary_client(
                         "SingleStepMode": 0,
                         "NumberUTool": 5,
                         "NextSequenceID": next_seq,
-                        "NumberUFrame": 0
+                        "NumberUFrame": 0,
+                        "Override": 100
                     })
                 },
                 Some("FRC_ReadJointAngles") => {
@@ -251,12 +252,15 @@ async fn handle_secondary_client(
                         "ErrorID": 0,
                         "TimeTag": 0,
                         "Configuration": {
-                            "F": 0,
-                            "U": 0,
-                            "T": 0,
-                            "B1": 0,
-                            "B2": 0,
-                            "B3": 0,
+                            "UToolNumber": 1,
+                            "UFrameNumber": 1,
+                            "Front": 1,
+                            "Up": 1,
+                            "Left": 1,
+                            "Flip": 0,
+                            "Turn4": 0,
+                            "Turn5": 0,
+                            "Turn6": 0,
                         },
                         "Position": {
                             "X": state.cartesian_position[0],

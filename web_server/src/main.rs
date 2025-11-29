@@ -16,10 +16,21 @@ use tracing::{info, warn, error};
 async fn main() {
     tracing_subscriber::fmt::init();
 
+    // Load configuration from environment variables with defaults
+    let robot_addr = std::env::var("FANUC_ROBOT_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let robot_port = std::env::var("FANUC_ROBOT_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u32>().ok())
+        .unwrap_or(16001);
+    let websocket_port = std::env::var("WEBSOCKET_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(9000);
+
     // Connect to robot/simulator
     let driver_config = FanucDriverConfig {
-        addr: "127.0.0.1".to_string(),
-        port: 16001,
+        addr: robot_addr.clone(),
+        port: robot_port,
         max_messages: 30,
         log_level: LogLevel::Error,
     };
@@ -39,29 +50,14 @@ async fn main() {
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    // Abort and initialize with response handling
-    match driver.abort().await {
-        Ok(response) => {
-            if response.error_id == 0 {
-                info!("Abort successful");
-            } else {
-                error!("Abort failed with error: {}", response.error_id);
-            }
-        }
-        Err(e) => error!("Abort error: {}", e),
-    }
-
-    match driver.initialize().await {
-        Ok(response) => {
-            if response.error_id == 0 {
-                info!("Initialize successful");
-            } else {
-                error!("Initialize failed with error: {}", response.error_id);
-                return;
-            }
+    // Smart initialization - checks status first, only aborts if needed
+    match driver.startup_sequence().await {
+        Ok(()) => {
+            info!("✓ Robot initialization complete");
         }
         Err(e) => {
-            error!("Initialize error: {}", e);
+            error!("✗ Robot initialization failed: {}", e);
+            error!("  Check that robot is in AUTO mode and servo is ready");
             return;
         }
     }
@@ -102,8 +98,13 @@ async fn main() {
     });
 
     // Start WebSocket server
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:9000").await.unwrap();
-    info!("🚀 WebSocket server listening on ws://127.0.0.1:9000");
+    let websocket_addr = format!("127.0.0.1:{}", websocket_port);
+    let listener = tokio::net::TcpListener::bind(&websocket_addr).await.unwrap();
+    info!("🚀 WebSocket server listening on ws://{}", websocket_addr);
+    info!("   Environment variables:");
+    info!("   - FANUC_ROBOT_ADDR={}", robot_addr);
+    info!("   - FANUC_ROBOT_PORT={}", robot_port);
+    info!("   - WEBSOCKET_PORT={}", websocket_port);
 
     while let Ok((stream, addr)) = listener.accept().await {
         info!("New WebSocket connection from {}", addr);

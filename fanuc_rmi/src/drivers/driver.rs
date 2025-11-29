@@ -448,6 +448,124 @@ impl FanucDriver {
         .map_err(|_| "Timeout waiting for disconnect response".to_string())?
     }
 
+    /// Smart initialization sequence that checks robot status before initializing
+    ///
+    /// This method implements the proper FANUC RMI initialization sequence according to
+    /// the B-84184EN_02 manual. It:
+    /// 1. Checks the current robot status using FRC_GetStatus
+    /// 2. Verifies the robot is ready (servo ready, AUTO mode)
+    /// 3. Only aborts if RMI is already running (avoids "RMI Command Failed" error)
+    /// 4. Initializes the RMI system
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Initialization successful
+    /// * `Err(String)` - Initialization failed with error message
+    ///
+    /// # Errors
+    ///
+    /// This method will return an error if:
+    /// * Status check fails
+    /// * Robot is not ready (servo errors)
+    /// * Robot is not in AUTO mode
+    /// * Abort fails (if needed)
+    /// * Initialize fails
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use fanuc_rmi::drivers::{FanucDriver, FanucDriverConfig};
+    /// # use fanuc_rmi::drivers::driver_config::LogLevel;
+    /// # async fn example() -> Result<(), String> {
+    /// let config = FanucDriverConfig {
+    ///     addr: "192.168.1.100".to_string(),
+    ///     port: 16001,
+    ///     max_messages: 30,
+    ///     log_level: LogLevel::Info,
+    /// };
+    ///
+    /// let driver = FanucDriver::connect(config).await?;
+    ///
+    /// // Smart initialization - checks status first
+    /// driver.startup_sequence().await?;
+    ///
+    /// // Robot is now ready for motion commands
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn startup_sequence(&self) -> Result<(), String> {
+        self.log_info("Starting robot initialization sequence...").await;
+
+        // Step 1: Get current status
+        self.log_debug("Checking robot status...").await;
+        let status = self.get_status().await?;
+
+        if status.error_id != 0 {
+            let msg = format!("Get status failed with error: {}", status.error_id);
+            self.log_error(&msg).await;
+            return Err(msg);
+        }
+
+        // Step 2: Check if controller is ready
+        if status.servo_ready != 1 {
+            let msg = "Controller not ready (servo errors present)".to_string();
+            self.log_error(&msg).await;
+            return Err(msg);
+        }
+
+        if status.tp_mode != 1 {
+            let msg = "Controller not in AUTO mode (teach pendant may be enabled)".to_string();
+            self.log_error(&msg).await;
+            return Err(msg);
+        }
+
+        self.log_info(&format!(
+            "Robot status: servo_ready={}, tp_mode={}, rmi_motion_status={}",
+            status.servo_ready, status.tp_mode, status.rmi_motion_status
+        )).await;
+
+        // Step 3: Abort if RMI is already running
+        // According to B-84184EN_02: FRC_Abort only works when RMI_MOVE is running
+        if status.rmi_motion_status != 0 {
+            self.log_info("RMI already running, aborting first...").await;
+            let abort_response = self.abort().await?;
+
+            if abort_response.error_id != 0 {
+                let msg = format!("Abort failed with error: {}", abort_response.error_id);
+                self.log_error(&msg).await;
+                return Err(msg);
+            }
+
+            self.log_info("Abort successful").await;
+        } else {
+            self.log_info("RMI not running, skipping abort").await;
+        }
+
+        // Step 4: Initialize
+        self.log_info("Initializing RMI...").await;
+        let init_response = self.initialize().await?;
+
+        if init_response.error_id != 0 {
+            let msg = format!("Initialize failed with error: {}", init_response.error_id);
+            self.log_error(&msg).await;
+
+            // Special handling for error 7015 (RMI_MOVE program selected)
+            if init_response.error_id == 7015 {
+                self.log_error("Error 7015: RMI_MOVE program is selected on teach pendant").await;
+                self.log_error("Solution: Press SELECT on TP, choose another program, then retry").await;
+            }
+
+            return Err(msg);
+        }
+
+        self.log_info(&format!(
+            "Initialization successful (group_mask: {})",
+            init_response.group_mask
+        )).await;
+
+        Ok(())
+    }
+
     async fn send_packet_to_controller(&self, packet: SendPacket) -> Result<(), FrcError> {
         /*
         this is specifically for sending packets to the controller. It takes a packet and sends it over tcp to the controller.
