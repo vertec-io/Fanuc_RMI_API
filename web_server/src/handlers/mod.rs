@@ -20,6 +20,7 @@ pub mod settings;
 use crate::api_types::*;
 use crate::database::Database;
 use crate::program_executor::ProgramExecutor;
+use crate::session::ClientManager;
 use crate::RobotConnection;
 use fanuc_rmi::drivers::FanucDriver;
 use std::sync::Arc;
@@ -40,6 +41,7 @@ pub async fn handle_request(
     executor: Option<Arc<Mutex<ProgramExecutor>>>,
     ws_sender: Option<WsSender>,
     robot_connection: Option<Arc<RwLock<RobotConnection>>>,
+    client_manager: Option<Arc<ClientManager>>,
 ) -> ServerResponse {
     match request {
         // Program management
@@ -70,11 +72,11 @@ pub async fn handle_request(
 
         // Program execution
         ClientRequest::StartProgram { program_id } => {
-            execution::start_program(db, driver, executor, program_id, ws_sender).await
+            execution::start_program(db, driver, executor, program_id, ws_sender, client_manager).await
         }
-        ClientRequest::PauseProgram => execution::pause_program(driver, executor).await,
-        ClientRequest::ResumeProgram => execution::resume_program(driver, executor).await,
-        ClientRequest::StopProgram => execution::stop_program(driver, executor).await,
+        ClientRequest::PauseProgram => execution::pause_program(driver, executor, client_manager).await,
+        ClientRequest::ResumeProgram => execution::resume_program(driver, executor, client_manager).await,
+        ClientRequest::StopProgram => execution::stop_program(driver, executor, client_manager).await,
 
         // Robot connection management
         ClientRequest::GetConnectionStatus => {

@@ -243,6 +243,16 @@ pub enum ServerResponse {
         effective_r: f64,
     },
 
+    /// Broadcast when execution state changes (for multi-client sync).
+    #[serde(rename = "execution_state_changed")]
+    ExecutionStateChanged {
+        state: String, // "idle", "running", "paused", "stopping", "completed", "error"
+        program_id: Option<i64>,
+        current_line: Option<usize>,
+        total_lines: Option<usize>,
+        message: Option<String>,
+    },
+
     #[serde(rename = "robot_connections")]
     RobotConnections { connections: Vec<RobotConnectionDto> },
 
@@ -800,6 +810,46 @@ impl WebSocketManager {
                                     map.insert(port, value);
                                 }
                             });
+                        }
+                        ServerResponse::ExecutionStateChanged { state, program_id, current_line, total_lines, message } => {
+                            log::info!("Execution state changed: {} (program={:?}, line={:?}/{:?})", state, program_id, current_line, total_lines);
+                            // Update execution status based on broadcast state
+                            match state.as_str() {
+                                "running" => {
+                                    set_program_running.set(true);
+                                    if let (Some(line), Some(total)) = (current_line, total_lines) {
+                                        set_program_progress.set(Some((line, total)));
+                                    }
+                                }
+                                "paused" => {
+                                    // Keep program_running true but could add a paused signal
+                                    if let (Some(line), Some(total)) = (current_line, total_lines) {
+                                        set_program_progress.set(Some((line, total)));
+                                    }
+                                    if let Some(msg) = message {
+                                        set_api_message.set(Some(msg));
+                                    }
+                                }
+                                "idle" | "completed" | "stopping" => {
+                                    set_program_running.set(false);
+                                    set_program_progress.set(None);
+                                    set_executing_line.set(None);
+                                    if let Some(msg) = message {
+                                        set_api_message.set(Some(msg));
+                                    }
+                                }
+                                "error" => {
+                                    set_program_running.set(false);
+                                    set_program_progress.set(None);
+                                    set_executing_line.set(None);
+                                    if let Some(msg) = message {
+                                        set_api_error.set(Some(msg));
+                                    }
+                                }
+                                _ => {
+                                    log::warn!("Unknown execution state: {}", state);
+                                }
+                            }
                         }
                     }
                 } else {

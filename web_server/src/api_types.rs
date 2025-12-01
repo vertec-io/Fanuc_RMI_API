@@ -244,6 +244,16 @@ pub enum ServerResponse {
         effective_r: f64,
     },
 
+    /// Broadcast when execution state changes (for multi-client sync).
+    #[serde(rename = "execution_state_changed")]
+    ExecutionStateChanged {
+        state: String, // "idle", "running", "paused", "stopping", "completed", "error"
+        program_id: Option<i64>,
+        current_line: Option<usize>,
+        total_lines: Option<usize>,
+        message: Option<String>,
+    },
+
     #[serde(rename = "robot_connections")]
     RobotConnections { connections: Vec<RobotConnectionDto> },
 

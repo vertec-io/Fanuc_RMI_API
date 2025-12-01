@@ -6,6 +6,7 @@ use crate::api_types::ServerResponse;
 use crate::database::Database;
 use crate::program_executor::ProgramExecutor;
 use crate::handlers::WsSender;
+use crate::session::{ClientManager, execution_state_to_response};
 use fanuc_rmi::drivers::FanucDriver;
 use fanuc_rmi::packets::{PacketPriority, SendPacket, DriverCommand, SentInstructionInfo, ResponsePacket, Command};
 use std::sync::Arc;
@@ -20,16 +21,26 @@ use tokio_tungstenite::tungstenite::Message;
 /// 1. Pauses the executor (stops sending new instructions from the buffer)
 /// 2. Sends FRC_Pause to the robot controller (pauses current motion immediately)
 /// 3. Pauses the driver's packet queue (stops sending any queued packets)
+/// 4. Broadcasts state change to all connected clients
 pub async fn pause_program(
     driver: Option<Arc<FanucDriver>>,
     executor: Option<Arc<Mutex<ProgramExecutor>>>,
+    client_manager: Option<Arc<ClientManager>>,
 ) -> ServerResponse {
     if let Some(driver) = driver {
         // Pause the executor first (stops buffered streaming)
-        if let Some(executor) = executor {
+        let state_response = if let Some(ref executor) = executor {
             let mut exec_guard = executor.lock().await;
             exec_guard.pause();
             info!("Executor paused");
+            Some(execution_state_to_response(&exec_guard.get_state()))
+        } else {
+            None
+        };
+
+        // Broadcast state change to all clients
+        if let (Some(client_manager), Some(state_response)) = (&client_manager, state_response) {
+            client_manager.broadcast_all(&state_response).await;
         }
 
         // Send FRC_Pause to the robot to pause current motion immediately
@@ -58,16 +69,26 @@ pub async fn pause_program(
 /// 1. Resumes the executor (allows sending more instructions from the buffer)
 /// 2. Unpauses the driver's packet queue
 /// 3. Sends FRC_Continue to the robot controller (resumes motion)
+/// 4. Broadcasts state change to all connected clients
 pub async fn resume_program(
     driver: Option<Arc<FanucDriver>>,
     executor: Option<Arc<Mutex<ProgramExecutor>>>,
+    client_manager: Option<Arc<ClientManager>>,
 ) -> ServerResponse {
     if let Some(driver) = driver {
         // Resume the executor (allows buffered streaming to continue)
-        if let Some(executor) = executor {
+        let state_response = if let Some(ref executor) = executor {
             let mut exec_guard = executor.lock().await;
             exec_guard.resume();
             info!("Executor resumed");
+            Some(execution_state_to_response(&exec_guard.get_state()))
+        } else {
+            None
+        };
+
+        // Broadcast state change to all clients
+        if let (Some(client_manager), Some(state_response)) = (&client_manager, state_response) {
+            client_manager.broadcast_all(&state_response).await;
         }
 
         // Unpause the driver's packet queue
@@ -96,9 +117,11 @@ pub async fn resume_program(
 /// 1. Stops the executor (clears pending queue)
 /// 2. Sends FRC_Abort to the robot controller (aborts current motion)
 /// 3. Clears in-flight tracking
+/// 4. Broadcasts state change to all connected clients
 pub async fn stop_program(
     driver: Option<Arc<FanucDriver>>,
     executor: Option<Arc<Mutex<ProgramExecutor>>>,
+    client_manager: Option<Arc<ClientManager>>,
 ) -> ServerResponse {
     if let Some(driver) = driver {
         // Stop the executor (clears pending queue)
@@ -112,11 +135,20 @@ pub async fn stop_program(
         match driver.abort().await {
             Ok(_) => {
                 // Clear in-flight tracking after abort completes
-                if let Some(executor) = executor {
+                let state_response = if let Some(ref executor) = executor {
                     let mut exec_guard = executor.lock().await;
                     exec_guard.clear_in_flight();
                     info!("In-flight tracking cleared");
+                    Some(execution_state_to_response(&exec_guard.get_state()))
+                } else {
+                    None
+                };
+
+                // Broadcast state change to all clients
+                if let (Some(client_manager), Some(state_response)) = (&client_manager, state_response) {
+                    client_manager.broadcast_all(&state_response).await;
                 }
+
                 ServerResponse::Success { message: "Program stopped".to_string() }
             },
             Err(e) => ServerResponse::Error { message: format!("Failed to stop: {}", e) }
@@ -131,12 +163,14 @@ pub async fn stop_program(
 /// This sends instructions in batches of up to 5 (MAX_BUFFER), waiting for
 /// completions before sending more. This matches FANUC RMI's buffer behavior
 /// and allows for proper pause/stop handling.
+/// 5. Broadcasts state change to all connected clients
 pub async fn start_program(
     db: Arc<Mutex<Database>>,
     driver: Option<Arc<FanucDriver>>,
     executor: Option<Arc<Mutex<ProgramExecutor>>>,
     program_id: i64,
     ws_sender: Option<WsSender>,
+    client_manager: Option<Arc<ClientManager>>,
 ) -> ServerResponse {
     let driver = match driver {
         Some(d) => d,
@@ -149,15 +183,22 @@ pub async fn start_program(
     };
 
     // Load program into executor
-    let total_instructions = {
+    let (total_instructions, state_response) = {
         let db_guard = db.lock().await;
         let mut exec_guard = executor.lock().await;
         if let Err(e) = exec_guard.load_program(&db_guard, program_id) {
             return ServerResponse::Error { message: format!("Failed to load program: {}", e) };
         }
         exec_guard.start(program_id);
-        exec_guard.total_instructions()
+        let total = exec_guard.total_instructions();
+        let state = execution_state_to_response(&exec_guard.get_state());
+        (total, state)
     };
+
+    // Broadcast state change to all clients
+    if let Some(ref client_manager) = client_manager {
+        client_manager.broadcast_all(&state_response).await;
+    }
 
     info!("Starting buffered execution of program {} with {} instructions", program_id, total_instructions);
 

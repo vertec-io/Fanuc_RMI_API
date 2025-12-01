@@ -6,11 +6,13 @@ mod database;
 mod handlers;
 mod program_executor;
 mod program_parser;
+mod session;
 
 use handlers::handle_request;
 use api_types::{ClientRequest, ServerResponse};
 use database::Database;
 use program_executor::ProgramExecutor;
+use session::ClientManager;
 use fanuc_rmi::{
     drivers::{FanucDriver, FanucDriverConfig, LogLevel},
     dto,
@@ -130,6 +132,7 @@ async fn main() {
     }
 
     let executor = Arc::new(tokio::sync::Mutex::new(ProgramExecutor::new()));
+    let client_manager = Arc::new(ClientManager::new());
     let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(100);
     let broadcast_tx = Arc::new(broadcast_tx);
 
@@ -218,9 +221,10 @@ async fn main() {
         let robot_connection = Arc::clone(&robot_connection);
         let db = Arc::clone(&db);
         let executor = Arc::clone(&executor);
+        let client_manager = Arc::clone(&client_manager);
         let broadcast_rx = broadcast_tx.subscribe();
 
-        tokio::spawn(handle_connection(stream, robot_connection, db, executor, broadcast_rx));
+        tokio::spawn(handle_connection(stream, robot_connection, db, executor, client_manager, broadcast_rx));
     }
 }
 
@@ -229,6 +233,7 @@ async fn handle_connection(
     robot_connection: Arc<RwLock<RobotConnection>>,
     db: Arc<tokio::sync::Mutex<Database>>,
     executor: Arc<tokio::sync::Mutex<ProgramExecutor>>,
+    client_manager: Arc<ClientManager>,
     mut broadcast_rx: broadcast::Receiver<Vec<u8>>,
 ) {
     let ws_stream = match accept_async(stream).await {
@@ -241,6 +246,10 @@ async fn handle_connection(
 
     let (ws_sender, mut ws_receiver) = ws_stream.split();
     let ws_sender = Arc::new(tokio::sync::Mutex::new(ws_sender));
+
+    // Register this client with the client manager
+    let client_id = client_manager.register(Arc::clone(&ws_sender)).await;
+    info!("Client {} connected", client_id);
 
     // Task to forward broadcast messages to this client
     let ws_sender_clone = Arc::clone(&ws_sender);
@@ -256,6 +265,7 @@ async fn handle_connection(
     // Task to handle incoming messages from client
     let ws_sender_clone = Arc::clone(&ws_sender);
     let robot_connection_clone = Arc::clone(&robot_connection);
+    let client_manager_clone = Arc::clone(&client_manager);
     let recv_task = tokio::spawn(async move {
         while let Some(msg) = ws_receiver.next().await {
             match msg {
@@ -294,6 +304,7 @@ async fn handle_connection(
                                 Some(Arc::clone(&executor)),
                                 Some(Arc::clone(&ws_sender_clone)),
                                 Some(Arc::clone(&robot_connection_clone)),
+                                Some(Arc::clone(&client_manager_clone)),
                             ).await;
                             let response_json = serde_json::to_string(&response).unwrap_or_else(|e| {
                                 format!(r#"{{"type":"error","message":"Serialization error: {}"}}"#, e)
@@ -330,6 +341,8 @@ async fn handle_connection(
         _ = recv_task => {},
     }
 
-    info!("WebSocket connection closed");
+    // Unregister client when connection closes
+    client_manager.unregister(client_id).await;
+    info!("WebSocket connection closed for client {}", client_id);
 }
 
