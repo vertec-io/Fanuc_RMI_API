@@ -45,22 +45,45 @@ fn IOStatusPanel() -> impl IntoView {
     let (collapsed, set_collapsed) = signal(true);
     let (selected_tab, set_selected_tab) = signal::<&'static str>("din");
 
-    // Static array of ports to display (1-8 for compact view)
-    const DISPLAY_PORTS: [u16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    // Default ports to display (1-8 for compact view)
+    const DEFAULT_PORTS: [u16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+
+    // Get I/O config for display names
+    let io_config = ws.io_config;
+
+    // Helper to get display name for an I/O port
+    let get_display_name = move |io_type: &str, port: u16| -> String {
+        let config = io_config.get();
+        if let Some(cfg) = config.get(&(io_type.to_string(), port as i32)) {
+            if let Some(ref name) = cfg.display_name {
+                return name.clone();
+            }
+        }
+        port.to_string()
+    };
+
+    // Helper to check if a port is visible
+    let is_port_visible = move |io_type: &str, port: u16| -> bool {
+        let config = io_config.get();
+        if let Some(cfg) = config.get(&(io_type.to_string(), port as i32)) {
+            return cfg.is_visible;
+        }
+        true // Default to visible if no config
+    };
 
     // Refresh I/O values when panel is opened
     let refresh_io = move || {
         // Clear cache first to ensure fresh values
         ws.clear_io_cache();
         // Read all DIN ports
-        let ports: Vec<u16> = DISPLAY_PORTS.to_vec();
+        let ports: Vec<u16> = DEFAULT_PORTS.to_vec();
         ws.read_din_batch(ports);
         // Also read individual ports for DOUT (they may have different values)
-        for &port in &DISPLAY_PORTS {
+        for &port in &DEFAULT_PORTS {
             ws.read_din(port);
         }
         // Read analog and group I/O
-        for &port in &DISPLAY_PORTS {
+        for &port in &DEFAULT_PORTS {
             ws.read_ain(port);
             ws.read_gin(port);
         }
@@ -133,10 +156,12 @@ fn IOStatusPanel() -> impl IntoView {
                     // I/O grid - DIN
                     <Show when=move || selected_tab.get() == "din">
                         <div class="grid grid-cols-4 gap-1">
-                            {DISPLAY_PORTS.iter().map(|&port| {
+                            {DEFAULT_PORTS.iter().filter(|&&port| is_port_visible("DIN", port)).map(|&port| {
+                                let name = get_display_name("DIN", port);
                                 view! {
                                     <IOIndicator
                                         port=port
+                                        name=name
                                         value=Signal::derive(move || din_values.get().get(&port).copied().unwrap_or(false))
                                     />
                                 }
@@ -147,10 +172,12 @@ fn IOStatusPanel() -> impl IntoView {
                     // I/O grid - DOUT
                     <Show when=move || selected_tab.get() == "dout">
                         <div class="grid grid-cols-4 gap-1">
-                            {DISPLAY_PORTS.iter().map(|&port| {
+                            {DEFAULT_PORTS.iter().filter(|&&port| is_port_visible("DOUT", port)).map(|&port| {
+                                let name = get_display_name("DOUT", port);
                                 view! {
                                     <IOButton
                                         port=port
+                                        name=name
                                         value=Signal::derive(move || dout_values.get().get(&port).copied().unwrap_or(false))
                                     />
                                 }
@@ -161,10 +188,12 @@ fn IOStatusPanel() -> impl IntoView {
                     // I/O grid - AIN (analog input - read only)
                     <Show when=move || selected_tab.get() == "ain">
                         <div class="grid grid-cols-4 gap-1">
-                            {DISPLAY_PORTS.iter().map(|&port| {
+                            {DEFAULT_PORTS.iter().filter(|&&port| is_port_visible("AIN", port)).map(|&port| {
+                                let name = get_display_name("AIN", port);
                                 view! {
                                     <AnalogIndicator
                                         port=port
+                                        name=name
                                         value=Signal::derive(move || ain_values.get().get(&port).copied().unwrap_or(0.0))
                                     />
                                 }
@@ -175,10 +204,12 @@ fn IOStatusPanel() -> impl IntoView {
                     // I/O grid - AOUT (analog output - writable)
                     <Show when=move || selected_tab.get() == "aout">
                         <div class="grid grid-cols-4 gap-1">
-                            {DISPLAY_PORTS.iter().map(|&port| {
+                            {DEFAULT_PORTS.iter().filter(|&&port| is_port_visible("AOUT", port)).map(|&port| {
+                                let name = get_display_name("AOUT", port);
                                 view! {
                                     <AnalogOutput
                                         port=port
+                                        name=name
                                         value=Signal::derive(move || aout_values.get().get(&port).copied().unwrap_or(0.0))
                                     />
                                 }
@@ -189,10 +220,12 @@ fn IOStatusPanel() -> impl IntoView {
                     // I/O grid - GIN (group input - read only)
                     <Show when=move || selected_tab.get() == "gin">
                         <div class="grid grid-cols-4 gap-1">
-                            {DISPLAY_PORTS.iter().map(|&port| {
+                            {DEFAULT_PORTS.iter().filter(|&&port| is_port_visible("GIN", port)).map(|&port| {
+                                let name = get_display_name("GIN", port);
                                 view! {
                                     <GroupIndicator
                                         port=port
+                                        name=name
                                         value=Signal::derive(move || gin_values.get().get(&port).copied().unwrap_or(0))
                                     />
                                 }
@@ -203,10 +236,12 @@ fn IOStatusPanel() -> impl IntoView {
                     // I/O grid - GOUT (group output - writable)
                     <Show when=move || selected_tab.get() == "gout">
                         <div class="grid grid-cols-4 gap-1">
-                            {DISPLAY_PORTS.iter().map(|&port| {
+                            {DEFAULT_PORTS.iter().filter(|&&port| is_port_visible("GOUT", port)).map(|&port| {
+                                let name = get_display_name("GOUT", port);
                                 view! {
                                     <GroupOutput
                                         port=port
+                                        name=name
                                         value=Signal::derive(move || gout_values.get().get(&port).copied().unwrap_or(0))
                                     />
                                 }
@@ -223,8 +258,11 @@ fn IOStatusPanel() -> impl IntoView {
 #[component]
 fn IOIndicator(
     port: u16,
+    name: String,
     value: Signal<bool>,
 ) -> impl IntoView {
+    let display_name = name.clone();
+    let title_name = name;
     view! {
         <div
             class={move || format!(
@@ -233,7 +271,7 @@ fn IOIndicator(
             )}
             title={format!("DIN[{}]", port)}
         >
-            <span class="font-mono">{port}</span>
+            <span class="font-mono truncate max-w-full" title={title_name}>{display_name}</span>
             <div class={move || format!(
                 "w-2 h-2 rounded-full mt-0.5 {}",
                 if value.get() { "bg-[#00ff00]" } else { "bg-[#333333]" }
@@ -246,9 +284,12 @@ fn IOIndicator(
 #[component]
 fn IOButton(
     port: u16,
+    name: String,
     value: Signal<bool>,
 ) -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
+    let display_name = name.clone();
+    let title_name = name;
 
     let toggle = move |_| {
         let current = value.get();
@@ -266,7 +307,7 @@ fn IOButton(
             title={format!("DOUT[{}] - Click to toggle", port)}
             on:click=toggle
         >
-            <span class="font-mono">{port}</span>
+            <span class="font-mono truncate max-w-full" title={title_name}>{display_name}</span>
             <div class={move || format!(
                 "w-2 h-2 rounded-full mt-0.5 {}",
                 if value.get() { "bg-[#ff8800]" } else { "bg-[#333333]" }
@@ -279,14 +320,17 @@ fn IOButton(
 #[component]
 fn AnalogIndicator(
     port: u16,
+    name: String,
     value: Signal<f64>,
 ) -> impl IntoView {
+    let display_name = name.clone();
+    let title_name = name;
     view! {
         <div
             class="flex flex-col items-center justify-center p-1 rounded text-[8px] bg-[#ffffff05]"
             title={format!("AIN[{}]", port)}
         >
-            <span class="font-mono text-[#00d9ff]">{port}</span>
+            <span class="font-mono text-[#00d9ff] truncate max-w-full" title={title_name}>{display_name}</span>
             <span class="font-mono text-[#888888] text-[7px]">
                 {move || format!("{:.1}", value.get())}
             </span>
@@ -298,9 +342,12 @@ fn AnalogIndicator(
 #[component]
 fn AnalogOutput(
     port: u16,
+    name: String,
     value: Signal<f64>,
 ) -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
+    let display_name = name.clone();
+    let title_name = name;
     let (editing, set_editing) = signal(false);
     let (input_value, set_input_value) = signal(String::new());
 
@@ -322,7 +369,7 @@ fn AnalogOutput(
             class="flex flex-col items-center justify-center p-1 rounded text-[8px] bg-[#ff880010] cursor-pointer hover:bg-[#ff880020]"
             title={format!("AOUT[{}] - Click to edit", port)}
         >
-            <span class="font-mono text-[#ff8800]">{port}</span>
+            <span class="font-mono text-[#ff8800] truncate max-w-full" title={title_name}>{display_name}</span>
             <Show when=move || !editing.get() fallback=move || view! {
                 <input
                     type="number"
@@ -349,14 +396,17 @@ fn AnalogOutput(
 #[component]
 fn GroupIndicator(
     port: u16,
+    name: String,
     value: Signal<u32>,
 ) -> impl IntoView {
+    let display_name = name.clone();
+    let title_name = name;
     view! {
         <div
             class="flex flex-col items-center justify-center p-1 rounded text-[8px] bg-[#ffffff05]"
             title={format!("GIN[{}]", port)}
         >
-            <span class="font-mono text-[#00ff88]">{port}</span>
+            <span class="font-mono text-[#00ff88] truncate max-w-full" title={title_name}>{display_name}</span>
             <span class="font-mono text-[#888888] text-[7px]">
                 {move || format!("{}", value.get())}
             </span>
@@ -368,9 +418,12 @@ fn GroupIndicator(
 #[component]
 fn GroupOutput(
     port: u16,
+    name: String,
     value: Signal<u32>,
 ) -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
+    let display_name = name.clone();
+    let title_name = name;
     let (editing, set_editing) = signal(false);
     let (input_value, set_input_value) = signal(String::new());
 
@@ -392,7 +445,7 @@ fn GroupOutput(
             class="flex flex-col items-center justify-center p-1 rounded text-[8px] bg-[#ff00ff10] cursor-pointer hover:bg-[#ff00ff20]"
             title={format!("GOUT[{}] - Click to edit", port)}
         >
-            <span class="font-mono text-[#ff00ff]">{port}</span>
+            <span class="font-mono text-[#ff00ff] truncate max-w-full" title={title_name}>{display_name}</span>
             <Show when=move || !editing.get() fallback=move || view! {
                 <input
                     type="number"
