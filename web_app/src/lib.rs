@@ -7,7 +7,7 @@ mod components;
 mod websocket;
 mod robot_models;
 
-use components::{DesktopLayout, FloatingJogControls};
+use components::{DesktopLayout, FloatingJogControls, ToastContainer};
 use websocket::WebSocketManager;
 pub use robot_models::RobotModel;
 
@@ -28,6 +28,7 @@ pub fn App() -> impl IntoView {
         <Router>
             <DesktopLayout/>
             <FloatingJogControls/>
+            <ToastContainer/>
         </Router>
     }
 }

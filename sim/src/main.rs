@@ -70,6 +70,9 @@ struct RobotState {
     active_utool: u8,
     uframes: [FrameToolData; 10],
     utools: [FrameToolData; 10],
+    // I/O state
+    din: [bool; 256],  // Digital inputs (simulated)
+    dout: [bool; 256], // Digital outputs
 }
 
 impl Default for RobotState {
@@ -117,6 +120,9 @@ impl RobotState {
             active_utool: 0,
             uframes: Default::default(),
             utools: Default::default(),
+            // Initialize I/O state
+            din: [false; 256],
+            dout: [false; 256],
         }
     }
 
@@ -598,6 +604,31 @@ async fn handle_secondary_client(
                                 "Command": "FRC_WriteUToolData",
                                 "ErrorID": 0,
                                 "Group": 1
+                            })
+                        }
+                        Some("FRC_ReadDIN") => {
+                            let state = robot_state.lock().await;
+                            let port_num = request_json["PortNumber"].as_u64().unwrap_or(0) as usize;
+                            let port_value = if port_num < 256 { state.din[port_num] } else { false };
+                            println!("📥 FRC_ReadDIN: Port {} = {}", port_num, if port_value { "ON" } else { "OFF" });
+                            json!({
+                                "Command": "FRC_ReadDIN",
+                                "ErrorID": 0,
+                                "PortNumber": port_num,
+                                "PortValue": if port_value { 1 } else { 0 }
+                            })
+                        }
+                        Some("FRC_WriteDOUT") => {
+                            let mut state = robot_state.lock().await;
+                            let port_num = request_json["PortNumber"].as_u64().unwrap_or(0) as usize;
+                            let port_value = request_json["PortValue"].as_u64().unwrap_or(0) != 0;
+                            if port_num < 256 {
+                                state.dout[port_num] = port_value;
+                            }
+                            println!("📤 FRC_WriteDOUT: Port {} = {}", port_num, if port_value { "ON" } else { "OFF" });
+                            json!({
+                                "Command": "FRC_WriteDOUT",
+                                "ErrorID": 0
                             })
                         }
                         _ => json!({}),

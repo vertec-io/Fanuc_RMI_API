@@ -131,6 +131,16 @@ pub enum ClientRequest {
         p: f64,
         r: f64,
     },
+
+    // I/O Management
+    #[serde(rename = "read_din")]
+    ReadDin { port_number: u16 },
+
+    #[serde(rename = "write_dout")]
+    WriteDout { port_number: u16, port_value: bool },
+
+    #[serde(rename = "read_din_batch")]
+    ReadDinBatch { port_numbers: Vec<u16> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,6 +241,13 @@ pub enum ServerResponse {
         p: f64,
         r: f64,
     },
+
+    // I/O responses
+    #[serde(rename = "din_value")]
+    DinValue { port_number: u16, port_value: bool },
+
+    #[serde(rename = "din_batch")]
+    DinBatch { values: Vec<(u16, bool)> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -306,8 +323,7 @@ pub struct WebSocketManager {
     set_connected: WriteSignal<bool>,
     pub position: ReadSignal<Option<(f64, f64, f64)>>,
     set_position: WriteSignal<Option<(f64, f64, f64)>>,
-    /// Orientation data (reserved for future 6-DOF display)
-    #[allow(dead_code)]
+    /// Orientation data (W, P, R angles in degrees)
     pub orientation: ReadSignal<Option<(f64, f64, f64)>>,
     set_orientation: WriteSignal<Option<(f64, f64, f64)>>,
     pub joint_angles: ReadSignal<Option<[f32; 6]>>,
@@ -325,23 +341,20 @@ pub struct WebSocketManager {
     set_current_program: WriteSignal<Option<ProgramDetail>>,
     pub settings: ReadSignal<Option<RobotSettingsDto>>,
     set_settings: WriteSignal<Option<RobotSettingsDto>>,
-    /// API message (reserved for future toast notifications)
-    #[allow(dead_code)]
+    /// API message for toast notifications
     pub api_message: ReadSignal<Option<String>>,
     set_api_message: WriteSignal<Option<String>>,
     /// API error message (cleared on next successful response)
     pub api_error: ReadSignal<Option<String>>,
     set_api_error: WriteSignal<Option<String>>,
-    /// Execution status (reserved for future execution progress display)
-    #[allow(dead_code)]
+    /// Execution status for progress display
     pub execution_status: ReadSignal<Option<ExecutionStatusData>>,
     set_execution_status: WriteSignal<Option<ExecutionStatusData>>,
     // Program execution state
     pub program_running: ReadSignal<bool>,
     set_program_running: WriteSignal<bool>,
-    /// Program progress (reserved for future progress bar)
-    #[allow(dead_code)]
-    pub program_progress: ReadSignal<Option<(usize, usize)>>, // (completed_line, total_lines)
+    /// Program progress (completed_line, total_lines)
+    pub program_progress: ReadSignal<Option<(usize, usize)>>,
     set_program_progress: WriteSignal<Option<(usize, usize)>>,
     pub executing_line: ReadSignal<Option<usize>>,  // The line currently being executed
     set_executing_line: WriteSignal<Option<usize>>,
@@ -366,6 +379,13 @@ pub struct WebSocketManager {
     /// Tool data cache - indexed by tool number (0-9)
     pub tool_data: ReadSignal<HashMap<u8, FrameToolData>>,
     set_tool_data: WriteSignal<HashMap<u8, FrameToolData>>,
+    // I/O data
+    /// Digital input values - indexed by port number
+    pub din_values: ReadSignal<HashMap<u16, bool>>,
+    set_din_values: WriteSignal<HashMap<u16, bool>>,
+    /// Digital output values - indexed by port number
+    pub dout_values: ReadSignal<HashMap<u16, bool>>,
+    set_dout_values: WriteSignal<HashMap<u16, bool>>,
     ws: StoredValue<Option<WebSocket>, LocalStorage>,
     ws_url: StoredValue<String>,
 }
@@ -377,12 +397,15 @@ pub struct RobotStatusData {
     pub motion_status: i8,
 }
 
-/// Execution status data (reserved for future execution progress display)
+/// Execution status data for progress display
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct ExecutionStatusData {
     pub status: String,
+    /// Current line from execution status (prefer program_progress signal for progress tracking)
+    #[allow(dead_code)]
     pub current_line: Option<usize>,
+    /// Total lines from execution status (prefer program_progress signal for progress tracking)
+    #[allow(dead_code)]
     pub total_lines: Option<usize>,
     pub error: Option<String>,
 }
@@ -418,6 +441,9 @@ impl WebSocketManager {
         let (active_frame_tool, set_active_frame_tool) = signal::<Option<(u8, u8)>>(None);
         let (frame_data, set_frame_data) = signal::<HashMap<u8, FrameToolData>>(HashMap::new());
         let (tool_data, set_tool_data) = signal::<HashMap<u8, FrameToolData>>(HashMap::new());
+        // I/O data
+        let (din_values, set_din_values) = signal::<HashMap<u16, bool>>(HashMap::new());
+        let (dout_values, set_dout_values) = signal::<HashMap<u16, bool>>(HashMap::new());
         let ws: StoredValue<Option<WebSocket>, LocalStorage> = StoredValue::new_local(None);
         let ws_url = StoredValue::new("ws://127.0.0.1:9000".to_string());
 
@@ -468,6 +494,10 @@ impl WebSocketManager {
             set_frame_data,
             tool_data,
             set_tool_data,
+            din_values,
+            set_din_values,
+            dout_values,
+            set_dout_values,
             ws,
             ws_url,
         };
@@ -509,6 +539,9 @@ impl WebSocketManager {
         let set_active_frame_tool = self.set_active_frame_tool;
         let set_frame_data = self.set_frame_data;
         let set_tool_data = self.set_tool_data;
+        let set_din_values = self.set_din_values;
+        // DOUT values are updated optimistically via update_dout_cache, not from server responses
+        let _set_dout_values = self.set_dout_values;
 
         // On open
         let onopen_callback = Closure::wrap(Box::new(move |_| {
@@ -680,6 +713,20 @@ impl WebSocketManager {
                                 map.insert(tool_number, FrameToolData { x, y, z, w, p, r });
                             });
                         }
+                        ServerResponse::DinValue { port_number, port_value } => {
+                            log::debug!("DIN[{}] = {}", port_number, if port_value { "ON" } else { "OFF" });
+                            set_din_values.update(|map| {
+                                map.insert(port_number, port_value);
+                            });
+                        }
+                        ServerResponse::DinBatch { values } => {
+                            log::debug!("DIN batch: {} values", values.len());
+                            set_din_values.update(|map| {
+                                for (port, value) in values {
+                                    map.insert(port, value);
+                                }
+                            });
+                        }
                     }
                 } else {
                     log::error!("Failed to parse API response: {}", text_str);
@@ -795,8 +842,7 @@ impl WebSocketManager {
         });
     }
 
-    /// Reset database (dangerous!) - reserved for admin functionality
-    #[allow(dead_code)]
+    /// Reset database (dangerous!) - deletes all programs, settings, and connections
     pub fn reset_database(&self) {
         self.send_api_request(ClientRequest::ResetDatabase);
     }
@@ -856,6 +902,16 @@ impl WebSocketManager {
     /// Clear the API error
     pub fn clear_api_error(&self) {
         self.set_api_error.set(None);
+    }
+
+    /// Clear the API message (toast notification)
+    pub fn clear_api_message(&self) {
+        self.set_api_message.set(None);
+    }
+
+    /// Set an API message (toast notification)
+    pub fn set_message(&self, message: String) {
+        self.set_api_message.set(Some(message));
     }
 
     /// Clear the current program (close it)
@@ -946,6 +1002,36 @@ impl WebSocketManager {
         self.send_api_request(ClientRequest::WriteToolData {
             tool_number,
             x, y, z, w, p, r,
+        });
+    }
+
+    // ========== I/O Management ==========
+
+    /// Read a single digital input port
+    pub fn read_din(&self, port_number: u16) {
+        self.send_api_request(ClientRequest::ReadDin { port_number });
+    }
+
+    /// Write a digital output port
+    pub fn write_dout(&self, port_number: u16, port_value: bool) {
+        self.send_api_request(ClientRequest::WriteDout { port_number, port_value });
+    }
+
+    /// Read multiple digital input ports at once
+    pub fn read_din_batch(&self, port_numbers: Vec<u16>) {
+        self.send_api_request(ClientRequest::ReadDinBatch { port_numbers });
+    }
+
+    /// Clear the cached I/O values
+    pub fn clear_io_cache(&self) {
+        self.set_din_values.set(std::collections::HashMap::new());
+        self.set_dout_values.set(std::collections::HashMap::new());
+    }
+
+    /// Update a single DOUT value in the local cache (for optimistic updates)
+    pub fn update_dout_cache(&self, port: u16, value: bool) {
+        self.set_dout_values.update(|map| {
+            map.insert(port, value);
         });
     }
 }

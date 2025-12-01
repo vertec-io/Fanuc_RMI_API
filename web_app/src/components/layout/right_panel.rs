@@ -6,6 +6,7 @@ use leptos_use::{use_draggable_with_options, UseDraggableOptions, UseDraggableRe
 use leptos_router::hooks::use_location;
 use super::LayoutContext;
 use crate::components::{PositionDisplay, ErrorLog, JogControls, RobotStatus};
+use crate::websocket::WebSocketManager;
 
 /// Right sidebar panel with position, errors, I/O, and jog controls.
 #[component]
@@ -37,16 +38,46 @@ pub fn RightPanel() -> impl IntoView {
     }
 }
 
-/// I/O Status placeholder panel.
+/// I/O Status panel with real DIN/DOUT support.
 #[component]
 fn IOStatusPanel() -> impl IntoView {
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
     let (collapsed, set_collapsed) = signal(true);
+    let (selected_tab, set_selected_tab) = signal::<&'static str>("din");
+
+    // Static array of ports to display (1-8 for compact view)
+    const DISPLAY_PORTS: [u16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+
+    // Refresh I/O values when panel is opened
+    let refresh_io = move || {
+        // Clear cache first to ensure fresh values
+        ws.clear_io_cache();
+        // Read all DIN ports
+        let ports: Vec<u16> = DISPLAY_PORTS.to_vec();
+        ws.read_din_batch(ports);
+        // Also read individual ports for DOUT (they may have different values)
+        for &port in &DISPLAY_PORTS {
+            ws.read_din(port);
+        }
+    };
+
+    // Toggle collapse and refresh on open
+    let toggle_collapse = move |_| {
+        let was_collapsed = collapsed.get();
+        set_collapsed.update(|v| *v = !*v);
+        if was_collapsed {
+            refresh_io();
+        }
+    };
+
+    let din_values = ws.din_values;
+    let dout_values = ws.dout_values;
 
     view! {
         <div class="bg-[#0a0a0a] rounded border border-[#ffffff08]">
             <button
                 class="w-full flex items-center justify-between p-2 hover:bg-[#ffffff05] transition-colors"
-                on:click=move |_| set_collapsed.update(|v| *v = !*v)
+                on:click=toggle_collapse
             >
                 <h3 class="text-[10px] font-semibold text-[#00d9ff] uppercase tracking-wide flex items-center">
                     <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -62,13 +93,124 @@ fn IOStatusPanel() -> impl IntoView {
                 </svg>
             </button>
             <Show when=move || !collapsed.get()>
-                <div class="px-2 pb-2">
-                    <p class="text-[#555555] text-[9px]">
-                        "Coming soon"
-                    </p>
+                <div class="px-2 pb-2 space-y-2">
+                    // Tab buttons
+                    <div class="flex gap-1">
+                        <button
+                            class={move || format!(
+                                "flex-1 text-[9px] py-1 rounded transition-colors {}",
+                                if selected_tab.get() == "din" { "bg-[#00d9ff20] text-[#00d9ff]" } else { "bg-[#ffffff05] text-[#666666] hover:text-[#888888]" }
+                            )}
+                            on:click=move |_| set_selected_tab.set("din")
+                        >
+                            "DIN"
+                        </button>
+                        <button
+                            class={move || format!(
+                                "flex-1 text-[9px] py-1 rounded transition-colors {}",
+                                if selected_tab.get() == "dout" { "bg-[#00d9ff20] text-[#00d9ff]" } else { "bg-[#ffffff05] text-[#666666] hover:text-[#888888]" }
+                            )}
+                            on:click=move |_| set_selected_tab.set("dout")
+                        >
+                            "DOUT"
+                        </button>
+                        <button
+                            class="p-1 text-[#555555] hover:text-[#00d9ff] transition-colors"
+                            title="Refresh I/O"
+                            on:click=move |_| refresh_io()
+                        >
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    // I/O grid - DIN
+                    <Show when=move || selected_tab.get() == "din">
+                        <div class="grid grid-cols-4 gap-1">
+                            {DISPLAY_PORTS.iter().map(|&port| {
+                                view! {
+                                    <IOIndicator
+                                        port=port
+                                        value=Signal::derive(move || din_values.get().get(&port).copied().unwrap_or(false))
+                                    />
+                                }
+                            }).collect_view()}
+                        </div>
+                    </Show>
+
+                    // I/O grid - DOUT
+                    <Show when=move || selected_tab.get() == "dout">
+                        <div class="grid grid-cols-4 gap-1">
+                            {DISPLAY_PORTS.iter().map(|&port| {
+                                view! {
+                                    <IOButton
+                                        port=port
+                                        value=Signal::derive(move || dout_values.get().get(&port).copied().unwrap_or(false))
+                                    />
+                                }
+                            }).collect_view()}
+                        </div>
+                    </Show>
                 </div>
             </Show>
         </div>
+    }
+}
+
+/// Read-only I/O indicator (for DIN).
+#[component]
+fn IOIndicator(
+    port: u16,
+    value: Signal<bool>,
+) -> impl IntoView {
+    view! {
+        <div
+            class={move || format!(
+                "flex flex-col items-center justify-center p-1 rounded text-[8px] {}",
+                if value.get() { "bg-[#00ff0020] text-[#00ff00]" } else { "bg-[#ffffff05] text-[#555555]" }
+            )}
+            title={format!("DIN[{}]", port)}
+        >
+            <span class="font-mono">{port}</span>
+            <div class={move || format!(
+                "w-2 h-2 rounded-full mt-0.5 {}",
+                if value.get() { "bg-[#00ff00]" } else { "bg-[#333333]" }
+            )}/>
+        </div>
+    }
+}
+
+/// Clickable I/O button (for DOUT).
+#[component]
+fn IOButton(
+    port: u16,
+    value: Signal<bool>,
+) -> impl IntoView {
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
+
+    let toggle = move |_| {
+        let current = value.get();
+        ws.write_dout(port, !current);
+        // Optimistically update local state
+        ws.update_dout_cache(port, !current);
+    };
+
+    view! {
+        <button
+            class={move || format!(
+                "flex flex-col items-center justify-center p-1 rounded text-[8px] cursor-pointer transition-colors {}",
+                if value.get() { "bg-[#ff880020] text-[#ff8800] hover:bg-[#ff880030]" } else { "bg-[#ffffff05] text-[#555555] hover:bg-[#ffffff10]" }
+            )}
+            title={format!("DOUT[{}] - Click to toggle", port)}
+            on:click=toggle
+        >
+            <span class="font-mono">{port}</span>
+            <div class={move || format!(
+                "w-2 h-2 rounded-full mt-0.5 {}",
+                if value.get() { "bg-[#ff8800]" } else { "bg-[#333333]" }
+            )}/>
+        </button>
     }
 }
 

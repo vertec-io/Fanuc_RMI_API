@@ -168,6 +168,9 @@ pub fn SettingsView() -> impl IntoView {
 
                     // About / Info panel
                     <AboutPanel />
+
+                    // Danger Zone panel
+                    <DangerZonePanel />
                 </div>
             </div>
         </div>
@@ -769,6 +772,73 @@ fn AboutPanel() -> impl IntoView {
     }
 }
 
+/// Danger Zone panel - destructive operations
+#[component]
+fn DangerZonePanel() -> impl IntoView {
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
+    let (confirm_reset, set_confirm_reset) = signal(false);
+    let (reset_status, set_reset_status) = signal::<Option<String>>(None);
+
+    view! {
+        <div class="bg-[#0a0a0a] rounded border border-[#ff444440] p-3 col-span-2">
+            <h3 class="text-[10px] font-semibold text-[#ff4444] mb-2 uppercase tracking-wide flex items-center">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                </svg>
+                "Danger Zone"
+            </h3>
+            <p class="text-[8px] text-[#888888] mb-3">"These actions are destructive and cannot be undone."</p>
+
+            <div class="flex items-center justify-between p-2 bg-[#111111] rounded border border-[#ff444420]">
+                <div>
+                    <div class="text-[9px] text-white font-medium">"Reset Database"</div>
+                    <div class="text-[8px] text-[#666666]">"Delete all programs, settings, and saved connections"</div>
+                </div>
+                <div class="flex items-center gap-2">
+                    {move || reset_status.get().map(|s| view! {
+                        <span class="text-[8px] text-[#22c55e]">{s}</span>
+                    })}
+                    <Show
+                        when=move || confirm_reset.get()
+                        fallback=move || view! {
+                            <button
+                                class="text-[8px] px-3 py-1 bg-[#ff444420] border border-[#ff444440] text-[#ff4444] rounded hover:bg-[#ff444430]"
+                                on:click=move |_| set_confirm_reset.set(true)
+                            >
+                                "Reset Database"
+                            </button>
+                        }
+                    >
+                        <div class="flex items-center gap-1">
+                            <span class="text-[8px] text-[#ff4444]">"Are you sure?"</span>
+                            <button
+                                class="text-[8px] px-2 py-1 bg-[#ff4444] text-white rounded hover:bg-[#ff5555]"
+                                on:click=move |_| {
+                                    ws.reset_database();
+                                    set_confirm_reset.set(false);
+                                    set_reset_status.set(Some("✓ Database reset".to_string()));
+                                    // Refresh data
+                                    ws.list_programs();
+                                    ws.get_settings();
+                                    ws.list_robot_connections();
+                                }
+                            >
+                                "Yes, Reset"
+                            </button>
+                            <button
+                                class="text-[8px] px-2 py-1 bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] rounded hover:text-white"
+                                on:click=move |_| set_confirm_reset.set(false)
+                            >
+                                "Cancel"
+                            </button>
+                        </div>
+                    </Show>
+                </div>
+            </div>
+        </div>
+    }
+}
+
 fn event_target_checked(ev: &leptos::ev::Event) -> bool {
     use wasm_bindgen::JsCast;
     ev.target()
@@ -776,4 +846,3 @@ fn event_target_checked(ev: &leptos::ev::Event) -> bool {
         .map(|e| e.checked())
         .unwrap_or(false)
 }
-

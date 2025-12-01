@@ -1,10 +1,12 @@
 use leptos::prelude::*;
 use crate::websocket::WebSocketManager;
 
+/// Position and orientation display (6-DOF: X, Y, Z, W, P, R).
 #[component]
 pub fn PositionDisplay() -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
     let position = ws.position;
+    let orientation = ws.orientation;
 
     view! {
         <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-2">
@@ -25,8 +27,10 @@ pub fn PositionDisplay() -> impl IntoView {
             >
                 {move || {
                     let (x, y, z) = position.get().unwrap();
+                    let (w, p, r) = orientation.get().unwrap_or((0.0, 0.0, 0.0));
                     view! {
                         <div class="space-y-0.5">
+                            // Position (X, Y, Z)
                             <div class="flex justify-between items-center bg-[#111111] rounded px-1.5 py-1">
                                 <span class="text-[#666666] text-[10px] font-medium">"X"</span>
                                 <span class="text-[11px] font-mono text-white tabular-nums">{format!("{:.2}", x)}<span class="text-[#555555] ml-0.5">"mm"</span></span>
@@ -38,6 +42,19 @@ pub fn PositionDisplay() -> impl IntoView {
                             <div class="flex justify-between items-center bg-[#111111] rounded px-1.5 py-1">
                                 <span class="text-[#666666] text-[10px] font-medium">"Z"</span>
                                 <span class="text-[11px] font-mono text-white tabular-nums">{format!("{:.2}", z)}<span class="text-[#555555] ml-0.5">"mm"</span></span>
+                            </div>
+                            // Orientation (W, P, R)
+                            <div class="flex justify-between items-center bg-[#111111] rounded px-1.5 py-1">
+                                <span class="text-[#888888] text-[10px] font-medium">"W"</span>
+                                <span class="text-[11px] font-mono text-[#aaaaaa] tabular-nums">{format!("{:.2}", w)}<span class="text-[#555555] ml-0.5">"°"</span></span>
+                            </div>
+                            <div class="flex justify-between items-center bg-[#111111] rounded px-1.5 py-1">
+                                <span class="text-[#888888] text-[10px] font-medium">"P"</span>
+                                <span class="text-[11px] font-mono text-[#aaaaaa] tabular-nums">{format!("{:.2}", p)}<span class="text-[#555555] ml-0.5">"°"</span></span>
+                            </div>
+                            <div class="flex justify-between items-center bg-[#111111] rounded px-1.5 py-1">
+                                <span class="text-[#888888] text-[10px] font-medium">"R"</span>
+                                <span class="text-[11px] font-mono text-[#aaaaaa] tabular-nums">{format!("{:.2}", r)}<span class="text-[#555555] ml-0.5">"°"</span></span>
                             </div>
                         </div>
                     }

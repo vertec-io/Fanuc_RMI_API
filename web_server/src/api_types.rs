@@ -131,6 +131,16 @@ pub enum ClientRequest {
         p: f64,
         r: f64,
     },
+
+    // I/O Management
+    #[serde(rename = "read_din")]
+    ReadDin { port_number: u16 },
+
+    #[serde(rename = "write_dout")]
+    WriteDout { port_number: u16, port_value: bool },
+
+    #[serde(rename = "read_din_batch")]
+    ReadDinBatch { port_numbers: Vec<u16> },
 }
 
 /// Optional start position for program execution.
@@ -232,6 +242,13 @@ pub enum ServerResponse {
         p: f64,
         r: f64,
     },
+
+    // I/O responses
+    #[serde(rename = "din_value")]
+    DinValue { port_number: u16, port_value: bool },
+
+    #[serde(rename = "din_batch")]
+    DinBatch { values: Vec<(u16, bool)> },
 }
 
 /// Program summary info for listing.

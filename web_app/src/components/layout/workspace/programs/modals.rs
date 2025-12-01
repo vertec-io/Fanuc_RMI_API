@@ -45,6 +45,7 @@ pub fn NewProgramModal(
             if progs.len() > initial_count {
                 if let Some(newest) = progs.iter().max_by_key(|p| p.id) {
                     set_is_creating.set(false);
+                    ws.set_message(format!("Program '{}' created", newest.name));
                     on_created_clone(newest.id);
                 }
             }
@@ -268,6 +269,7 @@ pub fn SaveAsProgramModal(
             if progs.len() > initial_count {
                 if let Some(newest) = progs.iter().max_by_key(|p| p.id) {
                     set_is_saving.set(false);
+                    ws.set_message(format!("Program saved as '{}'", newest.name));
                     on_saved_clone(newest.id);
                 }
             }

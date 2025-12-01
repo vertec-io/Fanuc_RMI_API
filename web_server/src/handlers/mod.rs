@@ -7,13 +7,15 @@
 //! - `settings`: Robot settings management
 //! - `robot_connections`: Saved connection configurations CRUD
 //! - `frame_tool`: Frame and tool data management
+//! - `io`: Digital I/O management (DIN/DOUT)
 
 pub mod connection;
 pub mod execution;
 pub mod frame_tool;
+pub mod io;
 pub mod programs;
-pub mod settings;
 pub mod robot_connections;
+pub mod settings;
 
 use crate::api_types::*;
 use crate::database::Database;
@@ -120,6 +122,17 @@ pub async fn handle_request(
         }
         ClientRequest::WriteToolData { tool_number, x, y, z, w, p, r } => {
             frame_tool::write_tool_data(robot_connection, tool_number, x, y, z, w, p, r).await
+        }
+
+        // I/O management
+        ClientRequest::ReadDin { port_number } => {
+            io::read_din(robot_connection, port_number).await
+        }
+        ClientRequest::WriteDout { port_number, port_value } => {
+            io::write_dout(robot_connection, port_number, port_value).await
+        }
+        ClientRequest::ReadDinBatch { port_numbers } => {
+            io::read_din_batch(robot_connection, port_numbers).await
         }
     }
 }

@@ -23,7 +23,7 @@ pub fn DashboardView() -> impl IntoView {
         <div class="h-full flex flex-col">
             // Tab bar
             <div class="flex border-b border-[#ffffff08] shrink-0">
-                {["info", "control"].into_iter().map(|tab| {
+                {["control", "info"].into_iter().map(|tab| {
                     let label = match tab {
                         "info" => "Info",
                         _ => "Control",
