@@ -654,6 +654,15 @@ fn SavedConnectionsPanel(
                                 </div>
                                 <div class="flex gap-1 ml-2">
                                     <button
+                                        class="text-[8px] px-1.5 py-0.5 text-[#22c55e] hover:bg-[#22c55e10] rounded font-medium"
+                                        title="Connect to this robot"
+                                        on:click=move |_| {
+                                            ws.connect_to_saved_robot(conn_id);
+                                        }
+                                    >
+                                        "Connect"
+                                    </button>
+                                    <button
                                         class="text-[8px] px-1.5 py-0.5 text-[#00d9ff] hover:bg-[#00d9ff10] rounded"
                                         title="Edit"
                                         on:click=move |_| {

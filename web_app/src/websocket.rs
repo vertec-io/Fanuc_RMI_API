@@ -67,6 +67,9 @@ pub enum ClientRequest {
     #[serde(rename = "connect_robot")]
     ConnectRobot { robot_addr: String, robot_port: u32 },
 
+    #[serde(rename = "connect_to_saved_robot")]
+    ConnectToSavedRobot { connection_id: i64 },
+
     #[serde(rename = "disconnect_robot")]
     DisconnectRobot,
 
@@ -220,6 +223,24 @@ pub enum ServerResponse {
         connected: bool,
         robot_addr: String,
         robot_port: u32,
+    },
+
+    /// Response when connecting to a saved robot connection.
+    /// Includes the effective settings (per-robot or global fallback).
+    #[serde(rename = "robot_connected")]
+    RobotConnected {
+        connection_id: i64,
+        connection_name: String,
+        robot_addr: String,
+        robot_port: u32,
+        /// Effective settings (per-robot defaults or global fallback)
+        effective_speed: f64,
+        effective_term_type: String,
+        effective_uframe: i32,
+        effective_utool: i32,
+        effective_w: f64,
+        effective_p: f64,
+        effective_r: f64,
     },
 
     #[serde(rename = "robot_connections")]
@@ -709,6 +730,37 @@ impl WebSocketManager {
                             set_robot_connected.set(connected);
                             set_robot_addr.set(format!("{}:{}", robot_addr, robot_port));
                         }
+                        ServerResponse::RobotConnected {
+                            connection_id: _,
+                            connection_name,
+                            robot_addr,
+                            robot_port,
+                            effective_speed,
+                            effective_term_type,
+                            effective_uframe,
+                            effective_utool,
+                            effective_w,
+                            effective_p,
+                            effective_r,
+                        } => {
+                            log::info!("Connected to saved robot '{}' at {}:{}", connection_name, robot_addr, robot_port);
+                            log::info!("Effective settings: speed={}, term={}, uframe={}, utool={}, wpr=({},{},{})",
+                                effective_speed, effective_term_type, effective_uframe, effective_utool,
+                                effective_w, effective_p, effective_r);
+                            set_robot_connected.set(true);
+                            set_robot_addr.set(format!("{}:{}", robot_addr, robot_port));
+                            // Update settings with effective values from the saved connection
+                            set_settings.set(Some(RobotSettingsDto {
+                                default_w: effective_w,
+                                default_p: effective_p,
+                                default_r: effective_r,
+                                default_speed: effective_speed,
+                                default_term_type: effective_term_type,
+                                default_uframe: effective_uframe,
+                                default_utool: effective_utool,
+                            }));
+                            set_api_message.set(Some(format!("Connected to '{}'", connection_name)));
+                        }
                         ServerResponse::RobotConnections { connections } => {
                             log::info!("Received {} robot connections", connections.len());
                             set_robot_connections.set(connections);
@@ -904,6 +956,12 @@ impl WebSocketManager {
             robot_addr: robot_addr.to_string(),
             robot_port,
         });
+    }
+
+    /// Connect to a saved robot connection by ID.
+    /// This will load the per-robot defaults and apply them.
+    pub fn connect_to_saved_robot(&self, connection_id: i64) {
+        self.send_api_request(ClientRequest::ConnectToSavedRobot { connection_id });
     }
 
     /// Disconnect from robot

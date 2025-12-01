@@ -67,6 +67,9 @@ pub enum ClientRequest {
     #[serde(rename = "connect_robot")]
     ConnectRobot { robot_addr: String, robot_port: u32 },
 
+    #[serde(rename = "connect_to_saved_robot")]
+    ConnectToSavedRobot { connection_id: i64 },
+
     #[serde(rename = "disconnect_robot")]
     DisconnectRobot,
 
@@ -221,6 +224,24 @@ pub enum ServerResponse {
         connected: bool,
         robot_addr: String,
         robot_port: u32,
+    },
+
+    /// Response when connecting to a saved robot connection.
+    /// Includes the effective settings (per-robot or global fallback).
+    #[serde(rename = "robot_connected")]
+    RobotConnected {
+        connection_id: i64,
+        connection_name: String,
+        robot_addr: String,
+        robot_port: u32,
+        /// Effective settings (per-robot defaults or global fallback)
+        effective_speed: f64,
+        effective_term_type: String,
+        effective_uframe: i32,
+        effective_utool: i32,
+        effective_w: f64,
+        effective_p: f64,
+        effective_r: f64,
     },
 
     #[serde(rename = "robot_connections")]

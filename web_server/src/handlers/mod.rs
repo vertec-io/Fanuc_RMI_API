@@ -83,6 +83,9 @@ pub async fn handle_request(
         ClientRequest::ConnectRobot { robot_addr, robot_port } => {
             connection::connect_robot(robot_connection, robot_addr, robot_port).await
         }
+        ClientRequest::ConnectToSavedRobot { connection_id } => {
+            connection::connect_to_saved_robot(db, robot_connection, connection_id).await
+        }
         ClientRequest::DisconnectRobot => {
             connection::disconnect_robot(robot_connection).await
         }
