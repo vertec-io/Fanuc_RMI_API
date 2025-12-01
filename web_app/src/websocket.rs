@@ -2,6 +2,7 @@ use fanuc_rmi::dto::*;
 use leptos::prelude::*;
 use leptos::reactive::owner::LocalStorage;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{BinaryType, ErrorEvent, MessageEvent, WebSocket};
@@ -286,6 +287,17 @@ pub struct RobotSettingsDto {
     pub default_utool: i32,
 }
 
+/// Frame or Tool coordinate data (X, Y, Z, W, P, R)
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FrameToolData {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub w: f64,
+    pub p: f64,
+    pub r: f64,
+}
+
 // ========== WebSocket Manager ==========
 
 #[derive(Clone, Copy)]
@@ -344,6 +356,16 @@ pub struct WebSocketManager {
     // Currently active/selected connection
     pub active_connection_id: ReadSignal<Option<i64>>,
     set_active_connection_id: WriteSignal<Option<i64>>,
+    // Frame/Tool data
+    /// Active UFrame and UTool numbers from robot
+    pub active_frame_tool: ReadSignal<Option<(u8, u8)>>,
+    set_active_frame_tool: WriteSignal<Option<(u8, u8)>>,
+    /// Frame data cache - indexed by frame number (0-9)
+    pub frame_data: ReadSignal<HashMap<u8, FrameToolData>>,
+    set_frame_data: WriteSignal<HashMap<u8, FrameToolData>>,
+    /// Tool data cache - indexed by tool number (0-9)
+    pub tool_data: ReadSignal<HashMap<u8, FrameToolData>>,
+    set_tool_data: WriteSignal<HashMap<u8, FrameToolData>>,
     ws: StoredValue<Option<WebSocket>, LocalStorage>,
     ws_url: StoredValue<String>,
 }
@@ -392,6 +414,10 @@ impl WebSocketManager {
         let (robot_connections, set_robot_connections) = signal(Vec::new());
         // Currently active/selected connection
         let (active_connection_id, set_active_connection_id) = signal::<Option<i64>>(None);
+        // Frame/Tool data
+        let (active_frame_tool, set_active_frame_tool) = signal::<Option<(u8, u8)>>(None);
+        let (frame_data, set_frame_data) = signal::<HashMap<u8, FrameToolData>>(HashMap::new());
+        let (tool_data, set_tool_data) = signal::<HashMap<u8, FrameToolData>>(HashMap::new());
         let ws: StoredValue<Option<WebSocket>, LocalStorage> = StoredValue::new_local(None);
         let ws_url = StoredValue::new("ws://127.0.0.1:9000".to_string());
 
@@ -436,6 +462,12 @@ impl WebSocketManager {
             set_robot_connections,
             active_connection_id,
             set_active_connection_id,
+            active_frame_tool,
+            set_active_frame_tool,
+            frame_data,
+            set_frame_data,
+            tool_data,
+            set_tool_data,
             ws,
             ws_url,
         };
@@ -474,6 +506,9 @@ impl WebSocketManager {
         let set_robot_connected = self.set_robot_connected;
         let set_robot_addr = self.set_robot_addr;
         let set_robot_connections = self.set_robot_connections;
+        let set_active_frame_tool = self.set_active_frame_tool;
+        let set_frame_data = self.set_frame_data;
+        let set_tool_data = self.set_tool_data;
 
         // On open
         let onopen_callback = Closure::wrap(Box::new(move |_| {
@@ -629,17 +664,21 @@ impl WebSocketManager {
                         }
                         ServerResponse::ActiveFrameTool { uframe, utool } => {
                             log::info!("Active frame/tool: UFrame={}, UTool={}", uframe, utool);
-                            // Frame/Tool data is handled by the Info tab components
+                            set_active_frame_tool.set(Some((uframe, utool)));
                         }
                         ServerResponse::FrameData { frame_number, x, y, z, w, p, r } => {
-                            log::info!("Frame {} data: ({:.3}, {:.3}, {:.3}, {:.2}, {:.2}, {:.2})",
+                            log::debug!("Frame {} data: ({:.3}, {:.3}, {:.3}, {:.2}, {:.2}, {:.2})",
                                 frame_number, x, y, z, w, p, r);
-                            // Frame data is handled by the Info tab components
+                            set_frame_data.update(|map| {
+                                map.insert(frame_number, FrameToolData { x, y, z, w, p, r });
+                            });
                         }
                         ServerResponse::ToolData { tool_number, x, y, z, w, p, r } => {
-                            log::info!("Tool {} data: ({:.3}, {:.3}, {:.3}, {:.2}, {:.2}, {:.2})",
+                            log::debug!("Tool {} data: ({:.3}, {:.3}, {:.3}, {:.2}, {:.2}, {:.2})",
                                 tool_number, x, y, z, w, p, r);
-                            // Tool data is handled by the Info tab components
+                            set_tool_data.update(|map| {
+                                map.insert(tool_number, FrameToolData { x, y, z, w, p, r });
+                            });
                         }
                     }
                 } else {
@@ -871,30 +910,27 @@ impl WebSocketManager {
     // ========== Frame/Tool Management ==========
 
     /// Get the currently active UFrame and UTool numbers
-    #[allow(dead_code)]
     pub fn get_active_frame_tool(&self) {
         self.send_api_request(ClientRequest::GetActiveFrameTool);
     }
 
     /// Set the active UFrame and UTool numbers
-    #[allow(dead_code)]
     pub fn set_active_frame_tool(&self, uframe: u8, utool: u8) {
         self.send_api_request(ClientRequest::SetActiveFrameTool { uframe, utool });
     }
 
     /// Read UFrame data for a specific frame number
-    #[allow(dead_code)]
     pub fn read_frame_data(&self, frame_number: u8) {
         self.send_api_request(ClientRequest::ReadFrameData { frame_number });
     }
 
     /// Read UTool data for a specific tool number
-    #[allow(dead_code)]
     pub fn read_tool_data(&self, tool_number: u8) {
         self.send_api_request(ClientRequest::ReadToolData { tool_number });
     }
 
     /// Write UFrame data for a specific frame number
+    /// Note: Currently unused but exposed as public API for future frame editing UI
     #[allow(dead_code, clippy::too_many_arguments)]
     pub fn write_frame_data(&self, frame_number: u8, x: f64, y: f64, z: f64, w: f64, p: f64, r: f64) {
         self.send_api_request(ClientRequest::WriteFrameData {
@@ -904,6 +940,7 @@ impl WebSocketManager {
     }
 
     /// Write UTool data for a specific tool number
+    /// Note: Currently unused but exposed as public API for future tool editing UI
     #[allow(dead_code, clippy::too_many_arguments)]
     pub fn write_tool_data(&self, tool_number: u8, x: f64, y: f64, z: f64, w: f64, p: f64, r: f64) {
         self.send_api_request(ClientRequest::WriteToolData {

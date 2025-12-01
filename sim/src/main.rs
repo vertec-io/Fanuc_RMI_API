@@ -45,6 +45,17 @@ struct MotionResponse {
     instruction_type: String,
 }
 
+/// Frame/Tool coordinate data (X, Y, Z, W, P, R)
+#[derive(Clone, Debug, Default)]
+struct FrameToolData {
+    x: f64,
+    y: f64,
+    z: f64,
+    w: f64,
+    p: f64,
+    r: f64,
+}
+
 // Simulated robot state - now using RwLock for concurrent read access
 #[derive(Clone, Debug)]
 struct RobotState {
@@ -54,6 +65,11 @@ struct RobotState {
     kinematics: CRXKinematics,
     mode: SimulatorMode,
     last_sequence_id: u32, // Track the last completed sequence ID
+    // Frame/Tool state
+    active_uframe: u8,
+    active_utool: u8,
+    uframes: [FrameToolData; 10],
+    utools: [FrameToolData; 10],
 }
 
 impl Default for RobotState {
@@ -96,6 +112,11 @@ impl RobotState {
             kinematics,
             mode,
             last_sequence_id: 0,
+            // Initialize Frame/Tool state
+            active_uframe: 0,
+            active_utool: 0,
+            uframes: Default::default(),
+            utools: Default::default(),
         }
     }
 
@@ -472,6 +493,113 @@ async fn handle_secondary_client(
                             "Command": "FRC_SetOverRide",
                             "ErrorID": 0,
                         }),
+                        Some("FRC_GetUFrameUTool") => {
+                            let state = robot_state.lock().await;
+                            json!({
+                                "Command": "FRC_GetUFrameUTool",
+                                "ErrorID": 0,
+                                "UFrameNumber": state.active_uframe,
+                                "UToolNumber": state.active_utool,
+                                "Group": 1
+                            })
+                        }
+                        Some("FRC_SetUFrameUTool") => {
+                            let mut state = robot_state.lock().await;
+                            let uframe = request_json["UFrameNumber"].as_u64().unwrap_or(0) as u8;
+                            let utool = request_json["UToolNumber"].as_u64().unwrap_or(0) as u8;
+                            state.active_uframe = uframe;
+                            state.active_utool = utool;
+                            println!("🔧 FRC_SetUFrameUTool: UFrame={}, UTool={}", uframe, utool);
+                            json!({
+                                "Command": "FRC_SetUFrameUTool",
+                                "ErrorID": 0,
+                                "Group": 1
+                            })
+                        }
+                        Some("FRC_ReadUFrameData") => {
+                            let state = robot_state.lock().await;
+                            // Request uses "FrameNumber", response uses "UFrameNumber"
+                            let frame_num = request_json["FrameNumber"].as_u64().unwrap_or(0) as usize;
+                            let frame = state.uframes.get(frame_num).cloned().unwrap_or_default();
+                            json!({
+                                "Command": "FRC_ReadUFrameData",
+                                "ErrorID": 0,
+                                "UFrameNumber": frame_num,
+                                "Group": 1,
+                                "Frame": {
+                                    "x": frame.x,
+                                    "y": frame.y,
+                                    "z": frame.z,
+                                    "w": frame.w,
+                                    "p": frame.p,
+                                    "r": frame.r
+                                }
+                            })
+                        }
+                        Some("FRC_ReadUToolData") => {
+                            let state = robot_state.lock().await;
+                            // Request uses "FrameNumber", response uses "UToolNumber"
+                            let tool_num = request_json["FrameNumber"].as_u64().unwrap_or(0) as usize;
+                            let tool = state.utools.get(tool_num).cloned().unwrap_or_default();
+                            json!({
+                                "Command": "FRC_ReadUToolData",
+                                "ErrorID": 0,
+                                "UToolNumber": tool_num,
+                                "Group": 1,
+                                "Frame": {
+                                    "x": tool.x,
+                                    "y": tool.y,
+                                    "z": tool.z,
+                                    "w": tool.w,
+                                    "p": tool.p,
+                                    "r": tool.r
+                                }
+                            })
+                        }
+                        Some("FRC_WriteUFrameData") => {
+                            let mut state = robot_state.lock().await;
+                            let frame_num = request_json["FrameNumber"].as_u64().unwrap_or(0) as usize;
+                            if frame_num < 10 {
+                                if let Some(frame_obj) = request_json.get("Frame") {
+                                    state.uframes[frame_num] = FrameToolData {
+                                        x: frame_obj["x"].as_f64().unwrap_or(0.0),
+                                        y: frame_obj["y"].as_f64().unwrap_or(0.0),
+                                        z: frame_obj["z"].as_f64().unwrap_or(0.0),
+                                        w: frame_obj["w"].as_f64().unwrap_or(0.0),
+                                        p: frame_obj["p"].as_f64().unwrap_or(0.0),
+                                        r: frame_obj["r"].as_f64().unwrap_or(0.0),
+                                    };
+                                    println!("📝 FRC_WriteUFrameData: UFrame {} updated", frame_num);
+                                }
+                            }
+                            json!({
+                                "Command": "FRC_WriteUFrameData",
+                                "ErrorID": 0,
+                                "Group": 1
+                            })
+                        }
+                        Some("FRC_WriteUToolData") => {
+                            let mut state = robot_state.lock().await;
+                            let tool_num = request_json["ToolNumber"].as_u64().unwrap_or(0) as usize;
+                            if tool_num < 10 {
+                                if let Some(frame_obj) = request_json.get("Frame") {
+                                    state.utools[tool_num] = FrameToolData {
+                                        x: frame_obj["x"].as_f64().unwrap_or(0.0),
+                                        y: frame_obj["y"].as_f64().unwrap_or(0.0),
+                                        z: frame_obj["z"].as_f64().unwrap_or(0.0),
+                                        w: frame_obj["w"].as_f64().unwrap_or(0.0),
+                                        p: frame_obj["p"].as_f64().unwrap_or(0.0),
+                                        r: frame_obj["r"].as_f64().unwrap_or(0.0),
+                                    };
+                                    println!("📝 FRC_WriteUToolData: UTool {} updated", tool_num);
+                                }
+                            }
+                            json!({
+                                "Command": "FRC_WriteUToolData",
+                                "ErrorID": 0,
+                                "Group": 1
+                            })
+                        }
                         _ => json!({}),
                     };
 
