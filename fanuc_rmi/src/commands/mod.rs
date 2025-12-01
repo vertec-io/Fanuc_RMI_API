@@ -11,6 +11,10 @@ mod frc_readutooldata;
 mod frc_writeutooldata;
 mod frc_readdin;
 mod frc_writedout;
+mod frc_readain;
+mod frc_writeaout;
+mod frc_readgin;
+mod frc_writegout;
 mod frc_readcartesianposition;
 mod frc_readjointangles;
 mod frc_setoveride;
@@ -33,6 +37,10 @@ pub use frc_readutooldata::*;
 pub use frc_writeutooldata::*;
 pub use frc_readdin::*;
 pub use frc_writedout::*;
+pub use frc_readain::*;
+pub use frc_writeaout::*;
+pub use frc_readgin::*;
+pub use frc_writegout::*;
 pub use frc_readcartesianposition::*;
 pub use frc_readjointangles::*;
 pub use frc_setoveride::*;
@@ -58,6 +66,14 @@ pub mod dto {
     pub use super::frc_writeutooldata::FrcWriteUToolDataDto as FrcWriteUToolData;
     pub use super::frc_readdin::FrcReadDINDto as FrcReadDIN;
     pub use super::frc_writedout::FrcWriteDOUTDto as FrcWriteDOUT;
+    pub use super::frc_readain::FrcReadAINDto as FrcReadAIN;
+    pub use super::frc_readain::FrcReadAINResponseDto as FrcReadAINResponse;
+    pub use super::frc_writeaout::FrcWriteAOUTDto as FrcWriteAOUT;
+    pub use super::frc_writeaout::FrcWriteAOUTResponseDto as FrcWriteAOUTResponse;
+    pub use super::frc_readgin::FrcReadGINDto as FrcReadGIN;
+    pub use super::frc_readgin::FrcReadGINResponseDto as FrcReadGINResponse;
+    pub use super::frc_writegout::FrcWriteGOUTDto as FrcWriteGOUT;
+    pub use super::frc_writegout::FrcWriteGOUTResponseDto as FrcWriteGOUTResponse;
     pub use super::frc_readcartesianposition::FrcReadCartesianPositionDto as FrcReadCartesianPosition;
     pub use super::frc_readcartesianposition::FrcReadCartesianPositionResponseDto as FrcReadCartesianPositionResponse;
     pub use super::frc_readjointangles::FrcReadJointAnglesDto as FrcReadJointAngles;
@@ -67,19 +83,18 @@ pub mod dto {
     pub use super::frc_writepositionregister::FrcWritePositionRegisterDto as FrcWritePositionRegister;
     pub use super::frc_reset::FrcResetResponseDto as FrcResetResponse;
     pub use super::frc_readtcpspeed::FrcReadTCPSpeedResponseDto as FrcReadTCPSpeedResponse;
-        pub use super::frc_initialize::FrcInitializeResponseDto as FrcInitializeResponse;
-        pub use super::frc_readerror::FrcReadErrorResponseDto as FrcReadErrorResponse;
-        pub use super::frc_setuframeutool::FrcSetUFrameUToolResponseDto as FrcSetUFrameUToolResponse;
-        pub use super::frc_getuframeutool::FrcGetUFrameUToolResponseDto as FrcGetUFrameUToolResponse;
-        pub use super::frc_readuframedata::FrcReadUFrameDataResponseDto as FrcReadUFrameDataResponse;
-        pub use super::frc_writeuframedata::FrcWriteUFrameDataResponseDto as FrcWriteUFrameDataResponse;
-        pub use super::frc_readdin::FrcReadDINResponseDto as FrcReadDINResponse;
-        pub use super::frc_writedout::FrcWriteDOUTResponseDto as FrcWriteDOUTResponse;
-        pub use super::frc_readjointangles::FrcReadJointAnglesResponseDto as FrcReadJointAnglesResponse;
-        pub use super::frc_setoveride::FrcSetOverRideResponseDto as FrcSetOverRideResponse;
-        pub use super::frc_readpositionregister::FrcReadPositionRegisterResponseDto as FrcReadPositionRegisterResponse;
-        pub use super::frc_writepositionregister::FrcWritePositionRegisterResponseDto as FrcWritePositionRegisterResponse;
-
+    pub use super::frc_initialize::FrcInitializeResponseDto as FrcInitializeResponse;
+    pub use super::frc_readerror::FrcReadErrorResponseDto as FrcReadErrorResponse;
+    pub use super::frc_setuframeutool::FrcSetUFrameUToolResponseDto as FrcSetUFrameUToolResponse;
+    pub use super::frc_getuframeutool::FrcGetUFrameUToolResponseDto as FrcGetUFrameUToolResponse;
+    pub use super::frc_readuframedata::FrcReadUFrameDataResponseDto as FrcReadUFrameDataResponse;
+    pub use super::frc_writeuframedata::FrcWriteUFrameDataResponseDto as FrcWriteUFrameDataResponse;
+    pub use super::frc_readdin::FrcReadDINResponseDto as FrcReadDINResponse;
+    pub use super::frc_writedout::FrcWriteDOUTResponseDto as FrcWriteDOUTResponse;
+    pub use super::frc_readjointangles::FrcReadJointAnglesResponseDto as FrcReadJointAnglesResponse;
+    pub use super::frc_setoveride::FrcSetOverRideResponseDto as FrcSetOverRideResponse;
+    pub use super::frc_readpositionregister::FrcReadPositionRegisterResponseDto as FrcReadPositionRegisterResponse;
+    pub use super::frc_writepositionregister::FrcWritePositionRegisterResponseDto as FrcWritePositionRegisterResponse;
 }
 
 

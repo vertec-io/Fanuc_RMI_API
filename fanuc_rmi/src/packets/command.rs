@@ -61,6 +61,18 @@ pub enum Command {
     #[serde(rename = "FRC_WriteDOUT")]
     FrcWriteDOUT(FrcWriteDOUT),
 
+    #[serde(rename = "FRC_ReadAIN")]
+    FrcReadAIN(FrcReadAIN),
+
+    #[serde(rename = "FRC_WriteAOUT")]
+    FrcWriteAOUT(FrcWriteAOUT),
+
+    #[serde(rename = "FRC_ReadGIN")]
+    FrcReadGIN(FrcReadGIN),
+
+    #[serde(rename = "FRC_WriteGOUT")]
+    FrcWriteGOUT(FrcWriteGOUT),
+
     #[serde(rename = "FRC_ReadCartesianPosition")]
     FrcReadCartesianPosition(FrcReadCartesianPosition),
 
@@ -114,11 +126,23 @@ pub enum CommandResponse {
     #[serde(rename = "FRC_ReadDIN")]
     FrcReadDIN(FrcReadDINResponse),
 
-    #[serde(rename = "FRC_ReadCartesianPosition")]
-    FrcReadCartesianPosition(FrcReadCartesianPositionResponse),
-
     #[serde(rename = "FRC_WriteDOUT")]
     FrcWriteDOUT(FrcWriteDOUTResponse),
+
+    #[serde(rename = "FRC_ReadAIN")]
+    FrcReadAIN(FrcReadAINResponse),
+
+    #[serde(rename = "FRC_WriteAOUT")]
+    FrcWriteAOUT(FrcWriteAOUTResponse),
+
+    #[serde(rename = "FRC_ReadGIN")]
+    FrcReadGIN(FrcReadGINResponse),
+
+    #[serde(rename = "FRC_WriteGOUT")]
+    FrcWriteGOUT(FrcWriteGOUTResponse),
+
+    #[serde(rename = "FRC_ReadCartesianPosition")]
+    FrcReadCartesianPosition(FrcReadCartesianPositionResponse),
 
     #[serde(rename = "FRC_ReadJointAngles")]
     FrcReadJointAngles(FrcReadJointAnglesResponse),
@@ -155,8 +179,12 @@ impl_extract_inner!(CommandResponse, FrcWriteUFrameData, FrcWriteUFrameDataRespo
 impl_extract_inner!(CommandResponse, FrcReadUToolData, FrcReadUToolDataResponse);
 impl_extract_inner!(CommandResponse, FrcWriteUToolData, FrcWriteUToolData);
 impl_extract_inner!(CommandResponse, FrcReadDIN, FrcReadDINResponse);
-impl_extract_inner!(CommandResponse, FrcReadCartesianPosition, FrcReadCartesianPositionResponse);
 impl_extract_inner!(CommandResponse, FrcWriteDOUT, FrcWriteDOUTResponse);
+impl_extract_inner!(CommandResponse, FrcReadAIN, FrcReadAINResponse);
+impl_extract_inner!(CommandResponse, FrcWriteAOUT, FrcWriteAOUTResponse);
+impl_extract_inner!(CommandResponse, FrcReadGIN, FrcReadGINResponse);
+impl_extract_inner!(CommandResponse, FrcWriteGOUT, FrcWriteGOUTResponse);
+impl_extract_inner!(CommandResponse, FrcReadCartesianPosition, FrcReadCartesianPositionResponse);
 impl_extract_inner!(CommandResponse, FrcReadJointAngles, FrcReadJointAnglesResponse);
 impl_extract_inner!(CommandResponse, FrcSetOverRide, FrcSetOverRideResponse);
 impl_extract_inner!(CommandResponse, FrcReadPositionRegister, FrcReadPositionRegisterResponse);

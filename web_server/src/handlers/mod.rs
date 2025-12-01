@@ -200,7 +200,7 @@ pub async fn handle_request(
             frame_tool::write_tool_data(robot_connection, tool_number, x, y, z, w, p, r).await
         }
 
-        // I/O management
+        // I/O management - Digital
         ClientRequest::ReadDin { port_number } => {
             io::read_din(robot_connection, port_number).await
         }
@@ -213,6 +213,30 @@ pub async fn handle_request(
         }
         ClientRequest::ReadDinBatch { port_numbers } => {
             io::read_din_batch(robot_connection, port_numbers).await
+        }
+
+        // I/O management - Analog
+        ClientRequest::ReadAin { port_number } => {
+            io::read_ain(robot_connection, port_number).await
+        }
+        ClientRequest::WriteAout { port_number, port_value } => {
+            // Requires control - modifies robot outputs
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
+            io::write_aout(robot_connection, port_number, port_value).await
+        }
+
+        // I/O management - Group
+        ClientRequest::ReadGin { port_number } => {
+            io::read_gin(robot_connection, port_number).await
+        }
+        ClientRequest::WriteGout { port_number, port_value } => {
+            // Requires control - modifies robot outputs
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
+            io::write_gout(robot_connection, port_number, port_value).await
         }
 
         // Control locking

@@ -151,7 +151,7 @@ pub enum ClientRequest {
         r: f64,
     },
 
-    // I/O Management
+    // I/O Management - Digital
     #[serde(rename = "read_din")]
     ReadDin { port_number: u16 },
 
@@ -160,6 +160,20 @@ pub enum ClientRequest {
 
     #[serde(rename = "read_din_batch")]
     ReadDinBatch { port_numbers: Vec<u16> },
+
+    // I/O Management - Analog
+    #[serde(rename = "read_ain")]
+    ReadAin { port_number: u16 },
+
+    #[serde(rename = "write_aout")]
+    WriteAout { port_number: u16, port_value: f64 },
+
+    // I/O Management - Group
+    #[serde(rename = "read_gin")]
+    ReadGin { port_number: u16 },
+
+    #[serde(rename = "write_gout")]
+    WriteGout { port_number: u16, port_value: u32 },
 
     // Control Locking
     /// Request control of the robot (only one client can control at a time)
@@ -309,6 +323,12 @@ pub enum ServerResponse {
 
     #[serde(rename = "din_batch")]
     DinBatch { values: Vec<(u16, bool)> },
+
+    #[serde(rename = "ain_value")]
+    AinValue { port_number: u16, port_value: f64 },
+
+    #[serde(rename = "gin_value")]
+    GinValue { port_number: u16, port_value: u32 },
 
     // Control lock responses
     /// Control of the robot was acquired
