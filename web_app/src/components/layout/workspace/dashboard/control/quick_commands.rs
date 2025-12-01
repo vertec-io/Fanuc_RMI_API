@@ -3,13 +3,30 @@
 use leptos::prelude::*;
 use crate::components::layout::workspace::context::WorkspaceContext;
 use crate::websocket::WebSocketManager;
-use fanuc_rmi::dto::{SendPacket, Command, FrcInitialize};
+use fanuc_rmi::dto::{SendPacket, Command, FrcInitialize, FrcSetOverRide};
 
 /// Quick Commands panel for robot control (Initialize, Reset, Abort, Continue).
 #[component]
 pub fn QuickCommandsPanel() -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
     let ctx = use_context::<WorkspaceContext>().expect("WorkspaceContext not found");
+
+    // Local signal for slider value (synced with robot status when available)
+    let (speed_override, set_speed_override) = signal(100u32);
+
+    // Sync with robot status when it changes
+    let status = ws.status;
+    Effect::new(move |_| {
+        if let Some(s) = status.get() {
+            set_speed_override.set(s.speed_override);
+        }
+    });
+
+    // Send override command when slider changes
+    let send_override = move |value: u32| {
+        let clamped = value.min(100) as u8;
+        ws.send_command(SendPacket::Command(Command::FrcSetOverRide(FrcSetOverRide { value: clamped })));
+    };
 
     view! {
         <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-2 shrink-0">
@@ -21,7 +38,7 @@ pub fn QuickCommandsPanel() -> impl IntoView {
                     "Quick Commands"
                 </h3>
             </div>
-            <div class="flex gap-2 flex-wrap">
+            <div class="flex gap-2 flex-wrap items-center">
                 // Initialize button
                 <button
                     class="bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] text-[9px] px-3 py-1.5 rounded hover:bg-[#22c55e30] flex items-center gap-1"
@@ -62,6 +79,35 @@ pub fn QuickCommandsPanel() -> impl IntoView {
                     </svg>
                     "Abort"
                 </button>
+
+                // Speed Override Slider
+                <div class="flex items-center gap-2 ml-auto bg-[#1a1a1a] rounded px-2 py-1 border border-[#ffffff10]">
+                    <svg class="w-3 h-3 text-[#00d9ff]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                    </svg>
+                    <span class="text-[9px] text-gray-400 whitespace-nowrap">"Speed:"</span>
+                    <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="5"
+                        class="w-20 h-1 bg-[#333] rounded-lg appearance-none cursor-pointer accent-[#00d9ff]"
+                        prop:value=move || speed_override.get()
+                        on:input=move |ev| {
+                            if let Ok(val) = event_target_value(&ev).parse::<u32>() {
+                                set_speed_override.set(val);
+                            }
+                        }
+                        on:change=move |ev| {
+                            if let Ok(val) = event_target_value(&ev).parse::<u32>() {
+                                send_override(val);
+                            }
+                        }
+                    />
+                    <span class="text-[10px] text-[#00d9ff] font-mono w-8 text-right">
+                        {move || format!("{}%", speed_override.get())}
+                    </span>
+                </div>
             </div>
         </div>
     }

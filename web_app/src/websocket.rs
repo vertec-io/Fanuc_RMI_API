@@ -395,6 +395,7 @@ pub struct RobotStatusData {
     pub servo_ready: i8,
     pub tp_mode: i8,
     pub motion_status: i8,
+    pub speed_override: u32,
 }
 
 /// Execution status data for progress display
@@ -613,6 +614,7 @@ impl WebSocketManager {
                                         servo_ready: s.servo_ready,
                                         tp_mode: s.tp_mode,
                                         motion_status: s.rmi_motion_status,
+                                        speed_override: s.override_value,
                                     }));
                                 }
                             }
