@@ -151,7 +151,7 @@ pub enum ClientRequest {
         r: f64,
     },
 
-    // I/O Management
+    // I/O Management - Digital
     #[serde(rename = "read_din")]
     ReadDin { port_number: u16 },
 
@@ -160,6 +160,20 @@ pub enum ClientRequest {
 
     #[serde(rename = "read_din_batch")]
     ReadDinBatch { port_numbers: Vec<u16> },
+
+    // I/O Management - Analog
+    #[serde(rename = "read_ain")]
+    ReadAin { port_number: u16 },
+
+    #[serde(rename = "write_aout")]
+    WriteAout { port_number: u16, port_value: f64 },
+
+    // I/O Management - Group
+    #[serde(rename = "read_gin")]
+    ReadGin { port_number: u16 },
+
+    #[serde(rename = "write_gout")]
+    WriteGout { port_number: u16, port_value: u32 },
 
     // Control Locking
     /// Request control of the robot
@@ -308,6 +322,12 @@ pub enum ServerResponse {
 
     #[serde(rename = "din_batch")]
     DinBatch { values: Vec<(u16, bool)> },
+
+    #[serde(rename = "ain_value")]
+    AinValue { port_number: u16, port_value: f64 },
+
+    #[serde(rename = "gin_value")]
+    GinValue { port_number: u16, port_value: u32 },
 
     // Control lock responses
     /// Control of the robot was acquired
@@ -487,6 +507,18 @@ pub struct WebSocketManager {
     /// Digital output values - indexed by port number
     pub dout_values: ReadSignal<HashMap<u16, bool>>,
     set_dout_values: WriteSignal<HashMap<u16, bool>>,
+    /// Analog input values - indexed by port number
+    pub ain_values: ReadSignal<HashMap<u16, f64>>,
+    set_ain_values: WriteSignal<HashMap<u16, f64>>,
+    /// Analog output values - indexed by port number
+    pub aout_values: ReadSignal<HashMap<u16, f64>>,
+    set_aout_values: WriteSignal<HashMap<u16, f64>>,
+    /// Group input values - indexed by port number
+    pub gin_values: ReadSignal<HashMap<u16, u32>>,
+    set_gin_values: WriteSignal<HashMap<u16, u32>>,
+    /// Group output values - indexed by port number
+    pub gout_values: ReadSignal<HashMap<u16, u32>>,
+    set_gout_values: WriteSignal<HashMap<u16, u32>>,
     // Control lock state
     /// Whether this client has control of the robot
     pub has_control: ReadSignal<bool>,
@@ -550,6 +582,10 @@ impl WebSocketManager {
         // I/O data
         let (din_values, set_din_values) = signal::<HashMap<u16, bool>>(HashMap::new());
         let (dout_values, set_dout_values) = signal::<HashMap<u16, bool>>(HashMap::new());
+        let (ain_values, set_ain_values) = signal::<HashMap<u16, f64>>(HashMap::new());
+        let (aout_values, set_aout_values) = signal::<HashMap<u16, f64>>(HashMap::new());
+        let (gin_values, set_gin_values) = signal::<HashMap<u16, u32>>(HashMap::new());
+        let (gout_values, set_gout_values) = signal::<HashMap<u16, u32>>(HashMap::new());
         // Control lock state
         let (has_control, set_has_control) = signal(false);
         let ws: StoredValue<Option<WebSocket>, LocalStorage> = StoredValue::new_local(None);
@@ -606,6 +642,14 @@ impl WebSocketManager {
             set_din_values,
             dout_values,
             set_dout_values,
+            ain_values,
+            set_ain_values,
+            aout_values,
+            set_aout_values,
+            gin_values,
+            set_gin_values,
+            gout_values,
+            set_gout_values,
             has_control,
             set_has_control,
             ws,
@@ -652,6 +696,10 @@ impl WebSocketManager {
         let set_din_values = self.set_din_values;
         // DOUT values are updated optimistically via update_dout_cache, not from server responses
         let _set_dout_values = self.set_dout_values;
+        let set_ain_values = self.set_ain_values;
+        let _set_aout_values = self.set_aout_values;
+        let set_gin_values = self.set_gin_values;
+        let _set_gout_values = self.set_gout_values;
         let set_has_control = self.set_has_control;
 
         // On open
@@ -868,6 +916,18 @@ impl WebSocketManager {
                                 for (port, value) in values {
                                     map.insert(port, value);
                                 }
+                            });
+                        }
+                        ServerResponse::AinValue { port_number, port_value } => {
+                            log::debug!("AIN[{}] = {:.3}", port_number, port_value);
+                            set_ain_values.update(|map| {
+                                map.insert(port_number, port_value);
+                            });
+                        }
+                        ServerResponse::GinValue { port_number, port_value } => {
+                            log::debug!("GIN[{}] = {}", port_number, port_value);
+                            set_gin_values.update(|map| {
+                                map.insert(port_number, port_value);
                             });
                         }
                         ServerResponse::ExecutionStateChanged { state, program_id, current_line, total_lines, message } => {
@@ -1276,11 +1336,53 @@ impl WebSocketManager {
     pub fn clear_io_cache(&self) {
         self.set_din_values.set(std::collections::HashMap::new());
         self.set_dout_values.set(std::collections::HashMap::new());
+        self.set_ain_values.set(std::collections::HashMap::new());
+        self.set_aout_values.set(std::collections::HashMap::new());
+        self.set_gin_values.set(std::collections::HashMap::new());
+        self.set_gout_values.set(std::collections::HashMap::new());
     }
 
     /// Update a single DOUT value in the local cache (for optimistic updates)
     pub fn update_dout_cache(&self, port: u16, value: bool) {
         self.set_dout_values.update(|map| {
+            map.insert(port, value);
+        });
+    }
+
+    // ========== Analog I/O ==========
+
+    /// Read a single analog input port
+    pub fn read_ain(&self, port_number: u16) {
+        self.send_api_request(ClientRequest::ReadAin { port_number });
+    }
+
+    /// Write an analog output port
+    pub fn write_aout(&self, port_number: u16, port_value: f64) {
+        self.send_api_request(ClientRequest::WriteAout { port_number, port_value });
+    }
+
+    /// Update a single AOUT value in the local cache (for optimistic updates)
+    pub fn update_aout_cache(&self, port: u16, value: f64) {
+        self.set_aout_values.update(|map| {
+            map.insert(port, value);
+        });
+    }
+
+    // ========== Group I/O ==========
+
+    /// Read a single group input port
+    pub fn read_gin(&self, port_number: u16) {
+        self.send_api_request(ClientRequest::ReadGin { port_number });
+    }
+
+    /// Write a group output port
+    pub fn write_gout(&self, port_number: u16, port_value: u32) {
+        self.send_api_request(ClientRequest::WriteGout { port_number, port_value });
+    }
+
+    /// Update a single GOUT value in the local cache (for optimistic updates)
+    pub fn update_gout_cache(&self, port: u16, value: u32) {
+        self.set_gout_values.update(|map| {
             map.insert(port, value);
         });
     }

@@ -38,7 +38,7 @@ pub fn RightPanel() -> impl IntoView {
     }
 }
 
-/// I/O Status panel with real DIN/DOUT support.
+/// I/O Status panel with DIN/DOUT/AIN/AOUT/GIN/GOUT support.
 #[component]
 fn IOStatusPanel() -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
@@ -59,6 +59,11 @@ fn IOStatusPanel() -> impl IntoView {
         for &port in &DISPLAY_PORTS {
             ws.read_din(port);
         }
+        // Read analog and group I/O
+        for &port in &DISPLAY_PORTS {
+            ws.read_ain(port);
+            ws.read_gin(port);
+        }
     };
 
     // Toggle collapse and refresh on open
@@ -72,6 +77,18 @@ fn IOStatusPanel() -> impl IntoView {
 
     let din_values = ws.din_values;
     let dout_values = ws.dout_values;
+    let ain_values = ws.ain_values;
+    let aout_values = ws.aout_values;
+    let gin_values = ws.gin_values;
+    let gout_values = ws.gout_values;
+
+    // Tab button helper
+    let tab_class = move |tab: &'static str| {
+        format!(
+            "flex-1 text-[8px] py-1 rounded transition-colors {}",
+            if selected_tab.get() == tab { "bg-[#00d9ff20] text-[#00d9ff]" } else { "bg-[#ffffff05] text-[#666666] hover:text-[#888888]" }
+        )
+    };
 
     view! {
         <div class="bg-[#0a0a0a] rounded border border-[#ffffff08]">
@@ -94,26 +111,14 @@ fn IOStatusPanel() -> impl IntoView {
             </button>
             <Show when=move || !collapsed.get()>
                 <div class="px-2 pb-2 space-y-2">
-                    // Tab buttons
+                    // Tab buttons - row 1: Digital
                     <div class="flex gap-1">
-                        <button
-                            class={move || format!(
-                                "flex-1 text-[9px] py-1 rounded transition-colors {}",
-                                if selected_tab.get() == "din" { "bg-[#00d9ff20] text-[#00d9ff]" } else { "bg-[#ffffff05] text-[#666666] hover:text-[#888888]" }
-                            )}
-                            on:click=move |_| set_selected_tab.set("din")
-                        >
-                            "DIN"
-                        </button>
-                        <button
-                            class={move || format!(
-                                "flex-1 text-[9px] py-1 rounded transition-colors {}",
-                                if selected_tab.get() == "dout" { "bg-[#00d9ff20] text-[#00d9ff]" } else { "bg-[#ffffff05] text-[#666666] hover:text-[#888888]" }
-                            )}
-                            on:click=move |_| set_selected_tab.set("dout")
-                        >
-                            "DOUT"
-                        </button>
+                        <button class={move || tab_class("din")} on:click=move |_| set_selected_tab.set("din")>"DIN"</button>
+                        <button class={move || tab_class("dout")} on:click=move |_| set_selected_tab.set("dout")>"DOUT"</button>
+                        <button class={move || tab_class("ain")} on:click=move |_| set_selected_tab.set("ain")>"AIN"</button>
+                        <button class={move || tab_class("aout")} on:click=move |_| set_selected_tab.set("aout")>"AOUT"</button>
+                        <button class={move || tab_class("gin")} on:click=move |_| set_selected_tab.set("gin")>"GIN"</button>
+                        <button class={move || tab_class("gout")} on:click=move |_| set_selected_tab.set("gout")>"GOUT"</button>
                         <button
                             class="p-1 text-[#555555] hover:text-[#00d9ff] transition-colors"
                             title="Refresh I/O"
@@ -147,6 +152,62 @@ fn IOStatusPanel() -> impl IntoView {
                                     <IOButton
                                         port=port
                                         value=Signal::derive(move || dout_values.get().get(&port).copied().unwrap_or(false))
+                                    />
+                                }
+                            }).collect_view()}
+                        </div>
+                    </Show>
+
+                    // I/O grid - AIN (analog input - read only)
+                    <Show when=move || selected_tab.get() == "ain">
+                        <div class="grid grid-cols-4 gap-1">
+                            {DISPLAY_PORTS.iter().map(|&port| {
+                                view! {
+                                    <AnalogIndicator
+                                        port=port
+                                        value=Signal::derive(move || ain_values.get().get(&port).copied().unwrap_or(0.0))
+                                    />
+                                }
+                            }).collect_view()}
+                        </div>
+                    </Show>
+
+                    // I/O grid - AOUT (analog output - writable)
+                    <Show when=move || selected_tab.get() == "aout">
+                        <div class="grid grid-cols-4 gap-1">
+                            {DISPLAY_PORTS.iter().map(|&port| {
+                                view! {
+                                    <AnalogOutput
+                                        port=port
+                                        value=Signal::derive(move || aout_values.get().get(&port).copied().unwrap_or(0.0))
+                                    />
+                                }
+                            }).collect_view()}
+                        </div>
+                    </Show>
+
+                    // I/O grid - GIN (group input - read only)
+                    <Show when=move || selected_tab.get() == "gin">
+                        <div class="grid grid-cols-4 gap-1">
+                            {DISPLAY_PORTS.iter().map(|&port| {
+                                view! {
+                                    <GroupIndicator
+                                        port=port
+                                        value=Signal::derive(move || gin_values.get().get(&port).copied().unwrap_or(0))
+                                    />
+                                }
+                            }).collect_view()}
+                        </div>
+                    </Show>
+
+                    // I/O grid - GOUT (group output - writable)
+                    <Show when=move || selected_tab.get() == "gout">
+                        <div class="grid grid-cols-4 gap-1">
+                            {DISPLAY_PORTS.iter().map(|&port| {
+                                view! {
+                                    <GroupOutput
+                                        port=port
+                                        value=Signal::derive(move || gout_values.get().get(&port).copied().unwrap_or(0))
                                     />
                                 }
                             }).collect_view()}
@@ -211,6 +272,145 @@ fn IOButton(
                 if value.get() { "bg-[#ff8800]" } else { "bg-[#333333]" }
             )}/>
         </button>
+    }
+}
+
+/// Read-only analog input indicator (for AIN).
+#[component]
+fn AnalogIndicator(
+    port: u16,
+    value: Signal<f64>,
+) -> impl IntoView {
+    view! {
+        <div
+            class="flex flex-col items-center justify-center p-1 rounded text-[8px] bg-[#ffffff05]"
+            title={format!("AIN[{}]", port)}
+        >
+            <span class="font-mono text-[#00d9ff]">{port}</span>
+            <span class="font-mono text-[#888888] text-[7px]">
+                {move || format!("{:.1}", value.get())}
+            </span>
+        </div>
+    }
+}
+
+/// Analog output with input field (for AOUT).
+#[component]
+fn AnalogOutput(
+    port: u16,
+    value: Signal<f64>,
+) -> impl IntoView {
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
+    let (editing, set_editing) = signal(false);
+    let (input_value, set_input_value) = signal(String::new());
+
+    let start_edit = move |_| {
+        set_input_value.set(format!("{:.2}", value.get()));
+        set_editing.set(true);
+    };
+
+    let do_submit = move || {
+        if let Ok(new_val) = input_value.get().parse::<f64>() {
+            ws.write_aout(port, new_val);
+            ws.update_aout_cache(port, new_val);
+        }
+        set_editing.set(false);
+    };
+
+    view! {
+        <div
+            class="flex flex-col items-center justify-center p-1 rounded text-[8px] bg-[#ff880010] cursor-pointer hover:bg-[#ff880020]"
+            title={format!("AOUT[{}] - Click to edit", port)}
+        >
+            <span class="font-mono text-[#ff8800]">{port}</span>
+            <Show when=move || !editing.get() fallback=move || view! {
+                <input
+                    type="number"
+                    step="0.1"
+                    class="w-10 text-[7px] bg-[#1a1a1a] border border-[#ff8800] rounded px-0.5 text-center text-white"
+                    prop:value=input_value
+                    on:input=move |ev| set_input_value.set(event_target_value(&ev))
+                    on:blur=move |_| do_submit()
+                    on:keydown=move |ev| {
+                        if ev.key() == "Enter" { do_submit(); }
+                        if ev.key() == "Escape" { set_editing.set(false); }
+                    }
+                />
+            }>
+                <span class="font-mono text-[#888888] text-[7px]" on:click=start_edit>
+                    {move || format!("{:.1}", value.get())}
+                </span>
+            </Show>
+        </div>
+    }
+}
+
+/// Read-only group input indicator (for GIN).
+#[component]
+fn GroupIndicator(
+    port: u16,
+    value: Signal<u32>,
+) -> impl IntoView {
+    view! {
+        <div
+            class="flex flex-col items-center justify-center p-1 rounded text-[8px] bg-[#ffffff05]"
+            title={format!("GIN[{}]", port)}
+        >
+            <span class="font-mono text-[#00ff88]">{port}</span>
+            <span class="font-mono text-[#888888] text-[7px]">
+                {move || format!("{}", value.get())}
+            </span>
+        </div>
+    }
+}
+
+/// Group output with input field (for GOUT).
+#[component]
+fn GroupOutput(
+    port: u16,
+    value: Signal<u32>,
+) -> impl IntoView {
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
+    let (editing, set_editing) = signal(false);
+    let (input_value, set_input_value) = signal(String::new());
+
+    let start_edit = move |_| {
+        set_input_value.set(format!("{}", value.get()));
+        set_editing.set(true);
+    };
+
+    let do_submit = move || {
+        if let Ok(new_val) = input_value.get().parse::<u32>() {
+            ws.write_gout(port, new_val);
+            ws.update_gout_cache(port, new_val);
+        }
+        set_editing.set(false);
+    };
+
+    view! {
+        <div
+            class="flex flex-col items-center justify-center p-1 rounded text-[8px] bg-[#ff00ff10] cursor-pointer hover:bg-[#ff00ff20]"
+            title={format!("GOUT[{}] - Click to edit", port)}
+        >
+            <span class="font-mono text-[#ff00ff]">{port}</span>
+            <Show when=move || !editing.get() fallback=move || view! {
+                <input
+                    type="number"
+                    class="w-10 text-[7px] bg-[#1a1a1a] border border-[#ff00ff] rounded px-0.5 text-center text-white"
+                    prop:value=input_value
+                    on:input=move |ev| set_input_value.set(event_target_value(&ev))
+                    on:blur=move |_| do_submit()
+                    on:keydown=move |ev| {
+                        if ev.key() == "Enter" { do_submit(); }
+                        if ev.key() == "Escape" { set_editing.set(false); }
+                    }
+                />
+            }>
+                <span class="font-mono text-[#888888] text-[7px]" on:click=start_edit>
+                    {move || format!("{}", value.get())}
+                </span>
+            </Show>
+        </div>
     }
 }
 
