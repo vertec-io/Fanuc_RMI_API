@@ -94,6 +94,18 @@ pub enum ClientRequest {
         port: u32,
     },
 
+    #[serde(rename = "update_robot_connection_defaults")]
+    UpdateRobotConnectionDefaults {
+        id: i64,
+        default_speed: Option<f64>,
+        default_term_type: Option<String>,
+        default_uframe: Option<i32>,
+        default_utool: Option<i32>,
+        default_w: Option<f64>,
+        default_p: Option<f64>,
+        default_r: Option<f64>,
+    },
+
     #[serde(rename = "delete_robot_connection")]
     DeleteRobotConnection { id: i64 },
 
@@ -257,6 +269,14 @@ pub struct RobotConnectionDto {
     pub description: Option<String>,
     pub ip_address: String,
     pub port: u32,
+    // Per-robot defaults (optional, falls back to global settings if None)
+    pub default_speed: Option<f64>,
+    pub default_term_type: Option<String>,
+    pub default_uframe: Option<i32>,
+    pub default_utool: Option<i32>,
+    pub default_w: Option<f64>,
+    pub default_p: Option<f64>,
+    pub default_r: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -952,6 +972,31 @@ impl WebSocketManager {
             description,
             ip_address,
             port,
+        });
+    }
+
+    /// Update robot connection defaults (per-robot settings)
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_robot_connection_defaults(
+        &self,
+        id: i64,
+        default_speed: Option<f64>,
+        default_term_type: Option<String>,
+        default_uframe: Option<i32>,
+        default_utool: Option<i32>,
+        default_w: Option<f64>,
+        default_p: Option<f64>,
+        default_r: Option<f64>,
+    ) {
+        self.send_api_request(ClientRequest::UpdateRobotConnectionDefaults {
+            id,
+            default_speed,
+            default_term_type,
+            default_uframe,
+            default_utool,
+            default_w,
+            default_p,
+            default_r,
         });
     }
 

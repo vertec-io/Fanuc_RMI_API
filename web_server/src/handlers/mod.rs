@@ -100,6 +100,9 @@ pub async fn handle_request(
         ClientRequest::UpdateRobotConnection { id, name, description, ip_address, port } => {
             robot_connections::update_robot_connection(db, id, &name, description.as_deref(), &ip_address, port).await
         }
+        ClientRequest::UpdateRobotConnectionDefaults { id, default_speed, default_term_type, default_uframe, default_utool, default_w, default_p, default_r } => {
+            robot_connections::update_robot_connection_defaults(db, id, default_speed, default_term_type.as_deref(), default_uframe, default_utool, default_w, default_p, default_r).await
+        }
         ClientRequest::DeleteRobotConnection { id } => {
             robot_connections::delete_robot_connection(db, id).await
         }

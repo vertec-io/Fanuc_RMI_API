@@ -19,6 +19,13 @@ pub async fn list_robot_connections(db: Arc<Mutex<Database>>) -> ServerResponse 
                 description: c.description.clone(),
                 ip_address: c.ip_address.clone(),
                 port: c.port,
+                default_speed: c.default_speed,
+                default_term_type: c.default_term_type.clone(),
+                default_uframe: c.default_uframe,
+                default_utool: c.default_utool,
+                default_w: c.default_w,
+                default_p: c.default_p,
+                default_r: c.default_r,
             }).collect();
             ServerResponse::RobotConnections { connections }
         }
@@ -38,6 +45,13 @@ pub async fn get_robot_connection(db: Arc<Mutex<Database>>, id: i64) -> ServerRe
                     description: c.description,
                     ip_address: c.ip_address,
                     port: c.port,
+                    default_speed: c.default_speed,
+                    default_term_type: c.default_term_type,
+                    default_uframe: c.default_uframe,
+                    default_utool: c.default_utool,
+                    default_w: c.default_w,
+                    default_p: c.default_p,
+                    default_r: c.default_r,
                 }
             }
         }
@@ -80,6 +94,38 @@ pub async fn update_robot_connection(
             ServerResponse::Success { message: format!("Connection '{}' updated", name) }
         }
         Err(e) => ServerResponse::Error { message: format!("Failed to update connection: {}", e) }
+    }
+}
+
+/// Update robot connection defaults (per-robot settings).
+#[allow(clippy::too_many_arguments)]
+pub async fn update_robot_connection_defaults(
+    db: Arc<Mutex<Database>>,
+    id: i64,
+    default_speed: Option<f64>,
+    default_term_type: Option<&str>,
+    default_uframe: Option<i32>,
+    default_utool: Option<i32>,
+    default_w: Option<f64>,
+    default_p: Option<f64>,
+    default_r: Option<f64>,
+) -> ServerResponse {
+    let db = db.lock().await;
+    match db.update_robot_connection_defaults(
+        id,
+        default_speed,
+        default_term_type,
+        default_uframe,
+        default_utool,
+        default_w,
+        default_p,
+        default_r,
+    ) {
+        Ok(_) => {
+            info!("Updated robot connection defaults for id={}", id);
+            ServerResponse::Success { message: "Connection defaults updated".to_string() }
+        }
+        Err(e) => ServerResponse::Error { message: format!("Failed to update connection defaults: {}", e) }
     }
 }
 

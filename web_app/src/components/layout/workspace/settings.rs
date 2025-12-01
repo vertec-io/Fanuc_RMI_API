@@ -370,6 +370,16 @@ fn SavedConnectionsPanel(
 ) -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
 
+    // Per-robot defaults (for editing)
+    let (show_defaults, set_show_defaults) = signal(false);
+    let (conn_default_speed, set_conn_default_speed) = signal::<Option<f64>>(None);
+    let (conn_default_term, set_conn_default_term) = signal::<Option<String>>(None);
+    let (conn_default_uframe, set_conn_default_uframe) = signal::<Option<i32>>(None);
+    let (conn_default_utool, set_conn_default_utool) = signal::<Option<i32>>(None);
+    let (conn_default_w, set_conn_default_w) = signal::<Option<f64>>(None);
+    let (conn_default_p, set_conn_default_p) = signal::<Option<f64>>(None);
+    let (conn_default_r, set_conn_default_r) = signal::<Option<f64>>(None);
+
     view! {
         <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-3">
             <h3 class="text-[10px] font-semibold text-[#00d9ff] mb-2 uppercase tracking-wide flex items-center justify-between">
@@ -388,6 +398,15 @@ fn SavedConnectionsPanel(
                         set_new_conn_desc.set(String::new());
                         set_new_conn_ip.set("127.0.0.1".to_string());
                         set_new_conn_port.set("16001".to_string());
+                        set_show_defaults.set(false);
+                        // Reset per-robot defaults
+                        set_conn_default_speed.set(None);
+                        set_conn_default_term.set(None);
+                        set_conn_default_uframe.set(None);
+                        set_conn_default_utool.set(None);
+                        set_conn_default_w.set(None);
+                        set_conn_default_p.set(None);
+                        set_conn_default_r.set(None);
                     }
                 >
                     "+ Add"
@@ -437,6 +456,125 @@ fn SavedConnectionsPanel(
                             />
                         </div>
                     </div>
+
+                    // Per-robot defaults toggle (only when editing)
+                    <Show when=move || editing_connection_id.get().is_some()>
+                        <button
+                            class="w-full text-[8px] px-2 py-1 mb-2 bg-[#0a0a0a] border border-[#ffffff08] text-[#888888] rounded hover:text-white flex items-center justify-between"
+                            on:click=move |_| set_show_defaults.set(!show_defaults.get())
+                        >
+                            <span>"Per-Robot Defaults (optional)"</span>
+                            <span>{move || if show_defaults.get() { "▼" } else { "▶" }}</span>
+                        </button>
+
+                        <Show when=move || show_defaults.get()>
+                            <div class="p-2 mb-2 bg-[#0a0a0a] rounded border border-[#ffffff08]">
+                                <p class="text-[7px] text-[#555555] mb-2">"Override global defaults for this robot. Leave empty to use global settings."</p>
+                                <div class="grid grid-cols-4 gap-1">
+                                    <div>
+                                        <label class="block text-[#666666] text-[7px] mb-0.5">"Speed"</label>
+                                        <input
+                                            type="number"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="50"
+                                            prop:value=move || conn_default_speed.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_conn_default_speed.set(val.parse().ok());
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[7px] mb-0.5">"Term"</label>
+                                        <select
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            on:change=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_conn_default_term.set(if val.is_empty() { None } else { Some(val) });
+                                            }
+                                        >
+                                            <option value="" selected=move || conn_default_term.get().is_none()>"(global)"</option>
+                                            <option value="CNT" selected=move || conn_default_term.get().as_deref() == Some("CNT")>"CNT"</option>
+                                            <option value="FINE" selected=move || conn_default_term.get().as_deref() == Some("FINE")>"FINE"</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[7px] mb-0.5">"UFrame"</label>
+                                        <input
+                                            type="number"
+                                            min="0" max="9"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || conn_default_uframe.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_conn_default_uframe.set(val.parse().ok());
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[7px] mb-0.5">"UTool"</label>
+                                        <input
+                                            type="number"
+                                            min="0" max="9"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || conn_default_utool.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_conn_default_utool.set(val.parse().ok());
+                                            }
+                                        />
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-3 gap-1 mt-1">
+                                    <div>
+                                        <label class="block text-[#666666] text-[7px] mb-0.5">"W (deg)"</label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || conn_default_w.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_conn_default_w.set(val.parse().ok());
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[7px] mb-0.5">"P (deg)"</label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || conn_default_p.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_conn_default_p.set(val.parse().ok());
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[7px] mb-0.5">"R (deg)"</label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || conn_default_r.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_conn_default_r.set(val.parse().ok());
+                                            }
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        </Show>
+                    </Show>
+
                     <div class="flex gap-1">
                         <button
                             class="flex-1 text-[8px] px-2 py-1 bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] rounded hover:bg-[#22c55e30]"
@@ -449,6 +587,19 @@ fn SavedConnectionsPanel(
 
                                 if let Some(id) = editing_connection_id.get() {
                                     ws.update_robot_connection(id, name, description, ip, port);
+                                    // Also update defaults if any were set
+                                    if show_defaults.get() {
+                                        ws.update_robot_connection_defaults(
+                                            id,
+                                            conn_default_speed.get(),
+                                            conn_default_term.get(),
+                                            conn_default_uframe.get(),
+                                            conn_default_utool.get(),
+                                            conn_default_w.get(),
+                                            conn_default_p.get(),
+                                            conn_default_r.get(),
+                                        );
+                                    }
                                 } else {
                                     ws.create_robot_connection(name, description, ip, port);
                                 }
@@ -479,10 +630,26 @@ fn SavedConnectionsPanel(
                         let conn_desc = conn.description.clone();
                         let conn_ip = conn.ip_address.clone();
                         let conn_port = conn.port;
+                        // Capture per-robot defaults for editing
+                        let edit_speed = conn.default_speed;
+                        let edit_term = conn.default_term_type.clone();
+                        let edit_uframe = conn.default_uframe;
+                        let edit_utool = conn.default_utool;
+                        let edit_w = conn.default_w;
+                        let edit_p = conn.default_p;
+                        let edit_r = conn.default_r;
+                        let has_defaults = edit_speed.is_some() || edit_term.is_some() || edit_uframe.is_some() || edit_utool.is_some();
                         view! {
                             <div class="flex items-center justify-between p-1.5 bg-[#111111] rounded border border-[#ffffff08] hover:border-[#ffffff15]">
                                 <div class="flex-1 min-w-0">
-                                    <div class="text-[9px] text-white font-medium truncate">{conn_name.clone()}</div>
+                                    <div class="text-[9px] text-white font-medium truncate flex items-center gap-1">
+                                        {conn_name.clone()}
+                                        {if has_defaults {
+                                            view! { <span class="text-[7px] text-[#00d9ff]" title="Has per-robot defaults">"⚙"</span> }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }}
+                                    </div>
                                     <div class="text-[8px] text-[#666666] font-mono">{format!("{}:{}", conn_ip.clone(), conn_port)}</div>
                                 </div>
                                 <div class="flex gap-1 ml-2">
@@ -495,6 +662,15 @@ fn SavedConnectionsPanel(
                                             set_new_conn_desc.set(conn_desc.clone().unwrap_or_default());
                                             set_new_conn_ip.set(conn_ip.clone());
                                             set_new_conn_port.set(conn_port.to_string());
+                                            // Load per-robot defaults
+                                            set_conn_default_speed.set(edit_speed);
+                                            set_conn_default_term.set(edit_term.clone());
+                                            set_conn_default_uframe.set(edit_uframe);
+                                            set_conn_default_utool.set(edit_utool);
+                                            set_conn_default_w.set(edit_w);
+                                            set_conn_default_p.set(edit_p);
+                                            set_conn_default_r.set(edit_r);
+                                            set_show_defaults.set(has_defaults);
                                             set_show_add_connection.set(true);
                                         }
                                     >
