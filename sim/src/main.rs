@@ -3,7 +3,7 @@ use std::error::Error;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc, RwLock};
 use tokio::time::Duration;
 
 mod kinematics;
@@ -25,7 +25,27 @@ enum SimulatorMode {
     Realtime,
 }
 
-// Simulated robot state
+/// Motion command that can be queued for execution
+#[derive(Debug)]
+struct MotionCommand {
+    seq_id: u32,
+    target_pos: [f64; 3],
+    target_ori: [f64; 3],
+    speed: f64,
+    term_type: String,
+    term_value: u64,
+    is_relative: bool,
+    instruction_type: String,
+}
+
+/// Response to send back after motion completes
+#[derive(Debug)]
+struct MotionResponse {
+    seq_id: u32,
+    instruction_type: String,
+}
+
+// Simulated robot state - now using RwLock for concurrent read access
 #[derive(Clone, Debug)]
 struct RobotState {
     joint_angles: [f32; 6],
@@ -33,7 +53,7 @@ struct RobotState {
     cartesian_orientation: [f32; 3],
     kinematics: CRXKinematics,
     mode: SimulatorMode,
-    last_sequence_id: Arc<Mutex<u32>>, // Track the last completed sequence ID
+    last_sequence_id: u32, // Track the last completed sequence ID
 }
 
 impl Default for RobotState {
@@ -75,7 +95,7 @@ impl RobotState {
             cartesian_orientation: [ori[0] as f32, ori[1] as f32, ori[2] as f32],
             kinematics,
             mode,
-            last_sequence_id: Arc::new(Mutex::new(0)),
+            last_sequence_id: 0,
         }
     }
 
@@ -148,271 +168,450 @@ async fn handle_client(
     Err("Failed to parse port number".into())
 }
 
+/// Shared state wrapper with RwLock for concurrent read access
+struct SharedRobotState {
+    state: RwLock<RobotState>,
+    response_tx: mpsc::Sender<MotionResponse>,
+}
+
 async fn handle_secondary_client(
     mut socket: TcpStream,
     robot_state: Arc<Mutex<RobotState>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut seq: u32 = 0;
+    let mut seq: u32 = 0; // Default, will be overwritten by each request's SequenceID
     let mut buffer = vec![0; 1024];
     let mut temp_buffer = Vec::new();
 
-    loop {
-        let n = match socket.read(&mut buffer).await {
-            Ok(n) => n,
-            Err(e) => {
-                eprintln!("Failed to read from socket: {}", e);
-                return Err(Box::new(e));
-            }
-        };
+    // Create a channel for motion responses (completed motions -> socket writer)
+    let (response_tx, mut response_rx) = mpsc::channel::<MotionResponse>(100);
 
-        if n == 0 {
-            break;
-        }
+    // Create a channel for motion commands (command receiver -> motion executor)
+    let (motion_tx, mut motion_rx) = mpsc::channel::<MotionCommand>(200);
 
-        // Append new data to temp_buffer
-        temp_buffer.extend_from_slice(&buffer[..n]);
-
-        while let Some(pos) = temp_buffer.iter().position(|&x| x == b'\n') {
-            // Split the buffer into the current message and the rest
-            let request: Vec<u8> = temp_buffer.drain(..=pos).collect();
-            // Remove the newline character
-            let request = &request[..request.len() - 1];
-
-            let request_str = String::from_utf8_lossy(request);
-
-            let request_json: serde_json::Value = match serde_json::from_str(&request_str) {
-                Ok(json) => json,
-                Err(e) => {
-                    eprintln!("Failed to parse JSON: {}", e);
-                    continue;
-                }
+    // Spawn a single motion executor task that processes motions SEQUENTIALLY
+    let robot_state_for_executor = Arc::clone(&robot_state);
+    let response_tx_for_executor = response_tx.clone();
+    tokio::spawn(async move {
+        while let Some(cmd) = motion_rx.recv().await {
+            // Get current position for interpolation
+            let (start_x, start_y, start_z, start_w, start_p, start_r, current_joints, mode) = {
+                let state = robot_state_for_executor.lock().await;
+                (
+                    state.cartesian_position[0] as f64,
+                    state.cartesian_position[1] as f64,
+                    state.cartesian_position[2] as f64,
+                    state.cartesian_orientation[0] as f64,
+                    state.cartesian_orientation[1] as f64,
+                    state.cartesian_orientation[2] as f64,
+                    [
+                        state.joint_angles[0] as f64,
+                        state.joint_angles[1] as f64,
+                        state.joint_angles[2] as f64,
+                        state.joint_angles[3] as f64,
+                        state.joint_angles[4] as f64,
+                        state.joint_angles[5] as f64,
+                    ],
+                    state.mode.clone(),
+                )
             };
 
-            let mut response_json = match request_json["Command"].as_str() {
-                Some("FRC_Initialize") => {
-                    println!("📋 FRC_Initialize");
-                    json!({
-                        "Command": "FRC_Initialize",
-                        "ErrorID": 0,
-                        "GroupMask": 1
-                    })
-                }
-                Some("FRC_GetStatus") => {
-                    let state = robot_state.lock().await;
-                    let next_seq = *state.last_sequence_id.lock().await + 1;
-                    json!({
-                        "Command": "FRC_GetStatus",
-                        "ErrorID": 0,
-                        "ServoReady": 1,
-                        "TPMode": 1,
-                        "RMIMotionStatus": 0,
-                        "ProgramStatus": 0,
-                        "SingleStepMode": 0,
-                        "NumberUTool": 5,
-                        "NextSequenceID": next_seq,
-                        "NumberUFrame": 0,
-                        "Override": 100
-                    })
-                },
-                Some("FRC_ReadJointAngles") => {
-                    let state = robot_state.lock().await;
-                    println!("📐 FRC_ReadJointAngles: J1={:.2}° J2={:.2}° J3={:.2}° J4={:.2}° J5={:.2}° J6={:.2}°",
-                        state.joint_angles[0].to_degrees(),
-                        state.joint_angles[1].to_degrees(),
-                        state.joint_angles[2].to_degrees(),
-                        state.joint_angles[3].to_degrees(),
-                        state.joint_angles[4].to_degrees(),
-                        state.joint_angles[5].to_degrees());
-                    json!({
-                        "Command": "FRC_ReadJointAngles",
-                        "ErrorID": 0,
-                        "TimeTag": 0,
-                        "JointAngles": {
-                            "J1": state.joint_angles[0],
-                            "J2": state.joint_angles[1],
-                            "J3": state.joint_angles[2],
-                            "J4": state.joint_angles[3],
-                            "J5": state.joint_angles[4],
-                            "J6": state.joint_angles[5],
-                        },
-                        "Group": 1
-                    })
-                },
-                Some("FRC_ReadCartesianPosition") => {
-                    let state = robot_state.lock().await;
-                    println!("📍 FRC_ReadCartesianPosition: X={:.1} Y={:.1} Z={:.1} W={:.1}° P={:.1}° R={:.1}°",
-                        state.cartesian_position[0],
-                        state.cartesian_position[1],
-                        state.cartesian_position[2],
-                        state.cartesian_orientation[0].to_degrees(),
-                        state.cartesian_orientation[1].to_degrees(),
-                        state.cartesian_orientation[2].to_degrees());
-                    json!({
-                        "Command": "FRC_ReadCartesianPosition",
-                        "ErrorID": 0,
-                        "TimeTag": 0,
-                        "Configuration": {
-                            "UToolNumber": 1,
-                            "UFrameNumber": 1,
-                            "Front": 1,
-                            "Up": 1,
-                            "Left": 1,
-                            "Flip": 0,
-                            "Turn4": 0,
-                            "Turn5": 0,
-                            "Turn6": 0,
-                        },
-                        "Position": {
-                            "X": state.cartesian_position[0],
-                            "Y": state.cartesian_position[1],
-                            "Z": state.cartesian_position[2],
-                            "W": state.cartesian_orientation[0],
-                            "P": state.cartesian_orientation[1],
-                            "R": state.cartesian_orientation[2],
-                        },
-                        "Group": 1
-                    })
-                },
-                Some("FRC_LinearMotion") => json!({
-                    "Status": "Motion started"
-                }),
-                Some("FRC_Abort") => {
-                    println!("🛑 FRC_Abort");
-                    json!({
-                        "Command": "FRC_Abort",
-                        "ErrorID": 0,
-                    })
-                }
-                Some("FRC_Reset") => {
-                    println!("🔄 FRC_Reset");
-                    json!({
-                        "Command": "FRC_Reset",
-                        "ErrorID": 0,
-                    })
-                }
-                Some("FRC_SetOverRide") => json!({
-                    "Command": "FRC_SetOverRide",
-                    "ErrorID": 0,
-                }),
-                _ => json!({}),
+            // For relative motion, target_pos contains the delta; for absolute, it's the target
+            let (target_x, target_y, target_z, target_w, target_p, target_r) = if cmd.is_relative {
+                (
+                    start_x + cmd.target_pos[0],
+                    start_y + cmd.target_pos[1],
+                    start_z + cmd.target_pos[2],
+                    start_w,  // Keep current orientation for relative moves
+                    start_p,
+                    start_r,
+                )
+            } else {
+                (
+                    cmd.target_pos[0],
+                    cmd.target_pos[1],
+                    cmd.target_pos[2],
+                    cmd.target_ori[0],
+                    cmd.target_ori[1],
+                    cmd.target_ori[2],
+                )
             };
 
-            response_json = match request_json["Communication"].as_str() {
-                Some("FRC_Disconnect") => {
-                    println!("👋 FRC_Disconnect\n");
-                    json!({
-                        "Communication": "FRC_Disconnect",
-                        "ErrorID": 0,
-                    })
-                }
-                _ => response_json,
+            // Calculate distance and duration
+            let dx = target_x - start_x;
+            let dy = target_y - start_y;
+            let dz = target_z - start_z;
+            let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+
+            eprintln!("🏃 Executing motion {} ({}) | dist={:.1}mm",
+                cmd.seq_id, cmd.instruction_type, distance);
+
+            let delay_ms = if mode == SimulatorMode::Realtime {
+                let duration = RobotState::calculate_motion_duration(distance, cmd.speed);
+                (duration * 1000.0) as u64
+            } else {
+                0
             };
 
-            response_json = match request_json["Instruction"].as_str() {
-                Some("FRC_LinearMotion") => json!({
-                    "Instruction": "FRC_LinearMotion",
-                    "ErrorID": 0,
-                    "SequenceID": seq,
-                }),
-                Some("FRC_LinearRelative") => {
-                    // Parse the Position from the instruction
-                    if let Some(position) = request_json.get("Position") {
-                        let dx = position["X"].as_f64().unwrap_or(0.0);
-                        let dy = position["Y"].as_f64().unwrap_or(0.0);
-                        let dz = position["Z"].as_f64().unwrap_or(0.0);
+            // Execute motion with incremental position updates
+            if delay_ms > 0 {
+                let update_interval_ms = 50u64;
+                let total_steps = (delay_ms / update_interval_ms).max(1);
 
-                        let speed = request_json.get("Speed").and_then(|v| v.as_f64()).unwrap_or(10.0);
-                        let term_type = request_json.get("TermType").and_then(|v| v.as_str()).unwrap_or("FINE");
-                        let term_value = request_json.get("TermValue").and_then(|v| v.as_u64()).unwrap_or(0);
+                for step in 1..=total_steps {
+                    let t = step as f64 / total_steps as f64;
 
-                        // Update robot state with relative movement
-                        let mut state = robot_state.lock().await;
+                    // Linear interpolation
+                    let current_x = start_x + (target_x - start_x) * t;
+                    let current_y = start_y + (target_y - start_y) * t;
+                    let current_z = start_z + (target_z - start_z) * t;
+                    let current_w = start_w + (target_w - start_w) * t;
+                    let current_p = start_p + (target_p - start_p) * t;
+                    let current_r = start_r + (target_r - start_r) * t;
 
-                        // Calculate distance for timing
-                        let distance = (dx * dx + dy * dy + dz * dz).sqrt();
-
-                        // Update Cartesian position (happens immediately in both modes for visualization)
-                        state.cartesian_position[0] += dx as f32;
-                        state.cartesian_position[1] += dy as f32;
-                        state.cartesian_position[2] += dz as f32;
-
-                        println!("🎯 FRC_LinearRelative: ΔX={:+.1} ΔY={:+.1} ΔZ={:+.1} | Speed={:.1}mm/s | Term={} CNT={} | Pos=[{:.1}, {:.1}, {:.1}]",
-                            dx, dy, dz, speed, term_type, term_value,
-                            state.cartesian_position[0],
-                            state.cartesian_position[1],
-                            state.cartesian_position[2]);
+                    // Update robot state
+                    {
+                        let mut state = robot_state_for_executor.lock().await;
+                        state.cartesian_position[0] = current_x as f32;
+                        state.cartesian_position[1] = current_y as f32;
+                        state.cartesian_position[2] = current_z as f32;
+                        state.cartesian_orientation[0] = current_w as f32;
+                        state.cartesian_orientation[1] = current_p as f32;
+                        state.cartesian_orientation[2] = current_r as f32;
 
                         // Calculate joint angles using inverse kinematics
-                        let target_pos = [
-                            state.cartesian_position[0] as f64,
-                            state.cartesian_position[1] as f64,
-                            state.cartesian_position[2] as f64,
-                        ];
-
-                        let current_joints = [
-                            state.joint_angles[0] as f64,
-                            state.joint_angles[1] as f64,
-                            state.joint_angles[2] as f64,
-                            state.joint_angles[3] as f64,
-                            state.joint_angles[4] as f64,
-                            state.joint_angles[5] as f64,
-                        ];
-
-                        let target_ori = Some([
-                            state.cartesian_orientation[0] as f64,
-                            state.cartesian_orientation[1] as f64,
-                            state.cartesian_orientation[2] as f64,
-                        ]);
+                        let target_pos = [current_x, current_y, current_z];
+                        let target_ori = Some([current_w, current_p, current_r]);
 
                         if let Some(new_joints) = state.kinematics.inverse_kinematics(
                             &target_pos,
                             target_ori.as_ref(),
                             &current_joints,
                         ) {
-                            // Update joint angles
                             state.joint_angles[0] = new_joints[0] as f32;
                             state.joint_angles[1] = new_joints[1] as f32;
                             state.joint_angles[2] = new_joints[2] as f32;
                             state.joint_angles[3] = new_joints[3] as f32;
                             state.joint_angles[4] = new_joints[4] as f32;
                             state.joint_angles[5] = new_joints[5] as f32;
-                        } else {
-                            eprintln!("⚠️  WARNING: IK solution not found for target position");
                         }
-
-                        // Calculate delay based on mode
-                        let delay_ms = if state.mode == SimulatorMode::Realtime {
-                            let duration = RobotState::calculate_motion_duration(distance, speed);
-                            println!("   ⏱️  Motion will take {:.2}s to complete", duration);
-                            (duration * 1000.0) as u64 // Convert to milliseconds
-                        } else {
-                            0 // Immediate mode: no delay
-                        };
-
-                        let last_seq_id = Arc::clone(&state.last_sequence_id);
-                        drop(state); // Release lock before sleeping
-
-                        // Sleep to simulate motion execution time
-                        if delay_ms > 0 {
-                            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                        }
-
-                        // Update last completed sequence ID
-                        *last_seq_id.lock().await = seq;
                     }
 
-                    // Send response after motion completes (or immediately in immediate mode)
-                    json!({
-                        "Instruction": "FRC_LinearRelative",
-                        "ErrorID": 0,
-                        "SequenceID": seq
-                    })
-                },
-                _ => response_json,
-            };
-            let response = serde_json::to_string(&response_json)? + "\r\n";
-            socket.write_all(response.as_bytes()).await?;
-            seq += 1;
+                    tokio::time::sleep(Duration::from_millis(update_interval_ms)).await;
+                }
+            } else {
+                // Instant mode - just set final position
+                let mut state = robot_state_for_executor.lock().await;
+                state.cartesian_position[0] = target_x as f32;
+                state.cartesian_position[1] = target_y as f32;
+                state.cartesian_position[2] = target_z as f32;
+                state.cartesian_orientation[0] = target_w as f32;
+                state.cartesian_orientation[1] = target_p as f32;
+                state.cartesian_orientation[2] = target_r as f32;
+
+                let target_pos = [target_x, target_y, target_z];
+                let target_ori = Some([target_w, target_p, target_r]);
+
+                if let Some(new_joints) = state.kinematics.inverse_kinematics(
+                    &target_pos,
+                    target_ori.as_ref(),
+                    &current_joints,
+                ) {
+                    state.joint_angles[0] = new_joints[0] as f32;
+                    state.joint_angles[1] = new_joints[1] as f32;
+                    state.joint_angles[2] = new_joints[2] as f32;
+                    state.joint_angles[3] = new_joints[3] as f32;
+                    state.joint_angles[4] = new_joints[4] as f32;
+                    state.joint_angles[5] = new_joints[5] as f32;
+                }
+            }
+
+            // Update last sequence ID
+            {
+                let mut state = robot_state_for_executor.lock().await;
+                state.last_sequence_id = cmd.seq_id;
+            }
+
+            // Send response back - motion is complete
+            eprintln!("✅ Motion {} complete, sending response", cmd.seq_id);
+            let _ = response_tx_for_executor.send(MotionResponse {
+                seq_id: cmd.seq_id,
+                instruction_type: cmd.instruction_type,
+            }).await;
+        }
+        eprintln!("Motion executor task ended");
+    });
+
+    // motion_tx is used to queue commands to the executor
+    let motion_tx = Arc::new(motion_tx);
+    // response_tx was moved to the executor task, response_rx is used below
+
+    loop {
+        tokio::select! {
+            // Check for incoming data
+            read_result = socket.read(&mut buffer) => {
+                let n = match read_result {
+                    Ok(n) => n,
+                    Err(e) => {
+                        eprintln!("Failed to read from socket: {}", e);
+                        return Err(Box::new(e));
+                    }
+                };
+
+                if n == 0 {
+                    break;
+                }
+
+                // Append new data to temp_buffer
+                temp_buffer.extend_from_slice(&buffer[..n]);
+
+                while let Some(pos) = temp_buffer.iter().position(|&x| x == b'\n') {
+                    // Split the buffer into the current message and the rest
+                    let request: Vec<u8> = temp_buffer.drain(..=pos).collect();
+                    // Remove the newline character
+                    let request = &request[..request.len() - 1];
+
+                    let request_str = String::from_utf8_lossy(request);
+
+                    let request_json: serde_json::Value = match serde_json::from_str(&request_str) {
+                        Ok(json) => json,
+                        Err(e) => {
+                            eprintln!("Failed to parse JSON: {}", e);
+                            continue;
+                        }
+                    };
+
+                    let mut response_json = match request_json["Command"].as_str() {
+                        Some("FRC_Initialize") => {
+                            println!("📋 FRC_Initialize");
+                            json!({
+                                "Command": "FRC_Initialize",
+                                "ErrorID": 0,
+                                "GroupMask": 1
+                            })
+                        }
+                        Some("FRC_GetStatus") => {
+                            let state = robot_state.lock().await;
+                            let next_seq = state.last_sequence_id + 1;
+                            json!({
+                                "Command": "FRC_GetStatus",
+                                "ErrorID": 0,
+                                "ServoReady": 1,
+                                "TPMode": 1,
+                                "RMIMotionStatus": 0,
+                                "ProgramStatus": 0,
+                                "SingleStepMode": 0,
+                                "NumberUTool": 5,
+                                "NextSequenceID": next_seq,
+                                "NumberUFrame": 0,
+                                "Override": 100
+                            })
+                        },
+                        Some("FRC_ReadJointAngles") => {
+                            let state = robot_state.lock().await;
+                            json!({
+                                "Command": "FRC_ReadJointAngles",
+                                "ErrorID": 0,
+                                "TimeTag": 0,
+                                "JointAngles": {
+                                    "J1": state.joint_angles[0],
+                                    "J2": state.joint_angles[1],
+                                    "J3": state.joint_angles[2],
+                                    "J4": state.joint_angles[3],
+                                    "J5": state.joint_angles[4],
+                                    "J6": state.joint_angles[5],
+                                },
+                                "Group": 1
+                            })
+                        },
+                        Some("FRC_ReadCartesianPosition") => {
+                            let state = robot_state.lock().await;
+                            json!({
+                                "Command": "FRC_ReadCartesianPosition",
+                                "ErrorID": 0,
+                                "TimeTag": 0,
+                                "Configuration": {
+                                    "UToolNumber": 1,
+                                    "UFrameNumber": 1,
+                                    "Front": 1,
+                                    "Up": 1,
+                                    "Left": 1,
+                                    "Flip": 0,
+                                    "Turn4": 0,
+                                    "Turn5": 0,
+                                    "Turn6": 0,
+                                },
+                                "Position": {
+                                    "X": state.cartesian_position[0],
+                                    "Y": state.cartesian_position[1],
+                                    "Z": state.cartesian_position[2],
+                                    "W": state.cartesian_orientation[0],
+                                    "P": state.cartesian_orientation[1],
+                                    "R": state.cartesian_orientation[2],
+                                },
+                                "Group": 1
+                            })
+                        },
+                        Some("FRC_LinearMotion") => json!({
+                            "Status": "Motion started"
+                        }),
+                        Some("FRC_Abort") => {
+                            println!("🛑 FRC_Abort");
+                            json!({
+                                "Command": "FRC_Abort",
+                                "ErrorID": 0,
+                            })
+                        }
+                        Some("FRC_Reset") => {
+                            println!("🔄 FRC_Reset");
+                            json!({
+                                "Command": "FRC_Reset",
+                                "ErrorID": 0,
+                            })
+                        }
+                        Some("FRC_SetOverRide") => json!({
+                            "Command": "FRC_SetOverRide",
+                            "ErrorID": 0,
+                        }),
+                        _ => json!({}),
+                    };
+
+                    response_json = match request_json["Communication"].as_str() {
+                        Some("FRC_Disconnect") => {
+                            println!("👋 FRC_Disconnect\n");
+                            json!({
+                                "Communication": "FRC_Disconnect",
+                                "ErrorID": 0,
+                            })
+                        }
+                        _ => response_json,
+                    };
+
+                    // Extract SequenceID from instruction requests (if present)
+                    if let Some(seq_id) = request_json.get("SequenceID").and_then(|v| v.as_u64()) {
+                        seq = seq_id as u32;
+                    }
+
+                    // Handle motion instructions asynchronously
+                    response_json = match request_json["Instruction"].as_str() {
+                        Some("FRC_LinearMotion") => {
+                            // Parse the Position from the instruction (absolute position)
+                            if let Some(position) = request_json.get("Position") {
+                                let target_x = position["X"].as_f64().unwrap_or(0.0);
+                                let target_y = position["Y"].as_f64().unwrap_or(0.0);
+                                let target_z = position["Z"].as_f64().unwrap_or(0.0);
+                                let target_w = position["W"].as_f64().unwrap_or(0.0);
+                                let target_p = position["P"].as_f64().unwrap_or(0.0);
+                                let target_r = position["R"].as_f64().unwrap_or(0.0);
+
+                                let speed = request_json.get("Speed").and_then(|v| v.as_f64()).unwrap_or(100.0);
+                                let term_type = request_json.get("TermType").and_then(|v| v.as_str()).unwrap_or("FINE").to_string();
+                                let term_value = request_json.get("TermValue").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                                // Get mode for logging
+                                let mode = {
+                                    let state = robot_state.lock().await;
+                                    state.mode.clone()
+                                };
+
+                                println!("🎯 FRC_LinearMotion: X={:.1} Y={:.1} Z={:.1} | Speed={:.1}mm/s | Term={} CNT={} | seq={}",
+                                    target_x, target_y, target_z, speed, term_type, term_value, seq);
+
+                                // Queue the motion command for sequential execution
+                                let cmd = MotionCommand {
+                                    seq_id: seq,
+                                    target_pos: [target_x, target_y, target_z],
+                                    target_ori: [target_w, target_p, target_r],
+                                    speed,
+                                    term_type,
+                                    term_value,
+                                    is_relative: false,
+                                    instruction_type: "FRC_LinearMotion".to_string(),
+                                };
+
+                                if let Err(e) = motion_tx.send(cmd).await {
+                                    eprintln!("❌ Failed to queue motion {}: {}", seq, e);
+                                }
+
+                                // In realtime mode, don't send immediate response - wait for motion completion
+                                if mode == SimulatorMode::Realtime {
+                                    continue; // Don't send response now, will be sent when motion completes
+                                }
+                            }
+
+                            json!({
+                                "Instruction": "FRC_LinearMotion",
+                                "ErrorID": 0,
+                                "SequenceID": seq,
+                            })
+                        }
+                        Some("FRC_LinearRelative") => {
+                            // Parse the Position from the instruction (relative offset)
+                            if let Some(position) = request_json.get("Position") {
+                                let dx = position["X"].as_f64().unwrap_or(0.0);
+                                let dy = position["Y"].as_f64().unwrap_or(0.0);
+                                let dz = position["Z"].as_f64().unwrap_or(0.0);
+
+                                let speed = request_json.get("Speed").and_then(|v| v.as_f64()).unwrap_or(10.0);
+                                let term_type = request_json.get("TermType").and_then(|v| v.as_str()).unwrap_or("FINE").to_string();
+                                let term_value = request_json.get("TermValue").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                                // Get mode for logging
+                                let mode = {
+                                    let state = robot_state.lock().await;
+                                    state.mode.clone()
+                                };
+
+                                println!("🎯 FRC_LinearRelative: ΔX={:+.1} ΔY={:+.1} ΔZ={:+.1} | Speed={:.1}mm/s | Term={} CNT={} | seq={}",
+                                    dx, dy, dz, speed, term_type, term_value, seq);
+
+                                // Queue the motion command - use is_relative=true to indicate this is a relative move
+                                // The executor will add the offset to the current position at execution time
+                                let cmd = MotionCommand {
+                                    seq_id: seq,
+                                    target_pos: [dx, dy, dz],  // Store the delta values
+                                    target_ori: [0.0, 0.0, 0.0],  // No orientation change for relative
+                                    speed,
+                                    term_type,
+                                    term_value,
+                                    is_relative: true,
+                                    instruction_type: "FRC_LinearRelative".to_string(),
+                                };
+
+                                if let Err(e) = motion_tx.send(cmd).await {
+                                    eprintln!("❌ Failed to queue relative motion {}: {}", seq, e);
+                                }
+
+                                // In realtime mode, don't send immediate response
+                                if mode == SimulatorMode::Realtime {
+                                    continue;
+                                }
+                            }
+
+                            json!({
+                                "Instruction": "FRC_LinearRelative",
+                                "ErrorID": 0,
+                                "SequenceID": seq
+                            })
+                        }
+                        _ => response_json,
+                    };
+                    let response = serde_json::to_string(&response_json)? + "\r\n";
+                    socket.write_all(response.as_bytes()).await?;
+                    seq += 1;
+                }
+            }
+            // Check for motion responses to send back
+            Some(motion_response) = response_rx.recv() => {
+                eprintln!("📨 Received response from channel: seq_id={}", motion_response.seq_id);
+                let response_json = json!({
+                    "Instruction": motion_response.instruction_type,
+                    "ErrorID": 0,
+                    "SequenceID": motion_response.seq_id,
+                });
+                let response = serde_json::to_string(&response_json)? + "\r\n";
+                eprintln!("📬 Sending to client: {}", response.trim());
+                socket.write_all(response.as_bytes()).await?;
+            }
         }
     }
 

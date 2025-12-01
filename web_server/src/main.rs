@@ -1,6 +1,16 @@
 // WebSocket server that bridges between Fanuc driver and web clients
-// Run with: cargo run --manifest-path web_app/Cargo_server.toml
+// Run with: cargo run -p web_server
 
+mod api_handler;
+mod api_types;
+mod database;
+mod program_executor;
+mod program_parser;
+
+use api_handler::handle_request;
+use api_types::{ClientRequest, ServerResponse};
+use database::Database;
+use program_executor::ProgramExecutor;
 use fanuc_rmi::{
     drivers::{FanucDriver, FanucDriverConfig, LogLevel},
     dto,
@@ -8,13 +18,92 @@ use fanuc_rmi::{
 };
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{info, warn, error};
+
+/// Shared robot connection state
+pub struct RobotConnection {
+    pub driver: Option<Arc<FanucDriver>>,
+    pub connected: bool,
+    pub robot_addr: String,
+    pub robot_port: u32,
+}
+
+impl RobotConnection {
+    pub fn new(robot_addr: String, robot_port: u32) -> Self {
+        Self {
+            driver: None,
+            connected: false,
+            robot_addr,
+            robot_port,
+        }
+    }
+
+    pub async fn connect(&mut self) -> Result<(), String> {
+        let driver_config = FanucDriverConfig {
+            addr: self.robot_addr.clone(),
+            port: self.robot_port,
+            max_messages: 30,
+            log_level: LogLevel::Error,
+        };
+
+        info!("Connecting to robot at {}:{}", driver_config.addr, driver_config.port);
+        match FanucDriver::connect(driver_config).await {
+            Ok(d) => {
+                info!("✓ Connected to robot");
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                // Smart initialization - checks status first, only aborts if needed
+                match d.startup_sequence().await {
+                    Ok(()) => {
+                        info!("✓ Robot initialization complete");
+                        self.driver = Some(Arc::new(d));
+                        self.connected = true;
+                        Ok(())
+                    }
+                    Err(e) => {
+                        warn!("⚠ Robot initialization failed: {}", e);
+                        // Still connect, but warn that initialization failed
+                        self.driver = Some(Arc::new(d));
+                        self.connected = true;
+                        Ok(())
+                    }
+                }
+            }
+            Err(e) => {
+                error!("✗ Failed to connect: {}", e);
+                self.connected = false;
+                self.driver = None;
+                Err(format!("Failed to connect: {}", e))
+            }
+        }
+    }
+
+    pub fn disconnect(&mut self) {
+        self.driver = None;
+        self.connected = false;
+    }
+}
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
+
+    // Initialize database
+    let db_path = std::env::var("FANUC_DB_PATH")
+        .unwrap_or_else(|_| Database::DEFAULT_PATH.to_string());
+
+    let db = match Database::new(&db_path) {
+        Ok(db) => {
+            info!("✓ Database initialized at {}", db_path);
+            Arc::new(tokio::sync::Mutex::new(db))
+        }
+        Err(e) => {
+            error!("✗ Failed to initialize database: {}", e);
+            return;
+        }
+    };
 
     // Load configuration from environment variables with defaults
     let robot_addr = std::env::var("FANUC_ROBOT_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -27,97 +116,119 @@ async fn main() {
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(9000);
 
-    // Connect to robot/simulator
-    let driver_config = FanucDriverConfig {
-        addr: robot_addr.clone(),
-        port: robot_port,
-        max_messages: 30,
-        log_level: LogLevel::Error,
-    };
+    // Create robot connection (may or may not connect on startup)
+    let robot_connection = Arc::new(RwLock::new(RobotConnection::new(robot_addr.clone(), robot_port)));
 
-    info!("Connecting to robot at {}:{}", driver_config.addr, driver_config.port);
-    let driver = match FanucDriver::connect(driver_config).await {
-        Ok(d) => {
-            info!("✓ Connected to robot");
-            d
-        }
-        Err(e) => {
-            error!("✗ Failed to connect: {}", e);
-            error!("  Make sure the simulator is running: cargo run -p sim -- --realtime");
-            return;
-        }
-    };
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-    // Smart initialization - checks status first, only aborts if needed
-    match driver.startup_sequence().await {
-        Ok(()) => {
-            info!("✓ Robot initialization complete");
-        }
-        Err(e) => {
-            error!("✗ Robot initialization failed: {}", e);
-            error!("  Check that robot is in AUTO mode and servo is ready");
-            return;
+    // Try to connect to robot, but don't exit if it fails
+    {
+        let mut conn = robot_connection.write().await;
+        if let Err(e) = conn.connect().await {
+            warn!("⚠ Could not connect to robot on startup: {}", e);
+            warn!("  Web server will continue running. Connect via UI when robot is available.");
+            warn!("  Or start the simulator: cargo run -p sim -- --realtime");
         }
     }
 
-    let driver = Arc::new(driver);
+    let executor = Arc::new(tokio::sync::Mutex::new(ProgramExecutor::new()));
     let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(100);
     let broadcast_tx = Arc::new(broadcast_tx);
 
-    // Subscribe to driver responses and broadcast to all web clients
-    let mut response_rx = driver.response_tx.subscribe();
+    // Start response broadcast task (only if connected)
+    let robot_connection_clone = Arc::clone(&robot_connection);
     let broadcast_tx_clone = Arc::clone(&broadcast_tx);
     tokio::spawn(async move {
-        while let Ok(response) = response_rx.recv().await {
-            // Convert protocol response to DTO
-            let dto_response: dto::ResponsePacket = response.into();
-            
-            // Serialize to binary
-            if let Ok(binary) = bincode::serialize(&dto_response) {
-                let _ = broadcast_tx_clone.send(binary);
+        loop {
+            // Get driver if connected
+            let driver_opt = {
+                let conn = robot_connection_clone.read().await;
+                conn.driver.clone()
+            };
+
+            if let Some(driver) = driver_opt {
+                let mut response_rx = driver.response_tx.subscribe();
+                // Broadcast until disconnected
+                loop {
+                    match response_rx.recv().await {
+                        Ok(response) => {
+                            let dto_response: dto::ResponsePacket = response.into();
+                            if let Ok(binary) = bincode::serialize(&dto_response) {
+                                let _ = broadcast_tx_clone.send(binary);
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            warn!("Driver response channel closed - robot disconnected");
+                            break;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("Lagged {} messages", n);
+                        }
+                    }
+                }
+                // Mark as disconnected
+                let mut conn = robot_connection_clone.write().await;
+                conn.connected = false;
             }
+
+            // Wait before trying again
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
     });
 
-    // Periodic status polling
-    let driver_clone = Arc::clone(&driver);
+    // Periodic status polling task - uses High priority so polling interleaves with motion commands
+    let robot_connection_clone = Arc::clone(&robot_connection);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
         loop {
             interval.tick().await;
-            let packet: fanuc_rmi::packets::SendPacket = dto::SendPacket::Command(dto::Command::FrcReadCartesianPosition(
-                dto::FrcReadCartesianPosition { group: 1 }
-            )).into();
-            let _ = driver_clone.send_packet(packet, PacketPriority::Low);
+            let driver_opt = {
+                let conn = robot_connection_clone.read().await;
+                conn.driver.clone()
+            };
 
-            let packet: fanuc_rmi::packets::SendPacket = dto::SendPacket::Command(dto::Command::FrcGetStatus).into();
-            let _ = driver_clone.send_packet(packet, PacketPriority::Low);
+            if let Some(driver) = driver_opt {
+                // Use High priority so these get pushed to front of queue, interleaving with motion commands
+                // Note: Commands (not Instructions) don't consume the 8-slot instruction buffer
+                let packet: fanuc_rmi::packets::SendPacket = dto::SendPacket::Command(dto::Command::FrcReadCartesianPosition(
+                    dto::FrcReadCartesianPosition { group: 1 }
+                )).into();
+                let _ = driver.send_packet(packet, PacketPriority::High);
+
+                let packet: fanuc_rmi::packets::SendPacket = dto::SendPacket::Command(dto::Command::FrcReadJointAngles(
+                    dto::FrcReadJointAngles { group: 1 }
+                )).into();
+                let _ = driver.send_packet(packet, PacketPriority::High);
+
+                let packet: fanuc_rmi::packets::SendPacket = dto::SendPacket::Command(dto::Command::FrcGetStatus).into();
+                let _ = driver.send_packet(packet, PacketPriority::High);
+            }
         }
     });
 
     // Start WebSocket server
-    let websocket_addr = format!("127.0.0.1:{}", websocket_port);
-    let listener = tokio::net::TcpListener::bind(&websocket_addr).await.unwrap();
+    let websocket_addr = format!("0.0.0.0:{}", websocket_port);
+    let ws_listener = tokio::net::TcpListener::bind(&websocket_addr).await.unwrap();
     info!("🚀 WebSocket server listening on ws://{}", websocket_addr);
     info!("   Environment variables:");
     info!("   - FANUC_ROBOT_ADDR={}", robot_addr);
     info!("   - FANUC_ROBOT_PORT={}", robot_port);
     info!("   - WEBSOCKET_PORT={}", websocket_port);
 
-    while let Ok((stream, addr)) = listener.accept().await {
+    while let Ok((stream, addr)) = ws_listener.accept().await {
         info!("New WebSocket connection from {}", addr);
-        let driver = Arc::clone(&driver);
+        let robot_connection = Arc::clone(&robot_connection);
+        let db = Arc::clone(&db);
+        let executor = Arc::clone(&executor);
         let broadcast_rx = broadcast_tx.subscribe();
-        
-        tokio::spawn(handle_connection(stream, driver, broadcast_rx));
+
+        tokio::spawn(handle_connection(stream, robot_connection, db, executor, broadcast_rx));
     }
 }
 
 async fn handle_connection(
     stream: tokio::net::TcpStream,
-    driver: Arc<FanucDriver>,
+    robot_connection: Arc<RwLock<RobotConnection>>,
+    db: Arc<tokio::sync::Mutex<Database>>,
+    executor: Arc<tokio::sync::Mutex<ProgramExecutor>>,
     mut broadcast_rx: broadcast::Receiver<Vec<u8>>,
 ) {
     let ws_stream = match accept_async(stream).await {
@@ -128,29 +239,79 @@ async fn handle_connection(
         }
     };
 
-    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
+    let (ws_sender, mut ws_receiver) = ws_stream.split();
+    let ws_sender = Arc::new(tokio::sync::Mutex::new(ws_sender));
 
     // Task to forward broadcast messages to this client
+    let ws_sender_clone = Arc::clone(&ws_sender);
     let send_task = tokio::spawn(async move {
         while let Ok(binary) = broadcast_rx.recv().await {
-            if ws_sender.send(Message::Binary(binary)).await.is_err() {
+            let mut sender = ws_sender_clone.lock().await;
+            if sender.send(Message::Binary(binary)).await.is_err() {
                 break;
             }
         }
     });
 
     // Task to handle incoming messages from client
+    let ws_sender_clone = Arc::clone(&ws_sender);
+    let robot_connection_clone = Arc::clone(&robot_connection);
     let recv_task = tokio::spawn(async move {
         while let Some(msg) = ws_receiver.next().await {
             match msg {
                 Ok(Message::Binary(data)) => {
-                    // Deserialize command from client
+                    // Binary = Robot protocol (bincode-encoded DTO)
                     if let Ok(dto_packet) = bincode::deserialize::<dto::SendPacket>(&data) {
-                        info!("Received command from client: {:?}", dto_packet);
-                        let packet: fanuc_rmi::packets::SendPacket = dto_packet.into();
-                        let _ = driver.send_packet(packet, PacketPriority::Standard);
+                        info!("Received robot command from client: {:?}", dto_packet);
+                        let driver_opt = {
+                            let conn = robot_connection_clone.read().await;
+                            conn.driver.clone()
+                        };
+                        if let Some(driver) = driver_opt {
+                            let packet: fanuc_rmi::packets::SendPacket = dto_packet.into();
+                            let _ = driver.send_packet(packet, PacketPriority::Standard);
+                        } else {
+                            warn!("Robot not connected - cannot send command");
+                        }
                     } else {
-                        warn!("Failed to deserialize packet from client");
+                        warn!("Failed to deserialize binary packet from client");
+                    }
+                }
+                Ok(Message::Text(text)) => {
+                    // Text = API request (JSON)
+                    match serde_json::from_str::<ClientRequest>(&text) {
+                        Ok(request) => {
+                            info!("Received API request: {:?}", request);
+                            // Get driver if connected
+                            let driver_opt = {
+                                let conn = robot_connection_clone.read().await;
+                                conn.driver.clone()
+                            };
+                            let response = handle_request(
+                                request,
+                                Arc::clone(&db),
+                                driver_opt,
+                                Some(Arc::clone(&executor)),
+                                Some(Arc::clone(&ws_sender_clone)),
+                                Some(Arc::clone(&robot_connection_clone)),
+                            ).await;
+                            let response_json = serde_json::to_string(&response).unwrap_or_else(|e| {
+                                format!(r#"{{"type":"error","message":"Serialization error: {}"}}"#, e)
+                            });
+                            let mut sender = ws_sender_clone.lock().await;
+                            if sender.send(Message::Text(response_json)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse API request: {} - {}", e, text);
+                            let error_response = ServerResponse::Error {
+                                message: format!("Invalid request: {}", e)
+                            };
+                            let response_json = serde_json::to_string(&error_response).unwrap();
+                            let mut sender = ws_sender_clone.lock().await;
+                            let _ = sender.send(Message::Text(response_json)).await;
+                        }
                     }
                 }
                 Ok(Message::Close(_)) => break,

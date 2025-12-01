@@ -1,4 +1,5 @@
-use leptos::*;
+use leptos::prelude::*;
+use leptos::either::Either;
 use crate::websocket::WebSocketManager;
 use crate::robot_models::RobotModel;
 
@@ -6,12 +7,12 @@ use crate::robot_models::RobotModel;
 pub fn Settings() -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
 
-    let (show_settings, set_show_settings) = create_signal(false);
-    let (ws_url, set_ws_url) = create_signal("ws://127.0.0.1:9000".to_string());
-    let (robot_model, set_robot_model) = create_signal(RobotModel::CRX10iA);
-    let (robot_ip, set_robot_ip) = create_signal("127.0.0.1".to_string());
-    let (robot_port, set_robot_port) = create_signal("16001".to_string());
-    let (status_message, set_status_message) = create_signal(String::new());
+    let (show_settings, set_show_settings) = signal(false);
+    let (ws_url, set_ws_url) = signal("ws://127.0.0.1:9000".to_string());
+    let (robot_model, set_robot_model) = signal(RobotModel::CRX10iA);
+    let (robot_ip, set_robot_ip) = signal("127.0.0.1".to_string());
+    let (robot_port, set_robot_port) = signal("16001".to_string());
+    let (status_message, set_status_message) = signal(String::new());
 
     view! {
         <div class="relative">
@@ -32,7 +33,7 @@ pub fn Settings() -> impl IntoView {
 
             // Settings modal
             {move || if show_settings.get() {
-                view! {
+                Either::Left(view! {
                     <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
                         <div class="bg-[#111111] border border-[#ffffff10] rounded-lg p-6 max-w-md w-full mx-4">
                             <div class="flex items-center justify-between mb-4">
@@ -119,13 +120,13 @@ pub fn Settings() -> impl IntoView {
                                 {move || {
                                     let msg = status_message.get();
                                     if !msg.is_empty() {
-                                        view! {
+                                        Either::Left(view! {
                                             <div class="text-xs text-[#00d9ff] bg-[#00d9ff10] border border-[#00d9ff20] rounded px-3 py-2">
                                                 {msg}
                                             </div>
-                                        }.into_view()
+                                        })
                                     } else {
-                                        view! { <div></div> }.into_view()
+                                        Either::Right(())
                                     }
                                 }}
 
@@ -174,9 +175,9 @@ pub fn Settings() -> impl IntoView {
                             </div>
                         </div>
                     </div>
-                }.into_view()
+                })
             } else {
-                view! { <div></div> }.into_view()
+                Either::Right(())
             }}
         </div>
     }

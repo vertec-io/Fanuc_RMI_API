@@ -12,13 +12,14 @@ serde_json = "1.0"
 int-enum = "1.1.2"
 tracing = "0.1.41"
 fanuc_rmi_macros = { path = "../fanuc_rmi_macros" }
-
+nalgebra = { version = "0.33", optional = true }
 
 [features]
 default=["driver", "logging"]
 logging=[]
 driver=["dep:tokio"]
 DTO=[]
+nalgebra-support = ["nalgebra"]
 
 [dev-dependencies]
 bincode = "1"

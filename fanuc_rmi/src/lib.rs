@@ -13,6 +13,16 @@ pub mod commands;
 pub mod communication;
 pub mod errors;
 pub use errors::*;
+
+/// Coordinate transformation utilities (nalgebra integration).
+///
+/// Enable with the `nalgebra-support` feature flag.
+#[cfg(feature = "nalgebra-support")]
+pub mod transforms;
+
+// Re-export nalgebra when the feature is enabled
+#[cfg(feature = "nalgebra-support")]
+pub use nalgebra;
 /// Binary-friendly Data Transfer Objects (DTOs) for application networking.
 ///
 /// The `dto` module contains 1:1 mirrored types without serde renaming/tagging
@@ -121,15 +131,28 @@ impl Default for Configuration {
     }
 }
 
+/// Represents a Cartesian position with orientation.
+///
+/// # Fields
+/// - `x`, `y`, `z`: Required translation coordinates (mm)
+/// - `w`, `p`, `r`: Optional rotation angles (degrees, W-P-R Euler convention)
+/// - `ext1`, `ext2`, `ext3`: Optional external axis positions
+///
+/// # Serialization
+/// All fields except `x`, `y`, `z` have `#[serde(default)]` and will default to 0.0
+/// if not present during deserialization. This allows minimal CSV/JSON input.
 #[cfg_attr(feature = "DTO", mirror_dto)]
-#[derive(Serialize, Deserialize, Debug, Clone,Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct Position {
     pub x: f64,
     pub y: f64,
     pub z: f64,
+    #[serde(default)]
     pub w: f64,
+    #[serde(default)]
     pub p: f64,
+    #[serde(default)]
     pub r: f64,
     #[serde(default)]
     pub ext1: f64,

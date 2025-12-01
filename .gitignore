@@ -2,3 +2,6 @@
 **/Cargo.lock
 **/research
 **/pkg
+
+# Database
+data/

@@ -154,7 +154,7 @@ impl FanucDriver {
         let read_half = Arc::new(Mutex::new(read_half));
         let write_half = Arc::new(Mutex::new(write_half));
         let (message_channel, _rx) = broadcast::channel(100);
-        let (response_tx, _response_rx) = broadcast::channel(100);
+        let (response_tx, _response_rx) = broadcast::channel(1000); // Larger buffer for high-frequency polling
         let (sent_instruction_tx, _sent_rx) = broadcast::channel(100);
         let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(1000); //FIXME: there isnt a system on meteorite monitoring number of packets sent
         let next_available_sequence_number = Arc::new(std::sync::Mutex::new(1));
@@ -635,17 +635,45 @@ impl FanucDriver {
         // Generate unique request ID
         let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
 
-        let sender = self.queue_tx.clone();
+        // Commands and Communications bypass the instruction queue entirely.
+        // Only Instructions need backpressure (the 8-slot buffer limit applies to TP instructions only).
+        // Commands are processed immediately by the controller and don't consume buffer slots.
+        match &packet {
+            SendPacket::Command(_) | SendPacket::Communication(_) => {
+                // Send directly to controller - bypass instruction queue
+                let fanuc_write = Arc::clone(&self.fanuc_write);
+                let log_channel = self.log_channel.clone();
 
-        let driver_packet = DriverPacket {
-            priority,
-            packet,
-            request_id,
-        };
+                tokio::spawn(async move {
+                    let serialized_packet = match serde_json::to_string(&packet) {
+                        Ok(packet_str) => packet_str + "\r\n",
+                        Err(e) => {
+                            let _ = log_channel.send(format!("ERROR: Failed to serialize command: {}", e));
+                            return;
+                        }
+                    };
 
-        if let Err(e) = sender.try_send(driver_packet) {
-            println!("Failed to send packet: {}", e);
-            return Err(format!("Failed to send packet: {}", e));
+                    let mut stream = fanuc_write.lock().await;
+                    if let Err(e) = stream.write_all(serialized_packet.as_bytes()).await {
+                        let _ = log_channel.send(format!("ERROR: Failed to send command: {}", e));
+                    }
+                });
+            }
+            SendPacket::Instruction(_) | SendPacket::DriverCommand(_) => {
+                // Instructions go through the queue with backpressure
+                let sender = self.queue_tx.clone();
+
+                let driver_packet = DriverPacket {
+                    priority,
+                    packet,
+                    request_id,
+                };
+
+                if let Err(e) = sender.try_send(driver_packet) {
+                    println!("Failed to send packet: {}", e);
+                    return Err(format!("Failed to send packet: {}", e));
+                }
+            }
         }
 
         Ok(request_id)
@@ -874,6 +902,11 @@ impl FanucDriver {
 
         match serde_json::from_str::<ResponsePacket>(&line) {
             Ok(packet) => {
+                // Log InstructionResponse at info level for debugging
+                if matches!(packet, ResponsePacket::InstructionResponse(_)) {
+                    info!("📥 Received InstructionResponse: {:?}", packet);
+                }
+
                 // Send the response to the response_channel for all responses
                 if let Err(e) = self.response_tx.send(packet.clone()) {
                     self.log_error(format!("Failed to send to response channel: {}", e))
@@ -884,7 +917,11 @@ impl FanucDriver {
                         e
                     );
                 } else {
-                    // HOT PATH: Only log at debug level
+                    // Log InstructionResponse broadcast at info level
+                    if matches!(packet, ResponsePacket::InstructionResponse(_)) {
+                        info!("📤 Broadcast InstructionResponse to {} subscribers", self.response_tx.receiver_count());
+                    }
+                    // HOT PATH: Only log at debug level for other types
                     self.log_debug(format!(
                         "Sent response to backend: {:?}",
                         packet.clone()
