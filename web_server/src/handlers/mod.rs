@@ -77,6 +77,7 @@ pub async fn handle_request(
         ClientRequest::PauseProgram => execution::pause_program(driver, executor, client_manager).await,
         ClientRequest::ResumeProgram => execution::resume_program(driver, executor, client_manager).await,
         ClientRequest::StopProgram => execution::stop_program(driver, executor, client_manager).await,
+        ClientRequest::GetExecutionState => execution::get_execution_state(executor).await,
 
         // Robot connection management
         ClientRequest::GetConnectionStatus => {

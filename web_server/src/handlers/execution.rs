@@ -158,6 +158,28 @@ pub async fn stop_program(
     }
 }
 
+/// Get current execution state.
+///
+/// Used for client reconnection/sync - returns the current state of the executor
+/// so the client can restore its UI to the correct state.
+pub async fn get_execution_state(
+    executor: Option<Arc<Mutex<ProgramExecutor>>>,
+) -> ServerResponse {
+    if let Some(executor) = executor {
+        let exec_guard = executor.lock().await;
+        execution_state_to_response(&exec_guard.get_state())
+    } else {
+        // No executor means idle state
+        ServerResponse::ExecutionStateChanged {
+            state: "idle".to_string(),
+            program_id: None,
+            current_line: None,
+            total_lines: None,
+            message: None,
+        }
+    }
+}
+
 /// Start program execution with buffered streaming.
 ///
 /// This sends instructions in batches of up to 5 (MAX_BUFFER), waiting for

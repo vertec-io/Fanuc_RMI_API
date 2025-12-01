@@ -42,6 +42,10 @@ pub enum ClientRequest {
     #[serde(rename = "stop_program")]
     StopProgram,
 
+    /// Get current execution state (for client reconnection/sync)
+    #[serde(rename = "get_execution_state")]
+    GetExecutionState,
+
     // Robot Settings
     #[serde(rename = "get_settings")]
     GetSettings,

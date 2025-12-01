@@ -44,6 +44,10 @@ pub enum ClientRequest {
     #[serde(rename = "stop_program")]
     StopProgram,
 
+    /// Get current execution state (for client reconnection/sync)
+    #[serde(rename = "get_execution_state")]
+    GetExecutionState,
+
     #[serde(rename = "get_settings")]
     GetSettings,
 
@@ -937,6 +941,11 @@ impl WebSocketManager {
     /// Stop program execution
     pub fn stop_program(&self) {
         self.send_api_request(ClientRequest::StopProgram);
+    }
+
+    /// Get current execution state (for reconnection/sync)
+    pub fn get_execution_state(&self) {
+        self.send_api_request(ClientRequest::GetExecutionState);
     }
 
     /// Get robot settings
