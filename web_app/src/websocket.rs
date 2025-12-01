@@ -95,6 +95,41 @@ pub enum ClientRequest {
 
     #[serde(rename = "delete_robot_connection")]
     DeleteRobotConnection { id: i64 },
+
+    // Frame/Tool Management
+    #[serde(rename = "get_active_frame_tool")]
+    GetActiveFrameTool,
+
+    #[serde(rename = "set_active_frame_tool")]
+    SetActiveFrameTool { uframe: u8, utool: u8 },
+
+    #[serde(rename = "read_frame_data")]
+    ReadFrameData { frame_number: u8 },
+
+    #[serde(rename = "read_tool_data")]
+    ReadToolData { tool_number: u8 },
+
+    #[serde(rename = "write_frame_data")]
+    WriteFrameData {
+        frame_number: u8,
+        x: f64,
+        y: f64,
+        z: f64,
+        w: f64,
+        p: f64,
+        r: f64,
+    },
+
+    #[serde(rename = "write_tool_data")]
+    WriteToolData {
+        tool_number: u8,
+        x: f64,
+        y: f64,
+        z: f64,
+        w: f64,
+        p: f64,
+        r: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,6 +204,32 @@ pub enum ServerResponse {
 
     #[serde(rename = "robot_connection")]
     RobotConnection { connection: RobotConnectionDto },
+
+    // Frame/Tool responses
+    #[serde(rename = "active_frame_tool")]
+    ActiveFrameTool { uframe: u8, utool: u8 },
+
+    #[serde(rename = "frame_data")]
+    FrameData {
+        frame_number: u8,
+        x: f64,
+        y: f64,
+        z: f64,
+        w: f64,
+        p: f64,
+        r: f64,
+    },
+
+    #[serde(rename = "tool_data")]
+    ToolData {
+        tool_number: u8,
+        x: f64,
+        y: f64,
+        z: f64,
+        w: f64,
+        p: f64,
+        r: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -566,6 +627,20 @@ impl WebSocketManager {
                             log::info!("Received robot connection: {}", connection.name);
                             // Could update a single connection in the list if needed
                         }
+                        ServerResponse::ActiveFrameTool { uframe, utool } => {
+                            log::info!("Active frame/tool: UFrame={}, UTool={}", uframe, utool);
+                            // Frame/Tool data is handled by the Info tab components
+                        }
+                        ServerResponse::FrameData { frame_number, x, y, z, w, p, r } => {
+                            log::info!("Frame {} data: ({:.3}, {:.3}, {:.3}, {:.2}, {:.2}, {:.2})",
+                                frame_number, x, y, z, w, p, r);
+                            // Frame data is handled by the Info tab components
+                        }
+                        ServerResponse::ToolData { tool_number, x, y, z, w, p, r } => {
+                            log::info!("Tool {} data: ({:.3}, {:.3}, {:.3}, {:.2}, {:.2}, {:.2})",
+                                tool_number, x, y, z, w, p, r);
+                            // Tool data is handled by the Info tab components
+                        }
                     }
                 } else {
                     log::error!("Failed to parse API response: {}", text_str);
@@ -791,6 +866,50 @@ impl WebSocketManager {
     /// Set the active/selected connection ID
     pub fn set_active_connection(&self, id: Option<i64>) {
         self.set_active_connection_id.set(id);
+    }
+
+    // ========== Frame/Tool Management ==========
+
+    /// Get the currently active UFrame and UTool numbers
+    #[allow(dead_code)]
+    pub fn get_active_frame_tool(&self) {
+        self.send_api_request(ClientRequest::GetActiveFrameTool);
+    }
+
+    /// Set the active UFrame and UTool numbers
+    #[allow(dead_code)]
+    pub fn set_active_frame_tool(&self, uframe: u8, utool: u8) {
+        self.send_api_request(ClientRequest::SetActiveFrameTool { uframe, utool });
+    }
+
+    /// Read UFrame data for a specific frame number
+    #[allow(dead_code)]
+    pub fn read_frame_data(&self, frame_number: u8) {
+        self.send_api_request(ClientRequest::ReadFrameData { frame_number });
+    }
+
+    /// Read UTool data for a specific tool number
+    #[allow(dead_code)]
+    pub fn read_tool_data(&self, tool_number: u8) {
+        self.send_api_request(ClientRequest::ReadToolData { tool_number });
+    }
+
+    /// Write UFrame data for a specific frame number
+    #[allow(dead_code, clippy::too_many_arguments)]
+    pub fn write_frame_data(&self, frame_number: u8, x: f64, y: f64, z: f64, w: f64, p: f64, r: f64) {
+        self.send_api_request(ClientRequest::WriteFrameData {
+            frame_number,
+            x, y, z, w, p, r,
+        });
+    }
+
+    /// Write UTool data for a specific tool number
+    #[allow(dead_code, clippy::too_many_arguments)]
+    pub fn write_tool_data(&self, tool_number: u8, x: f64, y: f64, z: f64, w: f64, p: f64, r: f64) {
+        self.send_api_request(ClientRequest::WriteToolData {
+            tool_number,
+            x, y, z, w, p, r,
+        });
     }
 }
 
