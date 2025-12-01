@@ -78,8 +78,39 @@ pub struct RobotConnection {
     pub description: Option<String>,
     pub ip_address: String,
     pub port: u32,
+    // Per-robot defaults
+    pub default_speed: Option<f64>,
+    pub default_term_type: Option<String>,
+    pub default_uframe: Option<i32>,
+    pub default_utool: Option<i32>,
+    pub default_w: Option<f64>,
+    pub default_p: Option<f64>,
+    pub default_r: Option<f64>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// I/O display configuration for a robot.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct IoDisplayConfig {
+    pub id: i64,
+    pub robot_connection_id: i64,
+    pub io_type: String,  // 'DIN', 'DOUT', 'AIN', 'AOUT', 'GIN', 'GOUT'
+    pub io_index: i32,
+    pub display_name: Option<String>,
+    pub is_visible: bool,
+    pub display_order: Option<i32>,
+}
+
+/// Server setting key-value pair.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct ServerSetting {
+    pub id: i64,
+    pub key: String,
+    pub value: Option<String>,
+    pub description: Option<String>,
 }
 
 impl Database {
@@ -160,12 +191,47 @@ impl Database {
                 description TEXT,
                 ip_address TEXT NOT NULL DEFAULT '127.0.0.1',
                 port INTEGER NOT NULL DEFAULT 16001,
+                -- Per-robot defaults (override global robot_settings)
+                default_speed REAL,
+                default_term_type TEXT,
+                default_uframe INTEGER,
+                default_utool INTEGER,
+                default_w REAL,
+                default_p REAL,
+                default_r REAL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            -- I/O display configuration per robot
+            CREATE TABLE IF NOT EXISTS io_display_config (
+                id INTEGER PRIMARY KEY,
+                robot_connection_id INTEGER NOT NULL,
+                io_type TEXT NOT NULL,  -- 'DIN', 'DOUT', 'AIN', 'AOUT', 'GIN', 'GOUT'
+                io_index INTEGER NOT NULL,
+                display_name TEXT,
+                is_visible INTEGER DEFAULT 1,
+                display_order INTEGER,
+                FOREIGN KEY (robot_connection_id) REFERENCES robot_connections(id) ON DELETE CASCADE,
+                UNIQUE(robot_connection_id, io_type, io_index)
+            );
+
+            -- Global server settings
+            CREATE TABLE IF NOT EXISTS server_settings (
+                id INTEGER PRIMARY KEY,
+                key TEXT NOT NULL UNIQUE,
+                value TEXT,
+                description TEXT
+            );
+
             -- Insert default robot settings if not exists
-            INSERT OR IGNORE INTO robot_settings (name) VALUES ('default');"
+            INSERT OR IGNORE INTO robot_settings (name) VALUES ('default');
+
+            -- Insert default server settings
+            INSERT OR IGNORE INTO server_settings (key, value, description) VALUES
+                ('theme', 'dark', 'UI theme: dark or light'),
+                ('default_robot_id', NULL, 'Default robot connection to use on startup'),
+                ('auto_connect', 'false', 'Automatically connect to default robot on startup');"
         )
     }
 
@@ -175,6 +241,8 @@ impl Database {
             "DROP TABLE IF EXISTS program_instructions;
              DROP TABLE IF EXISTS programs;
              DROP TABLE IF EXISTS robot_settings;
+             DROP TABLE IF EXISTS io_display_config;
+             DROP TABLE IF EXISTS server_settings;
              DROP TABLE IF EXISTS robot_connections;"
         )?;
         self.initialize_schema()
@@ -398,7 +466,9 @@ impl Database {
     /// Get a robot connection by ID.
     pub fn get_robot_connection(&self, id: i64) -> Result<Option<RobotConnection>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, description, ip_address, port, created_at, updated_at
+            "SELECT id, name, description, ip_address, port,
+                    default_speed, default_term_type, default_uframe, default_utool,
+                    default_w, default_p, default_r, created_at, updated_at
              FROM robot_connections WHERE id = ?1"
         )?;
 
@@ -410,8 +480,15 @@ impl Database {
                 description: row.get(2)?,
                 ip_address: row.get(3)?,
                 port: row.get::<_, i64>(4)? as u32,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                default_speed: row.get(5)?,
+                default_term_type: row.get(6)?,
+                default_uframe: row.get(7)?,
+                default_utool: row.get(8)?,
+                default_w: row.get(9)?,
+                default_p: row.get(10)?,
+                default_r: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
             }))
         } else {
             Ok(None)
@@ -421,7 +498,9 @@ impl Database {
     /// List all robot connections.
     pub fn list_robot_connections(&self) -> Result<Vec<RobotConnection>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, description, ip_address, port, created_at, updated_at
+            "SELECT id, name, description, ip_address, port,
+                    default_speed, default_term_type, default_uframe, default_utool,
+                    default_w, default_p, default_r, created_at, updated_at
              FROM robot_connections ORDER BY name"
         )?;
 
@@ -432,15 +511,22 @@ impl Database {
                 description: row.get(2)?,
                 ip_address: row.get(3)?,
                 port: row.get::<_, i64>(4)? as u32,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                default_speed: row.get(5)?,
+                default_term_type: row.get(6)?,
+                default_uframe: row.get(7)?,
+                default_utool: row.get(8)?,
+                default_w: row.get(9)?,
+                default_p: row.get(10)?,
+                default_r: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
             })
         })?;
 
         rows.collect()
     }
 
-    /// Update a robot connection.
+    /// Update a robot connection (basic fields only).
     pub fn update_robot_connection(&self, id: i64, name: &str, description: Option<&str>, ip_address: &str, port: u32) -> Result<()> {
         self.conn.execute(
             "UPDATE robot_connections SET
@@ -451,10 +537,123 @@ impl Database {
         Ok(())
     }
 
+    /// Update robot connection defaults.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_robot_connection_defaults(
+        &self,
+        id: i64,
+        default_speed: Option<f64>,
+        default_term_type: Option<&str>,
+        default_uframe: Option<i32>,
+        default_utool: Option<i32>,
+        default_w: Option<f64>,
+        default_p: Option<f64>,
+        default_r: Option<f64>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE robot_connections SET
+                default_speed = ?1, default_term_type = ?2, default_uframe = ?3, default_utool = ?4,
+                default_w = ?5, default_p = ?6, default_r = ?7, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?8",
+            params![default_speed, default_term_type, default_uframe, default_utool, default_w, default_p, default_r, id],
+        )?;
+        Ok(())
+    }
+
     /// Delete a robot connection.
     pub fn delete_robot_connection(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM robot_connections WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    // ========== I/O Display Config Operations ==========
+
+    /// Get I/O display config for a robot.
+    pub fn get_io_display_config(&self, robot_connection_id: i64) -> Result<Vec<IoDisplayConfig>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, robot_connection_id, io_type, io_index, display_name, is_visible, display_order
+             FROM io_display_config WHERE robot_connection_id = ?1 ORDER BY io_type, display_order, io_index"
+        )?;
+
+        let rows = stmt.query_map(params![robot_connection_id], |row| {
+            Ok(IoDisplayConfig {
+                id: row.get(0)?,
+                robot_connection_id: row.get(1)?,
+                io_type: row.get(2)?,
+                io_index: row.get(3)?,
+                display_name: row.get(4)?,
+                is_visible: row.get::<_, i64>(5)? != 0,
+                display_order: row.get(6)?,
+            })
+        })?;
+
+        rows.collect()
+    }
+
+    /// Upsert I/O display config.
+    pub fn upsert_io_display_config(
+        &self,
+        robot_connection_id: i64,
+        io_type: &str,
+        io_index: i32,
+        display_name: Option<&str>,
+        is_visible: bool,
+        display_order: Option<i32>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO io_display_config (robot_connection_id, io_type, io_index, display_name, is_visible, display_order)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(robot_connection_id, io_type, io_index) DO UPDATE SET
+                display_name = excluded.display_name,
+                is_visible = excluded.is_visible,
+                display_order = excluded.display_order",
+            params![robot_connection_id, io_type, io_index, display_name, is_visible as i64, display_order],
+        )?;
+        Ok(())
+    }
+
+    // ========== Server Settings Operations ==========
+
+    /// Get a server setting by key.
+    pub fn get_server_setting(&self, key: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT value FROM server_settings WHERE key = ?1"
+        )?;
+
+        let mut rows = stmt.query(params![key])?;
+        if let Some(row) = rows.next()? {
+            Ok(row.get(0)?)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Set a server setting.
+    pub fn set_server_setting(&self, key: &str, value: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO server_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Get all server settings.
+    pub fn get_all_server_settings(&self) -> Result<Vec<ServerSetting>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, key, value, description FROM server_settings ORDER BY key"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(ServerSetting {
+                id: row.get(0)?,
+                key: row.get(1)?,
+                value: row.get(2)?,
+                description: row.get(3)?,
+            })
+        })?;
+
+        rows.collect()
     }
 }
 
