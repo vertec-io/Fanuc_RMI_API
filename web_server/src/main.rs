@@ -1,13 +1,13 @@
 // WebSocket server that bridges between Fanuc driver and web clients
 // Run with: cargo run -p web_server
 
-mod api_handler;
 mod api_types;
 mod database;
+mod handlers;
 mod program_executor;
 mod program_parser;
 
-use api_handler::handle_request;
+use handlers::handle_request;
 use api_types::{ClientRequest, ServerResponse};
 use database::Database;
 use program_executor::ProgramExecutor;

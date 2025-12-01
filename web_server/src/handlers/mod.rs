@@ -1,0 +1,104 @@
+//! API request handlers for WebSocket messages.
+//!
+//! This module contains handlers organized by functionality:
+//! - `connection`: Robot connection management (connect/disconnect/status)
+//! - `execution`: Program execution (start/pause/resume/stop)
+//! - `programs`: Program CRUD operations
+//! - `settings`: Robot settings management
+//! - `robot_connections`: Saved connection configurations CRUD
+
+pub mod connection;
+pub mod execution;
+pub mod programs;
+pub mod settings;
+pub mod robot_connections;
+
+use crate::api_types::*;
+use crate::database::Database;
+use crate::program_executor::ProgramExecutor;
+use crate::RobotConnection;
+use fanuc_rmi::drivers::FanucDriver;
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
+use tokio_tungstenite::tungstenite::Message;
+
+/// Type alias for the WebSocket sender
+pub type WsSender = Arc<Mutex<futures_util::stream::SplitSink<
+    tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    Message
+>>>;
+
+/// Handle a client API request and return a response.
+pub async fn handle_request(
+    request: ClientRequest,
+    db: Arc<Mutex<Database>>,
+    driver: Option<Arc<FanucDriver>>,
+    executor: Option<Arc<Mutex<ProgramExecutor>>>,
+    ws_sender: Option<WsSender>,
+    robot_connection: Option<Arc<RwLock<RobotConnection>>>,
+) -> ServerResponse {
+    match request {
+        // Program management
+        ClientRequest::ListPrograms => programs::list_programs(db).await,
+        ClientRequest::GetProgram { id } => programs::get_program(db, id).await,
+        ClientRequest::CreateProgram { name, description } => {
+            programs::create_program(db, &name, description.as_deref()).await
+        }
+        ClientRequest::DeleteProgram { id } => programs::delete_program(db, id).await,
+        ClientRequest::UploadCsv { program_id, csv_content, start_position } => {
+            programs::upload_csv(db, program_id, &csv_content, start_position).await
+        }
+
+        // Settings management
+        ClientRequest::GetSettings => settings::get_settings(db).await,
+        ClientRequest::UpdateSettings {
+            default_w, default_p, default_r,
+            default_speed, default_term_type,
+            default_uframe, default_utool,
+        } => {
+            settings::update_settings(
+                db, default_w, default_p, default_r,
+                default_speed, &default_term_type,
+                default_uframe, default_utool,
+            ).await
+        }
+        ClientRequest::ResetDatabase => settings::reset_database(db).await,
+
+        // Program execution
+        ClientRequest::StartProgram { program_id } => {
+            execution::start_program(db, driver, executor, program_id, ws_sender).await
+        }
+        ClientRequest::PauseProgram => execution::pause_program(driver).await,
+        ClientRequest::ResumeProgram => execution::resume_program(driver).await,
+        ClientRequest::StopProgram => execution::stop_program(driver).await,
+
+        // Robot connection management
+        ClientRequest::GetConnectionStatus => {
+            connection::get_connection_status(robot_connection).await
+        }
+        ClientRequest::ConnectRobot { robot_addr, robot_port } => {
+            connection::connect_robot(robot_connection, robot_addr, robot_port).await
+        }
+        ClientRequest::DisconnectRobot => {
+            connection::disconnect_robot(robot_connection).await
+        }
+
+        // Saved robot connections CRUD
+        ClientRequest::ListRobotConnections => {
+            robot_connections::list_robot_connections(db).await
+        }
+        ClientRequest::GetRobotConnection { id } => {
+            robot_connections::get_robot_connection(db, id).await
+        }
+        ClientRequest::CreateRobotConnection { name, description, ip_address, port } => {
+            robot_connections::create_robot_connection(db, &name, description.as_deref(), &ip_address, port).await
+        }
+        ClientRequest::UpdateRobotConnection { id, name, description, ip_address, port } => {
+            robot_connections::update_robot_connection(db, id, &name, description.as_deref(), &ip_address, port).await
+        }
+        ClientRequest::DeleteRobotConnection { id } => {
+            robot_connections::delete_robot_connection(db, id).await
+        }
+    }
+}
+
