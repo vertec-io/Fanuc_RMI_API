@@ -72,9 +72,9 @@ pub async fn handle_request(
         ClientRequest::StartProgram { program_id } => {
             execution::start_program(db, driver, executor, program_id, ws_sender).await
         }
-        ClientRequest::PauseProgram => execution::pause_program(driver).await,
-        ClientRequest::ResumeProgram => execution::resume_program(driver).await,
-        ClientRequest::StopProgram => execution::stop_program(driver).await,
+        ClientRequest::PauseProgram => execution::pause_program(driver, executor).await,
+        ClientRequest::ResumeProgram => execution::resume_program(driver, executor).await,
+        ClientRequest::StopProgram => execution::stop_program(driver, executor).await,
 
         // Robot connection management
         ClientRequest::GetConnectionStatus => {

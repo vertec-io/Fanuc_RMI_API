@@ -16,22 +16,33 @@ use tokio_tungstenite::tungstenite::Message;
 
 /// Pause program execution.
 ///
-/// This sends both:
-/// 1. DriverCommand::Pause - Pauses the driver's internal packet queue (stops sending new packets)
-/// 2. Command::FrcPause - Sends FRC_Pause to the robot controller (pauses current motion)
-pub async fn pause_program(driver: Option<Arc<FanucDriver>>) -> ServerResponse {
+/// This:
+/// 1. Pauses the executor (stops sending new instructions from the buffer)
+/// 2. Sends FRC_Pause to the robot controller (pauses current motion immediately)
+/// 3. Pauses the driver's packet queue (stops sending any queued packets)
+pub async fn pause_program(
+    driver: Option<Arc<FanucDriver>>,
+    executor: Option<Arc<Mutex<ProgramExecutor>>>,
+) -> ServerResponse {
     if let Some(driver) = driver {
-        // First, send FRC_Pause to the robot to pause current motion immediately
+        // Pause the executor first (stops buffered streaming)
+        if let Some(executor) = executor {
+            let mut exec_guard = executor.lock().await;
+            exec_guard.pause();
+            info!("Executor paused");
+        }
+
+        // Send FRC_Pause to the robot to pause current motion immediately
         let pause_packet = SendPacket::Command(Command::FrcPause);
         if let Err(e) = driver.send_packet(pause_packet, PacketPriority::High) {
             return ServerResponse::Error { message: format!("Failed to send pause command: {}", e) };
         }
 
-        // Then pause the driver's packet queue to stop sending more instructions
+        // Pause the driver's packet queue to stop sending more instructions
         let driver_pause = SendPacket::DriverCommand(DriverCommand::Pause);
         match driver.send_packet(driver_pause, PacketPriority::High) {
             Ok(_) => {
-                info!("Program paused: sent FRC_Pause and paused driver queue");
+                info!("Program paused: executor paused, FRC_Pause sent, driver queue paused");
                 ServerResponse::Success { message: "Program paused".to_string() }
             },
             Err(e) => ServerResponse::Error { message: format!("Failed to pause driver: {}", e) }
@@ -43,22 +54,33 @@ pub async fn pause_program(driver: Option<Arc<FanucDriver>>) -> ServerResponse {
 
 /// Resume program execution.
 ///
-/// This sends both:
-/// 1. DriverCommand::Unpause - Resumes the driver's internal packet queue
-/// 2. Command::FrcContinue - Sends FRC_Continue to the robot controller (resumes motion)
-pub async fn resume_program(driver: Option<Arc<FanucDriver>>) -> ServerResponse {
+/// This:
+/// 1. Resumes the executor (allows sending more instructions from the buffer)
+/// 2. Unpauses the driver's packet queue
+/// 3. Sends FRC_Continue to the robot controller (resumes motion)
+pub async fn resume_program(
+    driver: Option<Arc<FanucDriver>>,
+    executor: Option<Arc<Mutex<ProgramExecutor>>>,
+) -> ServerResponse {
     if let Some(driver) = driver {
-        // First, unpause the driver's packet queue
+        // Resume the executor (allows buffered streaming to continue)
+        if let Some(executor) = executor {
+            let mut exec_guard = executor.lock().await;
+            exec_guard.resume();
+            info!("Executor resumed");
+        }
+
+        // Unpause the driver's packet queue
         let driver_unpause = SendPacket::DriverCommand(DriverCommand::Unpause);
         if let Err(e) = driver.send_packet(driver_unpause, PacketPriority::High) {
             return ServerResponse::Error { message: format!("Failed to unpause driver: {}", e) };
         }
 
-        // Then send FRC_Continue to the robot to resume motion
+        // Send FRC_Continue to the robot to resume motion
         let continue_packet = SendPacket::Command(Command::FrcContinue);
         match driver.send_packet(continue_packet, PacketPriority::High) {
             Ok(_) => {
-                info!("Program resumed: unpaused driver queue and sent FRC_Continue");
+                info!("Program resumed: executor resumed, driver queue unpaused, FRC_Continue sent");
                 ServerResponse::Success { message: "Program resumed".to_string() }
             },
             Err(e) => ServerResponse::Error { message: format!("Failed to send continue command: {}", e) }
@@ -69,10 +91,34 @@ pub async fn resume_program(driver: Option<Arc<FanucDriver>>) -> ServerResponse 
 }
 
 /// Stop program execution.
-pub async fn stop_program(driver: Option<Arc<FanucDriver>>) -> ServerResponse {
+///
+/// This:
+/// 1. Stops the executor (clears pending queue)
+/// 2. Sends FRC_Abort to the robot controller (aborts current motion)
+/// 3. Clears in-flight tracking
+pub async fn stop_program(
+    driver: Option<Arc<FanucDriver>>,
+    executor: Option<Arc<Mutex<ProgramExecutor>>>,
+) -> ServerResponse {
     if let Some(driver) = driver {
+        // Stop the executor (clears pending queue)
+        if let Some(ref executor) = executor {
+            let mut exec_guard = executor.lock().await;
+            exec_guard.stop();
+            info!("Executor stopped, pending queue cleared");
+        }
+
+        // Send FRC_Abort to the robot
         match driver.abort().await {
-            Ok(_) => ServerResponse::Success { message: "Program stopped".to_string() },
+            Ok(_) => {
+                // Clear in-flight tracking after abort completes
+                if let Some(executor) = executor {
+                    let mut exec_guard = executor.lock().await;
+                    exec_guard.clear_in_flight();
+                    info!("In-flight tracking cleared");
+                }
+                ServerResponse::Success { message: "Program stopped".to_string() }
+            },
             Err(e) => ServerResponse::Error { message: format!("Failed to stop: {}", e) }
         }
     } else {
@@ -80,7 +126,11 @@ pub async fn stop_program(driver: Option<Arc<FanucDriver>>) -> ServerResponse {
     }
 }
 
-/// Start program execution.
+/// Start program execution with buffered streaming.
+///
+/// This sends instructions in batches of up to 5 (MAX_BUFFER), waiting for
+/// completions before sending more. This matches FANUC RMI's buffer behavior
+/// and allows for proper pause/stop handling.
 pub async fn start_program(
     db: Arc<Mutex<Database>>,
     driver: Option<Arc<FanucDriver>>,
@@ -99,33 +149,43 @@ pub async fn start_program(
     };
 
     // Load program into executor
-    {
+    let total_instructions = {
         let db_guard = db.lock().await;
         let mut exec_guard = executor.lock().await;
         if let Err(e) = exec_guard.load_program(&db_guard, program_id) {
             return ServerResponse::Error { message: format!("Failed to load program: {}", e) };
         }
-    }
-
-    // Get instructions and send them
-    let instructions = {
-        let exec_guard = executor.lock().await;
-        exec_guard.get_all_packets()
+        exec_guard.start(program_id);
+        exec_guard.total_instructions()
     };
 
-    let total_instructions = instructions.len();
-    info!("Starting program {} with {} instructions", program_id, total_instructions);
+    info!("Starting buffered execution of program {} with {} instructions", program_id, total_instructions);
 
-    // Subscribe to sent instruction notifications BEFORE sending any instructions
+    // Subscribe to notifications BEFORE sending any instructions
     let sent_rx = driver.sent_instruction_tx.subscribe();
     let response_rx = driver.response_tx.subscribe();
 
-    // Track request_id -> line number mapping
-    let mut request_to_line: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
-    let sequence_to_line: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
-    let mut last_request_id: Option<u64> = None;
-    #[allow(unused_variables)]
-    let last_sequence_id: u32 = 0;
+    // Send initial batch
+    let initial_batch = {
+        let mut exec_guard = executor.lock().await;
+        exec_guard.get_next_batch()
+    };
+
+    for (line_number, packet) in initial_batch {
+        match driver.send_packet(packet, PacketPriority::Standard) {
+            Ok(request_id) => {
+                let mut exec_guard = executor.lock().await;
+                exec_guard.record_sent(request_id, line_number);
+                info!("Sent instruction {} (request_id: {})", line_number, request_id);
+            }
+            Err(e) => {
+                error!("Failed to send instruction {}: {}", line_number, e);
+                let mut exec_guard = executor.lock().await;
+                exec_guard.reset();
+                return ServerResponse::Error { message: format!("Failed to send instruction: {}", e) };
+            }
+        }
+    }
 
     // Send first InstructionSent to UI
     if let Some(ref ws_sender) = ws_sender {
@@ -139,28 +199,11 @@ pub async fn start_program(
         }
     }
 
-    for (i, packet) in instructions.into_iter().enumerate() {
-        let line_number = i + 1;
-        info!("Sending instruction {}: {:?}", line_number, packet);
-
-        match driver.send_packet(packet, PacketPriority::Standard) {
-            Ok(request_id) => {
-                info!("Instruction {} sent successfully (request_id: {})", line_number, request_id);
-                request_to_line.insert(request_id, line_number);
-                last_request_id = Some(request_id);
-            }
-            Err(e) => {
-                error!("Failed to send instruction {}: {}", line_number, e);
-                return ServerResponse::Error { message: format!("Failed to send instruction: {}", e) };
-            }
-        }
-    }
-
-    // Spawn progress tracking task
-    if let (Some(ws_sender), Some(last_req_id)) = (ws_sender, last_request_id) {
-        spawn_progress_tracker(
-            sent_rx, response_rx, ws_sender, request_to_line, sequence_to_line,
-            total_instructions, program_id, last_req_id,
+    // Spawn buffered execution task
+    if let Some(ws_sender) = ws_sender {
+        spawn_buffered_executor(
+            driver, executor, sent_rx, response_rx, ws_sender,
+            total_instructions, program_id,
         );
     }
 
@@ -170,178 +213,131 @@ pub async fn start_program(
     }
 }
 
-/// Spawn a task to track program execution progress and send updates to the client.
-fn spawn_progress_tracker(
+/// Spawn a task that manages buffered execution.
+///
+/// This task:
+/// 1. Maps request_ids to sequence_ids when SentInstructionInfo arrives
+/// 2. Handles instruction completions and sends more instructions
+/// 3. Sends progress updates to the client
+/// 4. Handles completion/error states
+fn spawn_buffered_executor(
+    driver: Arc<FanucDriver>,
+    executor: Arc<Mutex<ProgramExecutor>>,
     mut sent_rx: tokio::sync::broadcast::Receiver<SentInstructionInfo>,
     mut response_rx: tokio::sync::broadcast::Receiver<ResponsePacket>,
     ws_sender: WsSender,
-    request_to_line: std::collections::HashMap<u64, usize>,
-    sequence_to_line: std::collections::HashMap<u32, usize>,
     total_instructions: usize,
     program_id: i64,
-    last_req_id: u64,
 ) {
     tokio::spawn(async move {
-        let mut sequence_to_line = sequence_to_line;
-        let mut pending_sent_notifications = request_to_line.len();
-        let mut completed_count = 0;
-        let mut highest_completed_line = 0usize;
-        let mut pending_responses: Vec<(u32, u32)> = Vec::new();
-
-        info!("Starting concurrent tracking: {} instructions, last_req_id: {}",
-              total_instructions, last_req_id);
+        info!("Buffered executor started for program {}", program_id);
 
         loop {
             tokio::select! {
+                // Handle SentInstructionInfo (map request_id -> sequence_id)
                 sent_result = sent_rx.recv() => {
-                    handle_sent_notification(
-                        sent_result, &request_to_line, &mut sequence_to_line,
-                        &mut pending_sent_notifications, &mut pending_responses,
-                        &mut completed_count, &mut highest_completed_line,
-                        total_instructions, program_id, &ws_sender,
-                    ).await;
-
-                    if completed_count >= total_instructions {
-                        return;
+                    match sent_result {
+                        Ok(sent_info) => {
+                            let mut exec_guard = executor.lock().await;
+                            exec_guard.map_sequence(sent_info.request_id, sent_info.sequence_id);
+                            debug!("Mapped request {} -> sequence {}", sent_info.request_id, sent_info.sequence_id);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("Sent notification channel lagged by {} messages", n);
+                        }
+                        Err(_) => {
+                            // Channel closed
+                            break;
+                        }
                     }
                 }
 
+                // Handle instruction completions
                 response_result = response_rx.recv() => {
-                    let should_exit = handle_response(
-                        response_result, &sequence_to_line, &mut pending_responses,
-                        &mut completed_count, &mut highest_completed_line,
-                        total_instructions, program_id, &ws_sender,
-                    ).await;
+                    match response_result {
+                        Ok(ResponsePacket::InstructionResponse(resp)) => {
+                            let seq_id = resp.get_sequence_id();
+                            let error_id = resp.get_error_id();
 
-                    if should_exit {
-                        return;
+                            let (completed_line, is_complete, is_running) = {
+                                let mut exec_guard = executor.lock().await;
+                                let line = exec_guard.handle_completion(seq_id);
+                                (line, exec_guard.is_complete(), exec_guard.is_running())
+                            };
+
+                            if let Some(line) = completed_line {
+                                info!("📍 Line {} completed (seq_id {})", line, seq_id);
+
+                                // Send progress update
+                                send_progress_update(&ws_sender, line, total_instructions).await;
+
+                                // Check for error
+                                if error_id != 0 {
+                                    error!("Instruction {} failed with error {}", line, error_id);
+                                    let mut exec_guard = executor.lock().await;
+                                    exec_guard.reset();
+                                    send_error_completion(&ws_sender, program_id, line, error_id).await;
+                                    return;
+                                }
+
+                                // Check for completion
+                                if is_complete {
+                                    info!("Program {} completed successfully", program_id);
+                                    send_success_completion(&ws_sender, program_id, total_instructions).await;
+                                    return;
+                                }
+
+                                // Send more instructions if running
+                                if is_running {
+                                    let next_batch = {
+                                        let mut exec_guard = executor.lock().await;
+                                        exec_guard.get_next_batch()
+                                    };
+
+                                    for (line_number, packet) in next_batch {
+                                        match driver.send_packet(packet, PacketPriority::Standard) {
+                                            Ok(request_id) => {
+                                                let mut exec_guard = executor.lock().await;
+                                                exec_guard.record_sent(request_id, line_number);
+                                                info!("Sent instruction {} (request_id: {})", line_number, request_id);
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to send instruction {}: {}", line_number, e);
+                                                let mut exec_guard = executor.lock().await;
+                                                exec_guard.reset();
+                                                send_error_completion(&ws_sender, program_id, line_number, 999).await;
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Ok(_) => {
+                            // Other response types (command responses, etc.)
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("Response channel lagged by {} messages", n);
+                        }
+                        Err(_) => {
+                            // Channel closed
+                            break;
+                        }
                     }
+                }
+            }
+
+            // Check if executor was stopped externally
+            {
+                let exec_guard = executor.lock().await;
+                if matches!(exec_guard.get_state(), crate::program_executor::ExecutionState::Idle | crate::program_executor::ExecutionState::Stopping) {
+                    info!("Executor stopped, exiting buffered executor task");
+                    break;
                 }
             }
         }
     });
 }
-
-
-/// Handle a sent instruction notification.
-async fn handle_sent_notification(
-    sent_result: Result<SentInstructionInfo, tokio::sync::broadcast::error::RecvError>,
-    request_to_line: &std::collections::HashMap<u64, usize>,
-    sequence_to_line: &mut std::collections::HashMap<u32, usize>,
-    pending_sent_notifications: &mut usize,
-    pending_responses: &mut Vec<(u32, u32)>,
-    completed_count: &mut usize,
-    highest_completed_line: &mut usize,
-    total_instructions: usize,
-    program_id: i64,
-    ws_sender: &WsSender,
-) {
-    match sent_result {
-        Ok(sent_info) => {
-            if let Some(line) = request_to_line.get(&sent_info.request_id) {
-                sequence_to_line.insert(sent_info.sequence_id, *line);
-                *pending_sent_notifications -= 1;
-                debug!("Mapped seq_id {} to line {} (pending: {})",
-                      sent_info.sequence_id, line, pending_sent_notifications);
-
-                // Process any buffered responses
-                let mut i = 0;
-                while i < pending_responses.len() {
-                    let (seq_id, error_id) = pending_responses[i];
-                    if let Some(&line) = sequence_to_line.get(&seq_id) {
-                        pending_responses.remove(i);
-                        *completed_count += 1;
-
-                        if line > *highest_completed_line {
-                            *highest_completed_line = line;
-                            info!("📍 Line {} completed (from buffer)", line);
-                            send_progress_update(ws_sender, *highest_completed_line, total_instructions).await;
-                        }
-
-                        if error_id != 0 {
-                            send_error_completion(ws_sender, program_id, line, error_id).await;
-                            return;
-                        }
-
-                        if *completed_count >= total_instructions {
-                            send_success_completion(ws_sender, program_id, total_instructions).await;
-                            return;
-                        }
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-        }
-        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-            warn!("Sent notification channel lagged by {} messages", n);
-        }
-        Err(_) => {}
-    }
-}
-
-/// Handle a response packet.
-async fn handle_response(
-    response_result: Result<ResponsePacket, tokio::sync::broadcast::error::RecvError>,
-    sequence_to_line: &std::collections::HashMap<u32, usize>,
-    pending_responses: &mut Vec<(u32, u32)>,
-    completed_count: &mut usize,
-    highest_completed_line: &mut usize,
-    total_instructions: usize,
-    program_id: i64,
-    ws_sender: &WsSender,
-) -> bool {
-    match response_result {
-        Ok(fanuc_rmi::packets::ResponsePacket::InstructionResponse(resp)) => {
-            let seq_id = resp.get_sequence_id();
-            let error_id = resp.get_error_id();
-
-            if let Some(&line) = sequence_to_line.get(&seq_id) {
-                *completed_count += 1;
-
-                if line > *highest_completed_line {
-                    *highest_completed_line = line;
-                    info!("📍 Line {} completed (seq_id {})", line, seq_id);
-                    send_progress_update(ws_sender, *highest_completed_line, total_instructions).await;
-                }
-
-                if error_id != 0 {
-                    send_error_completion(ws_sender, program_id, line, error_id).await;
-                    return true;
-                }
-
-                if *completed_count >= total_instructions {
-                    send_success_completion(ws_sender, program_id, total_instructions).await;
-                    return true;
-                }
-            } else {
-                debug!("Buffering response for seq_id {} (mapping not yet available)", seq_id);
-                pending_responses.push((seq_id, error_id));
-            }
-        }
-        Ok(_) => {}
-        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-            warn!("Response channel lagged by {} messages, continuing...", n);
-        }
-        Err(e) => {
-            error!("Response channel closed: {}", e);
-            if *highest_completed_line > 0 {
-                let response = ServerResponse::ProgramComplete {
-                    program_id,
-                    success: true,
-                    message: Some(format!("Completed (tracked {} of {} instructions)", completed_count, total_instructions)),
-                };
-                if let Ok(json) = serde_json::to_string(&response) {
-                    let mut sender = ws_sender.lock().await;
-                    let _ = sender.send(Message::Text(json)).await;
-                }
-            }
-            return true;
-        }
-    }
-    false
-}
-
 /// Send a progress update to the client.
 async fn send_progress_update(ws_sender: &WsSender, current_line: usize, total_lines: usize) {
     let progress = ServerResponse::InstructionProgress {
