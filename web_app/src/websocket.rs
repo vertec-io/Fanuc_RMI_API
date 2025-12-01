@@ -160,6 +160,19 @@ pub enum ClientRequest {
 
     #[serde(rename = "read_din_batch")]
     ReadDinBatch { port_numbers: Vec<u16> },
+
+    // Control Locking
+    /// Request control of the robot
+    #[serde(rename = "request_control")]
+    RequestControl,
+
+    /// Release control of the robot
+    #[serde(rename = "release_control")]
+    ReleaseControl,
+
+    /// Get current control status
+    #[serde(rename = "get_control_status")]
+    GetControlStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -295,6 +308,39 @@ pub enum ServerResponse {
 
     #[serde(rename = "din_batch")]
     DinBatch { values: Vec<(u16, bool)> },
+
+    // Control lock responses
+    /// Control of the robot was acquired
+    #[serde(rename = "control_acquired")]
+    ControlAcquired,
+
+    /// Control was released
+    #[serde(rename = "control_released")]
+    ControlReleased,
+
+    /// Control request was denied (another client has control)
+    #[serde(rename = "control_denied")]
+    ControlDenied {
+        holder_id: String,
+        reason: String,
+    },
+
+    /// Control was lost (timeout, transfer, disconnect)
+    #[serde(rename = "control_lost")]
+    ControlLost { reason: String },
+
+    /// Another client acquired control (notification to observers)
+    #[serde(rename = "control_changed")]
+    ControlChanged {
+        holder_id: Option<String>,
+    },
+
+    /// Current control status
+    #[serde(rename = "control_status")]
+    ControlStatus {
+        has_control: bool,
+        holder_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -441,6 +487,10 @@ pub struct WebSocketManager {
     /// Digital output values - indexed by port number
     pub dout_values: ReadSignal<HashMap<u16, bool>>,
     set_dout_values: WriteSignal<HashMap<u16, bool>>,
+    // Control lock state
+    /// Whether this client has control of the robot
+    pub has_control: ReadSignal<bool>,
+    set_has_control: WriteSignal<bool>,
     ws: StoredValue<Option<WebSocket>, LocalStorage>,
     ws_url: StoredValue<String>,
 }
@@ -500,6 +550,8 @@ impl WebSocketManager {
         // I/O data
         let (din_values, set_din_values) = signal::<HashMap<u16, bool>>(HashMap::new());
         let (dout_values, set_dout_values) = signal::<HashMap<u16, bool>>(HashMap::new());
+        // Control lock state
+        let (has_control, set_has_control) = signal(false);
         let ws: StoredValue<Option<WebSocket>, LocalStorage> = StoredValue::new_local(None);
         let ws_url = StoredValue::new("ws://127.0.0.1:9000".to_string());
 
@@ -554,6 +606,8 @@ impl WebSocketManager {
             set_din_values,
             dout_values,
             set_dout_values,
+            has_control,
+            set_has_control,
             ws,
             ws_url,
         };
@@ -598,6 +652,7 @@ impl WebSocketManager {
         let set_din_values = self.set_din_values;
         // DOUT values are updated optimistically via update_dout_cache, not from server responses
         let _set_dout_values = self.set_dout_values;
+        let set_has_control = self.set_has_control;
 
         // On open
         let onopen_callback = Closure::wrap(Box::new(move |_| {
@@ -854,6 +909,37 @@ impl WebSocketManager {
                                     log::warn!("Unknown execution state: {}", state);
                                 }
                             }
+                        }
+                        // Control lock responses
+                        ServerResponse::ControlAcquired => {
+                            log::info!("Control acquired");
+                            set_has_control.set(true);
+                            set_api_message.set(Some("You now have control of the robot".to_string()));
+                        }
+                        ServerResponse::ControlReleased => {
+                            log::info!("Control released");
+                            set_has_control.set(false);
+                            set_api_message.set(Some("Control released".to_string()));
+                        }
+                        ServerResponse::ControlDenied { holder_id, reason } => {
+                            log::warn!("Control denied: {} (holder: {})", reason, holder_id);
+                            set_has_control.set(false);
+                            set_api_error.set(Some(format!("Control denied: {}", reason)));
+                        }
+                        ServerResponse::ControlLost { reason } => {
+                            log::warn!("Control lost: {}", reason);
+                            set_has_control.set(false);
+                            set_api_message.set(Some(format!("Control lost: {}", reason)));
+                        }
+                        ServerResponse::ControlChanged { holder_id } => {
+                            log::info!("Control changed: holder={:?}", holder_id);
+                            // This is a broadcast to all clients - check if we still have control
+                            // The holder_id is a UUID string, we don't have our own ID to compare
+                            // So we rely on ControlAcquired/ControlLost for our own state
+                        }
+                        ServerResponse::ControlStatus { has_control, holder_id } => {
+                            log::info!("Control status: has_control={}, holder={:?}", has_control, holder_id);
+                            set_has_control.set(has_control);
                         }
                     }
                 } else {
@@ -1197,6 +1283,23 @@ impl WebSocketManager {
         self.set_dout_values.update(|map| {
             map.insert(port, value);
         });
+    }
+
+    // ========== Control Lock ==========
+
+    /// Request control of the robot
+    pub fn request_control(&self) {
+        self.send_api_request(ClientRequest::RequestControl);
+    }
+
+    /// Release control of the robot
+    pub fn release_control(&self) {
+        self.send_api_request(ClientRequest::ReleaseControl);
+    }
+
+    /// Get current control status
+    pub fn get_control_status(&self) {
+        self.send_api_request(ClientRequest::GetControlStatus);
     }
 }
 

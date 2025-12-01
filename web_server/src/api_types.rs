@@ -160,6 +160,19 @@ pub enum ClientRequest {
 
     #[serde(rename = "read_din_batch")]
     ReadDinBatch { port_numbers: Vec<u16> },
+
+    // Control Locking
+    /// Request control of the robot (only one client can control at a time)
+    #[serde(rename = "request_control")]
+    RequestControl,
+
+    /// Release control of the robot
+    #[serde(rename = "release_control")]
+    ReleaseControl,
+
+    /// Get current control status (who has control)
+    #[serde(rename = "get_control_status")]
+    GetControlStatus,
 }
 
 /// Optional start position for program execution.
@@ -296,6 +309,42 @@ pub enum ServerResponse {
 
     #[serde(rename = "din_batch")]
     DinBatch { values: Vec<(u16, bool)> },
+
+    // Control lock responses
+    /// Control of the robot was acquired
+    #[serde(rename = "control_acquired")]
+    ControlAcquired,
+
+    /// Control was released
+    #[serde(rename = "control_released")]
+    ControlReleased,
+
+    /// Control request was denied (another client has control)
+    #[serde(rename = "control_denied")]
+    ControlDenied {
+        holder_id: String, // UUID as string for JSON
+        reason: String,
+    },
+
+    /// Control was lost (timeout, transfer, disconnect)
+    #[serde(rename = "control_lost")]
+    ControlLost { reason: String },
+
+    /// Another client acquired control (notification to observers)
+    #[serde(rename = "control_changed")]
+    ControlChanged {
+        /// New holder UUID (None if released)
+        holder_id: Option<String>,
+    },
+
+    /// Current control status
+    #[serde(rename = "control_status")]
+    ControlStatus {
+        /// Whether this client has control
+        has_control: bool,
+        /// Current holder UUID (if any)
+        holder_id: Option<String>,
+    },
 }
 
 /// Program summary info for listing.

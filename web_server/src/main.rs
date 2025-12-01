@@ -207,6 +207,27 @@ async fn main() {
         }
     });
 
+    // Control lock timeout checker - runs every 30 seconds
+    let client_manager_timeout = Arc::clone(&client_manager);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            // Check if control has timed out
+            if let Some(timed_out_client) = client_manager_timeout.check_control_timeout().await {
+                info!("Control lock timed out for client {}", timed_out_client);
+                // Notify the timed-out client that they lost control
+                let response = ServerResponse::ControlLost {
+                    reason: "Control released due to inactivity timeout (10 minutes)".to_string(),
+                };
+                client_manager_timeout.send_to_client(timed_out_client, &response).await;
+                // Notify all clients that control changed
+                let changed_response = ServerResponse::ControlChanged { holder_id: None };
+                client_manager_timeout.broadcast_all(&changed_response).await;
+            }
+        }
+    });
+
     // Start WebSocket server
     let websocket_addr = format!("0.0.0.0:{}", websocket_port);
     let ws_listener = tokio::net::TcpListener::bind(&websocket_addr).await.unwrap();
@@ -266,6 +287,7 @@ async fn handle_connection(
     let ws_sender_clone = Arc::clone(&ws_sender);
     let robot_connection_clone = Arc::clone(&robot_connection);
     let client_manager_clone = Arc::clone(&client_manager);
+    let client_id_for_recv = client_id; // Copy for recv_task
     let recv_task = tokio::spawn(async move {
         while let Some(msg) = ws_receiver.next().await {
             match msg {
@@ -305,6 +327,7 @@ async fn handle_connection(
                                 Some(Arc::clone(&ws_sender_clone)),
                                 Some(Arc::clone(&robot_connection_clone)),
                                 Some(Arc::clone(&client_manager_clone)),
+                                Some(client_id_for_recv),
                             ).await;
                             let response_json = serde_json::to_string(&response).unwrap_or_else(|e| {
                                 format!(r#"{{"type":"error","message":"Serialization error: {}"}}"#, e)

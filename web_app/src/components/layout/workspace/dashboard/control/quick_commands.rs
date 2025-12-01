@@ -14,6 +14,9 @@ pub fn QuickCommandsPanel() -> impl IntoView {
     // Local signal for slider value (synced with robot status when available)
     let (speed_override, set_speed_override) = signal(100u32);
 
+    // Control lock state from WebSocketManager
+    let has_control = ws.has_control;
+
     // Sync with robot status when it changes
     let status = ws.status;
     Effect::new(move |_| {
@@ -37,6 +40,36 @@ pub fn QuickCommandsPanel() -> impl IntoView {
                     </svg>
                     "Quick Commands"
                 </h3>
+                // Control lock indicator and button
+                <div class="flex items-center gap-1">
+                    {move || if has_control.get() {
+                        view! {
+                            <button
+                                class="bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] text-[8px] px-2 py-0.5 rounded hover:bg-[#22c55e30] flex items-center gap-1"
+                                on:click=move |_| ws.release_control()
+                                title="You have control. Click to release."
+                            >
+                                <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
+                                </svg>
+                                "IN CONTROL"
+                            </button>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <button
+                                class="bg-[#f59e0b20] border border-[#f59e0b40] text-[#f59e0b] text-[8px] px-2 py-0.5 rounded hover:bg-[#f59e0b30] flex items-center gap-1"
+                                on:click=move |_| ws.request_control()
+                                title="Request control of the robot"
+                            >
+                                <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+                                </svg>
+                                "REQUEST CONTROL"
+                            </button>
+                        }.into_any()
+                    }}
+                </div>
             </div>
             <div class="flex gap-2 flex-wrap items-center">
                 // Initialize button
