@@ -17,10 +17,14 @@ use leptos_router::hooks::use_location;
 #[derive(Clone, Copy)]
 pub struct LayoutContext {
     /// Current dashboard tab (0 = Control, 1 = Info).
+    /// Reserved for future tab state persistence.
+    #[allow(dead_code)]
     pub dashboard_tab: RwSignal<usize>,
     /// Whether jog controls are popped out (floating).
     pub jog_popped: RwSignal<bool>,
     /// Jog controls floating position (x, y).
+    /// Reserved for future position persistence.
+    #[allow(dead_code)]
     pub jog_position: RwSignal<(i32, i32)>,
     /// Whether the program browser sidebar is visible in Programs view.
     pub show_program_browser: RwSignal<bool>,

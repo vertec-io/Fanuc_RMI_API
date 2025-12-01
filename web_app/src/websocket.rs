@@ -233,6 +233,8 @@ pub struct WebSocketManager {
     set_connected: WriteSignal<bool>,
     pub position: ReadSignal<Option<(f64, f64, f64)>>,
     set_position: WriteSignal<Option<(f64, f64, f64)>>,
+    /// Orientation data (reserved for future 6-DOF display)
+    #[allow(dead_code)]
     pub orientation: ReadSignal<Option<(f64, f64, f64)>>,
     set_orientation: WriteSignal<Option<(f64, f64, f64)>>,
     pub joint_angles: ReadSignal<Option<[f32; 6]>>,
@@ -250,16 +252,22 @@ pub struct WebSocketManager {
     set_current_program: WriteSignal<Option<ProgramDetail>>,
     pub settings: ReadSignal<Option<RobotSettingsDto>>,
     set_settings: WriteSignal<Option<RobotSettingsDto>>,
+    /// API message (reserved for future toast notifications)
+    #[allow(dead_code)]
     pub api_message: ReadSignal<Option<String>>,
     set_api_message: WriteSignal<Option<String>>,
     /// API error message (cleared on next successful response)
     pub api_error: ReadSignal<Option<String>>,
     set_api_error: WriteSignal<Option<String>>,
+    /// Execution status (reserved for future execution progress display)
+    #[allow(dead_code)]
     pub execution_status: ReadSignal<Option<ExecutionStatusData>>,
     set_execution_status: WriteSignal<Option<ExecutionStatusData>>,
     // Program execution state
     pub program_running: ReadSignal<bool>,
     set_program_running: WriteSignal<bool>,
+    /// Program progress (reserved for future progress bar)
+    #[allow(dead_code)]
     pub program_progress: ReadSignal<Option<(usize, usize)>>, // (completed_line, total_lines)
     set_program_progress: WriteSignal<Option<(usize, usize)>>,
     pub executing_line: ReadSignal<Option<usize>>,  // The line currently being executed
@@ -286,7 +294,9 @@ pub struct RobotStatusData {
     pub motion_status: i8,
 }
 
+/// Execution status data (reserved for future execution progress display)
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct ExecutionStatusData {
     pub status: String,
     pub current_line: Option<usize>,
@@ -671,7 +681,8 @@ impl WebSocketManager {
         });
     }
 
-    /// Reset database (dangerous!)
+    /// Reset database (dangerous!) - reserved for admin functionality
+    #[allow(dead_code)]
     pub fn reset_database(&self) {
         self.send_api_request(ClientRequest::ResetDatabase);
     }
@@ -745,7 +756,8 @@ impl WebSocketManager {
         self.send_api_request(ClientRequest::ListRobotConnections);
     }
 
-    /// Get a specific robot connection by ID
+    /// Get a specific robot connection by ID (reserved for connection details view)
+    #[allow(dead_code)]
     pub fn get_robot_connection(&self, id: i64) {
         self.send_api_request(ClientRequest::GetRobotConnection { id });
     }

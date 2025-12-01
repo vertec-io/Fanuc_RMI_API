@@ -12,11 +12,13 @@ use fanuc_rmi::packets::{SendPacket, Instruction};
 use fanuc_rmi::instructions::FrcLinearMotion;
 use fanuc_rmi::{TermType, SpeedType, Configuration, Position};
 
-/// Buffer size for instruction streaming.
+/// Buffer size for instruction streaming (reserved for future buffered execution).
+#[allow(dead_code)]
 const BUFFER_SIZE: usize = 5;
 
-/// Program execution status.
+/// Program execution status (reserved for future execution state machine).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum ExecutionStatus {
     Idle,
     Running { current_line: usize, total_lines: usize },
@@ -90,7 +92,8 @@ impl ProgramExecutor {
         Ok(())
     }
 
-    /// Unload the current program.
+    /// Unload the current program (reserved for future program management).
+    #[allow(dead_code)]
     pub fn unload_program(&mut self) {
         self.loaded_program = None;
         self.instructions.clear();
@@ -99,17 +102,20 @@ impl ProgramExecutor {
         self.pending_count = 0;
     }
 
-    /// Get the current execution status.
+    /// Get the current execution status (reserved for future status display).
+    #[allow(dead_code)]
     pub fn status(&self) -> &ExecutionStatus {
         &self.status
     }
 
-    /// Get the loaded program.
+    /// Get the loaded program (reserved for future program info display).
+    #[allow(dead_code)]
     pub fn loaded_program(&self) -> Option<&Program> {
         self.loaded_program.as_ref()
     }
 
-    /// Get the total number of instructions.
+    /// Get the total number of instructions (reserved for future progress display).
+    #[allow(dead_code)]
     pub fn total_instructions(&self) -> usize {
         self.instructions.len()
     }

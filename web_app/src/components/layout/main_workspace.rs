@@ -1,4 +1,19 @@
 //! Main workspace component - the central content area.
+//!
+//! This module contains the main workspace views and components:
+//! - **WorkspaceContext**: Shared state for program and frame/tool data
+//! - **MainWorkspace**: Root component with routing
+//! - **DashboardView**: Robot control and monitoring (Control/Info tabs)
+//! - **ProgramsView**: Program management and editing
+//! - **SettingsView**: Robot and connection settings
+//!
+//! ## File Organization
+//! This file is organized into sections:
+//! 1. Context & Types - WorkspaceContext and related data structures
+//! 2. Main Workspace - Root component with routing
+//! 3. Dashboard View - Control and Info tabs
+//! 4. Programs View - Program management
+//! 5. Settings View - Configuration panels
 
 use leptos::prelude::*;
 use leptos::either::Either;
@@ -13,12 +28,18 @@ use crate::websocket::WebSocketManager;
 use fanuc_rmi::dto::{SendPacket, Instruction, Command, FrcLinearRelative, FrcLinearMotion, FrcJointMotion, FrcInitialize, Configuration, Position};
 use fanuc_rmi::{SpeedType, TermType};
 
+// ============================================================================
+// SECTION 1: CONTEXT & TYPES
+// ============================================================================
+
 /// Shared context for frame/tool data and program state
 #[derive(Clone, Copy)]
 pub struct WorkspaceContext {
-    /// Active UFrame number
+    /// Active UFrame number (reserved for future frame selection feature)
+    #[allow(dead_code)]
     pub active_frame: RwSignal<usize>,
-    /// Active UTool number
+    /// Active UTool number (reserved for future tool selection feature)
+    #[allow(dead_code)]
     pub active_tool: RwSignal<usize>,
     /// Expanded frame in accordion (-1 = none)
     pub expanded_frame: RwSignal<i32>,
@@ -74,6 +95,7 @@ pub struct RecentCommand {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(dead_code)]
 pub enum CommandStatus {
     Pending,
     Success,
@@ -114,6 +136,10 @@ impl WorkspaceContext {
     }
 }
 
+// ============================================================================
+// SECTION 2: MAIN WORKSPACE (Root Component with Routing)
+// ============================================================================
+
 /// Main workspace with routed content.
 #[component]
 pub fn MainWorkspace() -> impl IntoView {
@@ -143,6 +169,10 @@ pub fn MainWorkspace() -> impl IntoView {
         </main>
     }
 }
+
+// ============================================================================
+// SECTION 3: DASHBOARD VIEW (Control & Info Tabs)
+// ============================================================================
 
 /// Dashboard view with tabs - uses Outlet for nested routes.
 #[component]
@@ -543,7 +573,7 @@ fn JointAnglesPanel() -> impl IntoView {
 #[component]
 pub fn ControlTab() -> impl IntoView {
     let ctx = use_context::<WorkspaceContext>().expect("WorkspaceContext not found");
-    let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
+    let _ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
     let show_composer = ctx.show_composer;
 
     view! {
@@ -1589,8 +1619,9 @@ fn CommandComposerModal() -> impl IntoView {
     }
 }
 
-/// Program data structure
+/// Program data structure (reserved for future local program caching)
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct SavedProgram {
     pub id: u64,
     pub name: String,
@@ -1601,6 +1632,10 @@ pub struct SavedProgram {
     pub default_utool: u8,
     pub created_at: String,
 }
+
+// ============================================================================
+// SECTION 4: PROGRAMS VIEW (Program Management & Editing)
+// ============================================================================
 
 /// Programs view (toolpath creation and editing).
 #[component]
@@ -2655,6 +2690,10 @@ fn CSVUploadModal(
         </div>
     }
 }
+
+// ============================================================================
+// SECTION 5: SETTINGS VIEW (Robot & Connection Configuration)
+// ============================================================================
 
 /// Settings view.
 #[component]

@@ -74,7 +74,7 @@ impl Default for ProgramDefaults {
 /// Parse a CSV program from a reader.
 ///
 /// Returns a vector of instructions with line numbers starting at 1.
-pub fn parse_csv<R: Read>(reader: R, defaults: &ProgramDefaults) -> Result<Vec<ProgramInstruction>, ParseError> {
+pub fn parse_csv<R: Read>(reader: R, _defaults: &ProgramDefaults) -> Result<Vec<ProgramInstruction>, ParseError> {
     let mut csv_reader = ReaderBuilder::new()
         .has_headers(true)
         .flexible(true)

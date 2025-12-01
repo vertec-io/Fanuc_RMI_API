@@ -1,6 +1,15 @@
 //! API request handler for WebSocket messages.
 //!
 //! Processes client requests and returns server responses.
+//!
+//! ## File Organization
+//! This file is organized into sections:
+//! 1. Main Request Handler - Routes requests to appropriate handlers
+//! 2. Robot Connection Handlers - Connect/disconnect/status
+//! 3. Program Execution - Start/stop program execution
+//! 4. Program Management - CRUD operations for programs
+//! 5. Settings Management - Robot settings CRUD
+//! 6. Robot Connections - Saved connection configurations
 
 use crate::api_types::*;
 use crate::database::{Database, ProgramInstruction};
@@ -20,6 +29,10 @@ pub type WsSender = Arc<Mutex<futures_util::stream::SplitSink<
     tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     Message
 >>>;
+
+// ============================================================================
+// SECTION 1: MAIN REQUEST HANDLER
+// ============================================================================
 
 /// Handle a client API request and return a response.
 pub async fn handle_request(
@@ -116,6 +129,10 @@ pub async fn handle_request(
     }
 }
 
+// ============================================================================
+// SECTION 2: ROBOT CONNECTION HANDLERS
+// ============================================================================
+
 /// Get the current robot connection status
 async fn get_connection_status(
     robot_connection: Option<Arc<RwLock<RobotConnection>>>,
@@ -183,6 +200,10 @@ async fn disconnect_robot(
     }
 }
 
+// ============================================================================
+// SECTION 3: PROGRAM EXECUTION
+// ============================================================================
+
 /// Start program execution
 async fn start_program(
     db: Arc<Mutex<Database>>,
@@ -227,9 +248,10 @@ async fn start_program(
 
     // Track request_id -> line number mapping
     let mut request_to_line: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
-    // Also build sequence_to_line as we receive sent notifications
-    let mut sequence_to_line: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    // Also build sequence_to_line as we receive sent notifications (reserved for future use)
+    let sequence_to_line: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
     let mut last_request_id: Option<u64> = None;
+    #[allow(unused_variables)]
     let last_sequence_id: u32 = 0;
 
     // Send first InstructionSent to UI to indicate program is starting
@@ -477,6 +499,10 @@ async fn start_program(
     }
 }
 
+// ============================================================================
+// SECTION 4: PROGRAM MANAGEMENT
+// ============================================================================
+
 async fn list_programs(db: Arc<Mutex<Database>>) -> ServerResponse {
     let db = db.lock().await;
     match db.list_programs() {
@@ -660,6 +686,10 @@ async fn upload_csv(
     }
 }
 
+// ============================================================================
+// SECTION 5: SETTINGS MANAGEMENT
+// ============================================================================
+
 async fn get_settings(db: Arc<Mutex<Database>>) -> ServerResponse {
     let db = db.lock().await;
     match db.get_robot_settings() {
@@ -713,7 +743,9 @@ async fn reset_database(db: Arc<Mutex<Database>>) -> ServerResponse {
     }
 }
 
-// ========== Robot Connections CRUD ==========
+// ============================================================================
+// SECTION 6: ROBOT CONNECTIONS (Saved Connection Configurations)
+// ============================================================================
 
 async fn list_robot_connections(db: Arc<Mutex<Database>>) -> ServerResponse {
     let db = db.lock().await;

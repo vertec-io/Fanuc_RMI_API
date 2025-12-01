@@ -34,6 +34,7 @@ pub struct Program {
 
 /// A single instruction in a program.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ProgramInstruction {
     pub id: i64,
     pub program_id: i64,
@@ -55,6 +56,7 @@ pub struct ProgramInstruction {
 
 /// Robot default settings (per-robot configuration).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RobotSettings {
     pub id: i64,
     pub name: String,
@@ -69,6 +71,7 @@ pub struct RobotSettings {
 
 /// A saved robot connection configuration.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RobotConnection {
     pub id: i64,
     pub name: String,
