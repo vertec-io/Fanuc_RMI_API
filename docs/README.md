@@ -8,38 +8,53 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-fanuc_rmi = { version = "0.3", features = ["DTO"] }
+fanuc_rmi = { version = "0.5", features = ["driver", "DTO"] }
 ```
 
 Basic usage:
 
 ```rust
-use fanuc_rmi::packets::CommandResponse;
+use fanuc_rmi::drivers::{FanucDriver, FanucDriverConfig};
 
-fn handle_response(response: CommandResponse) {
-    match response {
-        CommandResponse::FrcReadJointAngles(angles) => {
-            println!("Joint 1: {}", angles.joint_angles.j1);
-        }
-        _ => {}
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = FanucDriverConfig {
+        addr: "192.168.1.100".to_string(),
+        port: 18735,
+        max_messages: 30,
+    };
+    let driver = FanucDriver::connect(config).await?;
+
+    // Initialize and check response
+    let init = driver.initialize().await?;
+    if init.error_id == 0 {
+        println!("Robot initialized successfully");
     }
+
+    Ok(())
 }
 ```
 
 ## Documentation Structure
 
+### 🌐 Web Interface (v0.6.0)
+
+- **[Web Interface Implementation](WEB_INTERFACE_IMPLEMENTATION.md)** - Complete web app architecture and features
+- **[Implementation Roadmap V2](IMPLEMENTATION_ROADMAP_V2.md)** - Design specification and roadmap
+- **[UI Design Mockup](UI_DESIGN_MOCKUP.md)** - Visual mockups and design system
+
 ### 📚 Core Documentation
 
 **Current & Active:**
-- **[Sequence ID Migration Guide](SEQUENCE_ID_MIGRATION_GUIDE.md)** - ⚠️ **IMPORTANT** - Migration guide for correlation ID system (v0.3.0+)
+- **[v0.5.0 Implementation Summary](V0.5.0_IMPLEMENTATION_SUMMARY.md)** - Async command methods and error handling
+- **[Naming Migration Guide v0.5.0](NAMING_MIGRATION_GUIDE_v0.5.0.md)** - Migration guide for v0.5.0 changes
 - **[Position Precision Fix](POSITION_PRECISION_FIX.md)** - Detailed explanation of f32→f64 precision improvement
-- **[Position Precision Summary](POSITION_PRECISION_SUMMARY.md)** - Quick reference for position precision changes
-- **[Robot Configuration](ROBOT_CONFIGURATION.md)** - Supported robot models for the simluator and kinematic parameters
-- **[Correlation ID Implementation](CORRELATION_ID_IMPLEMENTATION_SUMMARY.md)** - Technical details of correlation ID system
+- **[Robot Configuration](ROBOT_CONFIGURATION.md)** - Supported robot models for the simulator and kinematic parameters
+- **[RMI Commands Reference](RMI_COMMANDS_REFERENCE.md)** - Complete RMI protocol command reference
 
 **Legacy/Historical:**
+- **[Sequence ID Migration Guide](SEQUENCE_ID_MIGRATION_GUIDE.md)** - Migration guide for correlation ID system (v0.3.0+)
 - **[Implementation Summary](IMPLEMENTATION_SUMMARY.md)** - Historical implementation notes
-- **[Final Update Summary](FINAL_UPDATE_SUMMARY.md)** - Historical update notes
 
 ### 🏗️ Architecture
 
@@ -63,6 +78,9 @@ Complete working examples for specific frameworks:
 
 ### 📝 Release Notes
 
+- **[v0.6.0](releases/RELEASE_NOTES_v0.6.0.md)** - Major web interface overhaul with desktop-style UI
+- **[v0.5.0](releases/RELEASE_NOTES_v0.5.0.md)** - Async command methods, proper error handling
+- **[v0.4.0](releases/RELEASE_NOTES_v0.4.0.md)** - Position precision fix, request ID system
 - **[v0.3.0](releases/RELEASE_NOTES_v0.3.0.md)** - ExtractInner trait, DTO enums, comprehensive documentation
 - **[v0.2.0 Web App](releases/RELEASE_NOTES_v0.2.0_WEB_APP.md)** - Web application redesign with dark mode UI
 
