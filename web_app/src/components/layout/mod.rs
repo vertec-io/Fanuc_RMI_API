@@ -3,12 +3,12 @@
 mod top_bar;
 mod left_navbar;
 mod right_panel;
-mod main_workspace;
+pub mod workspace;
 
 pub use top_bar::TopBar;
 pub use left_navbar::LeftNavbar;
 pub use right_panel::{RightPanel, FloatingJogControls};
-pub use main_workspace::MainWorkspace;
+pub use workspace::MainWorkspace;
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
