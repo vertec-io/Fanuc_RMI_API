@@ -96,6 +96,41 @@ pub enum ClientRequest {
 
     #[serde(rename = "delete_robot_connection")]
     DeleteRobotConnection { id: i64 },
+
+    // Frame/Tool Management
+    #[serde(rename = "get_active_frame_tool")]
+    GetActiveFrameTool,
+
+    #[serde(rename = "set_active_frame_tool")]
+    SetActiveFrameTool { uframe: u8, utool: u8 },
+
+    #[serde(rename = "read_frame_data")]
+    ReadFrameData { frame_number: u8 },
+
+    #[serde(rename = "read_tool_data")]
+    ReadToolData { tool_number: u8 },
+
+    #[serde(rename = "write_frame_data")]
+    WriteFrameData {
+        frame_number: u8,
+        x: f64,
+        y: f64,
+        z: f64,
+        w: f64,
+        p: f64,
+        r: f64,
+    },
+
+    #[serde(rename = "write_tool_data")]
+    WriteToolData {
+        tool_number: u8,
+        x: f64,
+        y: f64,
+        z: f64,
+        w: f64,
+        p: f64,
+        r: f64,
+    },
 }
 
 /// Optional start position for program execution.
@@ -171,6 +206,32 @@ pub enum ServerResponse {
 
     #[serde(rename = "robot_connection")]
     RobotConnection { connection: RobotConnectionDto },
+
+    // Frame/Tool responses
+    #[serde(rename = "active_frame_tool")]
+    ActiveFrameTool { uframe: u8, utool: u8 },
+
+    #[serde(rename = "frame_data")]
+    FrameData {
+        frame_number: u8,
+        x: f64,
+        y: f64,
+        z: f64,
+        w: f64,
+        p: f64,
+        r: f64,
+    },
+
+    #[serde(rename = "tool_data")]
+    ToolData {
+        tool_number: u8,
+        x: f64,
+        y: f64,
+        z: f64,
+        w: f64,
+        p: f64,
+        r: f64,
+    },
 }
 
 /// Program summary info for listing.

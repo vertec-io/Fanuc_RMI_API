@@ -43,6 +43,9 @@ pub enum Command {
     #[serde(rename = "FRC_WriteUToolData")]
     FrcWriteUToolData(FrcWriteUToolData),
 
+    #[serde(rename = "FRC_ReadUToolData")]
+    FrcReadUToolData(FrcReadUToolData),
+
     #[serde(rename = "FRC_ReadUFrameData")]
     FrcReadUFrameData(FrcReadUFrameData),
 

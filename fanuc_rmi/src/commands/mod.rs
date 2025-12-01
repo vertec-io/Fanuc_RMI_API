@@ -53,6 +53,7 @@ pub mod dto {
     pub use super::frc_getstatus::FrcGetStatusResponseDto as FrcGetStatusResponse;
     pub use super::frc_readuframedata::FrcReadUFrameDataDto as FrcReadUFrameData;
     pub use super::frc_writeuframedata::FrcWriteUFrameDataDto as FrcWriteUFrameData;
+    pub use super::frc_readutooldata::FrcReadUToolDataDto as FrcReadUToolData;
     pub use super::frc_readutooldata::FrcReadUToolDataResponseDto as FrcReadUToolDataResponse;
     pub use super::frc_writeutooldata::FrcWriteUToolDataDto as FrcWriteUToolData;
     pub use super::frc_readdin::FrcReadDINDto as FrcReadDIN;

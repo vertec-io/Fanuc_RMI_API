@@ -6,9 +6,11 @@
 //! - `programs`: Program CRUD operations
 //! - `settings`: Robot settings management
 //! - `robot_connections`: Saved connection configurations CRUD
+//! - `frame_tool`: Frame and tool data management
 
 pub mod connection;
 pub mod execution;
+pub mod frame_tool;
 pub mod programs;
 pub mod settings;
 pub mod robot_connections;
@@ -98,6 +100,26 @@ pub async fn handle_request(
         }
         ClientRequest::DeleteRobotConnection { id } => {
             robot_connections::delete_robot_connection(db, id).await
+        }
+
+        // Frame/Tool management
+        ClientRequest::GetActiveFrameTool => {
+            frame_tool::get_active_frame_tool(robot_connection).await
+        }
+        ClientRequest::SetActiveFrameTool { uframe, utool } => {
+            frame_tool::set_active_frame_tool(robot_connection, uframe, utool).await
+        }
+        ClientRequest::ReadFrameData { frame_number } => {
+            frame_tool::read_frame_data(robot_connection, frame_number).await
+        }
+        ClientRequest::ReadToolData { tool_number } => {
+            frame_tool::read_tool_data(robot_connection, tool_number).await
+        }
+        ClientRequest::WriteFrameData { frame_number, x, y, z, w, p, r } => {
+            frame_tool::write_frame_data(robot_connection, frame_number, x, y, z, w, p, r).await
+        }
+        ClientRequest::WriteToolData { tool_number, x, y, z, w, p, r } => {
+            frame_tool::write_tool_data(robot_connection, tool_number, x, y, z, w, p, r).await
         }
     }
 }
