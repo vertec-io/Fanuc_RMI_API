@@ -7,7 +7,7 @@ use crate::database::Database;
 use crate::program_executor::ProgramExecutor;
 use crate::handlers::WsSender;
 use fanuc_rmi::drivers::FanucDriver;
-use fanuc_rmi::packets::{PacketPriority, SendPacket, DriverCommand, SentInstructionInfo, ResponsePacket};
+use fanuc_rmi::packets::{PacketPriority, SendPacket, DriverCommand, SentInstructionInfo, ResponsePacket, Command};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, error, warn, debug};
@@ -15,12 +15,26 @@ use futures_util::SinkExt;
 use tokio_tungstenite::tungstenite::Message;
 
 /// Pause program execution.
+///
+/// This sends both:
+/// 1. DriverCommand::Pause - Pauses the driver's internal packet queue (stops sending new packets)
+/// 2. Command::FrcPause - Sends FRC_Pause to the robot controller (pauses current motion)
 pub async fn pause_program(driver: Option<Arc<FanucDriver>>) -> ServerResponse {
     if let Some(driver) = driver {
-        let packet = SendPacket::DriverCommand(DriverCommand::Pause);
-        match driver.send_packet(packet, PacketPriority::Standard) {
-            Ok(_) => ServerResponse::Success { message: "Program paused".to_string() },
-            Err(e) => ServerResponse::Error { message: format!("Failed to pause: {}", e) }
+        // First, send FRC_Pause to the robot to pause current motion immediately
+        let pause_packet = SendPacket::Command(Command::FrcPause);
+        if let Err(e) = driver.send_packet(pause_packet, PacketPriority::High) {
+            return ServerResponse::Error { message: format!("Failed to send pause command: {}", e) };
+        }
+
+        // Then pause the driver's packet queue to stop sending more instructions
+        let driver_pause = SendPacket::DriverCommand(DriverCommand::Pause);
+        match driver.send_packet(driver_pause, PacketPriority::High) {
+            Ok(_) => {
+                info!("Program paused: sent FRC_Pause and paused driver queue");
+                ServerResponse::Success { message: "Program paused".to_string() }
+            },
+            Err(e) => ServerResponse::Error { message: format!("Failed to pause driver: {}", e) }
         }
     } else {
         ServerResponse::Error { message: "Robot not connected".to_string() }
@@ -28,12 +42,26 @@ pub async fn pause_program(driver: Option<Arc<FanucDriver>>) -> ServerResponse {
 }
 
 /// Resume program execution.
+///
+/// This sends both:
+/// 1. DriverCommand::Unpause - Resumes the driver's internal packet queue
+/// 2. Command::FrcContinue - Sends FRC_Continue to the robot controller (resumes motion)
 pub async fn resume_program(driver: Option<Arc<FanucDriver>>) -> ServerResponse {
     if let Some(driver) = driver {
-        let packet = SendPacket::DriverCommand(DriverCommand::Unpause);
-        match driver.send_packet(packet, PacketPriority::Standard) {
-            Ok(_) => ServerResponse::Success { message: "Program resumed".to_string() },
-            Err(e) => ServerResponse::Error { message: format!("Failed to resume: {}", e) }
+        // First, unpause the driver's packet queue
+        let driver_unpause = SendPacket::DriverCommand(DriverCommand::Unpause);
+        if let Err(e) = driver.send_packet(driver_unpause, PacketPriority::High) {
+            return ServerResponse::Error { message: format!("Failed to unpause driver: {}", e) };
+        }
+
+        // Then send FRC_Continue to the robot to resume motion
+        let continue_packet = SendPacket::Command(Command::FrcContinue);
+        match driver.send_packet(continue_packet, PacketPriority::High) {
+            Ok(_) => {
+                info!("Program resumed: unpaused driver queue and sent FRC_Continue");
+                ServerResponse::Success { message: "Program resumed".to_string() }
+            },
+            Err(e) => ServerResponse::Error { message: format!("Failed to send continue command: {}", e) }
         }
     } else {
         ServerResponse::Error { message: "Robot not connected".to_string() }

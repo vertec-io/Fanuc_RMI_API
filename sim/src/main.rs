@@ -1,6 +1,7 @@
 use serde_json::json;
 use std::error::Error;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc, RwLock};
@@ -43,6 +44,61 @@ struct MotionCommand {
 struct MotionResponse {
     seq_id: u32,
     instruction_type: String,
+}
+
+/// Motion executor control signals - allows immediate pause/abort
+#[derive(Debug)]
+struct MotionExecutorControl {
+    /// When true, motion interpolation is paused (checked every 50ms during motion)
+    paused: AtomicBool,
+    /// When true, abort current motion and clear queue
+    abort_requested: AtomicBool,
+    /// Speed override percentage (0-100), affects motion duration
+    speed_override: AtomicU8,
+}
+
+impl Default for MotionExecutorControl {
+    fn default() -> Self {
+        Self {
+            paused: AtomicBool::new(false),
+            abort_requested: AtomicBool::new(false),
+            speed_override: AtomicU8::new(100),
+        }
+    }
+}
+
+impl MotionExecutorControl {
+    fn pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+    }
+
+    fn unpause(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+    }
+
+    fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    fn request_abort(&self) {
+        self.abort_requested.store(true, Ordering::SeqCst);
+    }
+
+    fn clear_abort(&self) {
+        self.abort_requested.store(false, Ordering::SeqCst);
+    }
+
+    fn is_abort_requested(&self) -> bool {
+        self.abort_requested.load(Ordering::SeqCst)
+    }
+
+    fn set_speed_override(&self, percent: u8) {
+        self.speed_override.store(percent.min(100), Ordering::SeqCst);
+    }
+
+    fn get_speed_override(&self) -> u8 {
+        self.speed_override.load(Ordering::SeqCst)
+    }
 }
 
 /// Frame/Tool coordinate data (X, Y, Z, W, P, R)
@@ -215,11 +271,24 @@ async fn handle_secondary_client(
     // Create a channel for motion commands (command receiver -> motion executor)
     let (motion_tx, mut motion_rx) = mpsc::channel::<MotionCommand>(200);
 
+    // Create shared motion executor control for pause/abort/speed override
+    let executor_control = Arc::new(MotionExecutorControl::default());
+
     // Spawn a single motion executor task that processes motions SEQUENTIALLY
     let robot_state_for_executor = Arc::clone(&robot_state);
     let response_tx_for_executor = response_tx.clone();
+    let control_for_executor = Arc::clone(&executor_control);
     tokio::spawn(async move {
-        while let Some(cmd) = motion_rx.recv().await {
+        'motion_loop: while let Some(cmd) = motion_rx.recv().await {
+            // Check for abort BEFORE starting motion
+            if control_for_executor.is_abort_requested() {
+                eprintln!("🛑 Abort detected before motion {}, clearing queue", cmd.seq_id);
+                // Drain remaining commands from the queue
+                while motion_rx.try_recv().is_ok() {}
+                control_for_executor.clear_abort();
+                continue 'motion_loop;
+            }
+
             // Get current position for interpolation
             let (start_x, start_y, start_z, start_w, start_p, start_r, current_joints, mode) = {
                 let state = robot_state_for_executor.lock().await;
@@ -269,22 +338,54 @@ async fn handle_secondary_client(
             let dz = target_z - start_z;
             let distance = (dx * dx + dy * dy + dz * dz).sqrt();
 
-            eprintln!("🏃 Executing motion {} ({}) | dist={:.1}mm",
-                cmd.seq_id, cmd.instruction_type, distance);
+            // Apply speed override to motion speed
+            let speed_override = control_for_executor.get_speed_override() as f64 / 100.0;
+            let effective_speed = cmd.speed * speed_override.max(0.01); // Minimum 1% to avoid division by zero
+
+            eprintln!("🏃 Executing motion {} ({}) | dist={:.1}mm | speed={:.1}mm/s ({}% override)",
+                cmd.seq_id, cmd.instruction_type, distance, effective_speed, (speed_override * 100.0) as u8);
 
             let delay_ms = if mode == SimulatorMode::Realtime {
-                let duration = RobotState::calculate_motion_duration(distance, cmd.speed);
+                let duration = RobotState::calculate_motion_duration(distance, effective_speed);
                 (duration * 1000.0) as u64
             } else {
                 0
             };
 
             // Execute motion with incremental position updates
+            let mut motion_aborted = false;
             if delay_ms > 0 {
                 let update_interval_ms = 50u64;
                 let total_steps = (delay_ms / update_interval_ms).max(1);
 
                 for step in 1..=total_steps {
+                    // Check for abort DURING motion interpolation
+                    if control_for_executor.is_abort_requested() {
+                        eprintln!("🛑 Abort detected during motion {} at step {}/{}", cmd.seq_id, step, total_steps);
+                        // Drain remaining commands
+                        while motion_rx.try_recv().is_ok() {}
+                        control_for_executor.clear_abort();
+                        motion_aborted = true;
+                        break;
+                    }
+
+                    // Check for pause - wait while paused
+                    while control_for_executor.is_paused() {
+                        // Check for abort while paused
+                        if control_for_executor.is_abort_requested() {
+                            eprintln!("🛑 Abort detected while paused during motion {}", cmd.seq_id);
+                            while motion_rx.try_recv().is_ok() {}
+                            control_for_executor.clear_abort();
+                            motion_aborted = true;
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+
+                    if motion_aborted {
+                        break;
+                    }
+
                     let t = step as f64 / total_steps as f64;
 
                     // Linear interpolation
@@ -352,6 +453,11 @@ async fn handle_secondary_client(
                 }
             }
 
+            // Skip response if motion was aborted
+            if motion_aborted {
+                continue 'motion_loop;
+            }
+
             // Update last sequence ID
             {
                 let mut state = robot_state_for_executor.lock().await;
@@ -371,6 +477,7 @@ async fn handle_secondary_client(
     // motion_tx is used to queue commands to the executor
     let motion_tx = Arc::new(motion_tx);
     // response_tx was moved to the executor task, response_rx is used below
+    // executor_control is used to signal pause/abort from command handlers
 
     loop {
         tokio::select! {
@@ -419,18 +526,20 @@ async fn handle_secondary_client(
                         Some("FRC_GetStatus") => {
                             let state = robot_state.lock().await;
                             let next_seq = state.last_sequence_id + 1;
+                            let override_val = executor_control.get_speed_override();
+                            let paused = if executor_control.is_paused() { 1 } else { 0 };
                             json!({
                                 "Command": "FRC_GetStatus",
                                 "ErrorID": 0,
                                 "ServoReady": 1,
                                 "TPMode": 1,
-                                "RMIMotionStatus": 0,
+                                "RMIMotionStatus": paused, // 0=running, 1=paused
                                 "ProgramStatus": 0,
                                 "SingleStepMode": 0,
                                 "NumberUTool": 5,
                                 "NextSequenceID": next_seq,
                                 "NumberUFrame": 0,
-                                "Override": 100
+                                "Override": override_val
                             })
                         },
                         Some("FRC_ReadJointAngles") => {
@@ -482,23 +591,50 @@ async fn handle_secondary_client(
                             "Status": "Motion started"
                         }),
                         Some("FRC_Abort") => {
-                            println!("🛑 FRC_Abort");
+                            println!("🛑 FRC_Abort - signaling motion executor to abort immediately");
+                            executor_control.request_abort();
+                            // Also unpause if paused, so abort takes effect
+                            executor_control.unpause();
                             json!({
                                 "Command": "FRC_Abort",
                                 "ErrorID": 0,
                             })
                         }
+                        Some("FRC_Pause") => {
+                            println!("⏸️ FRC_Pause - pausing motion executor");
+                            executor_control.pause();
+                            json!({
+                                "Command": "FRC_Pause",
+                                "ErrorID": 0,
+                            })
+                        }
+                        Some("FRC_Continue") => {
+                            println!("▶️ FRC_Continue - resuming motion executor");
+                            executor_control.unpause();
+                            json!({
+                                "Command": "FRC_Continue",
+                                "ErrorID": 0,
+                            })
+                        }
                         Some("FRC_Reset") => {
                             println!("🔄 FRC_Reset");
+                            // Reset also clears abort/pause state
+                            executor_control.clear_abort();
+                            executor_control.unpause();
                             json!({
                                 "Command": "FRC_Reset",
                                 "ErrorID": 0,
                             })
                         }
-                        Some("FRC_SetOverRide") => json!({
-                            "Command": "FRC_SetOverRide",
-                            "ErrorID": 0,
-                        }),
+                        Some("FRC_SetOverRide") => {
+                            let override_val = request_json["Override"].as_u64().unwrap_or(100) as u8;
+                            executor_control.set_speed_override(override_val);
+                            println!("⚡ FRC_SetOverRide: {}%", override_val);
+                            json!({
+                                "Command": "FRC_SetOverRide",
+                                "ErrorID": 0,
+                            })
+                        }
                         Some("FRC_GetUFrameUTool") => {
                             let state = robot_state.lock().await;
                             json!({
