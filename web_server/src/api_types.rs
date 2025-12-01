@@ -175,6 +175,22 @@ pub enum ClientRequest {
     #[serde(rename = "write_gout")]
     WriteGout { port_number: u16, port_value: u32 },
 
+    // I/O Configuration
+    /// Get I/O display configuration for a robot
+    #[serde(rename = "get_io_config")]
+    GetIoConfig { robot_connection_id: i64 },
+
+    /// Update I/O display configuration
+    #[serde(rename = "update_io_config")]
+    UpdateIoConfig {
+        robot_connection_id: i64,
+        io_type: String,
+        io_index: i32,
+        display_name: Option<String>,
+        is_visible: bool,
+        display_order: Option<i32>,
+    },
+
     // Control Locking
     /// Request control of the robot (only one client can control at a time)
     #[serde(rename = "request_control")]
@@ -330,6 +346,10 @@ pub enum ServerResponse {
     #[serde(rename = "gin_value")]
     GinValue { port_number: u16, port_value: u32 },
 
+    // I/O configuration responses
+    #[serde(rename = "io_config")]
+    IoConfig { configs: Vec<IoDisplayConfigDto> },
+
     // Control lock responses
     /// Control of the robot was acquired
     #[serde(rename = "control_acquired")]
@@ -432,4 +452,14 @@ pub struct RobotConnectionDto {
     pub default_w: Option<f64>,
     pub default_p: Option<f64>,
     pub default_r: Option<f64>,
+}
+
+/// I/O display configuration DTO.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IoDisplayConfigDto {
+    pub io_type: String,
+    pub io_index: i32,
+    pub display_name: Option<String>,
+    pub is_visible: bool,
+    pub display_order: Option<i32>,
 }

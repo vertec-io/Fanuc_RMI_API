@@ -8,13 +8,15 @@
 //! - `settings`: Robot settings management
 //! - `robot_connections`: Saved connection configurations CRUD
 //! - `frame_tool`: Frame and tool data management
-//! - `io`: Digital I/O management (DIN/DOUT)
+//! - `io`: Digital I/O management (DIN/DOUT/AIN/AOUT/GIN/GOUT)
+//! - `io_config`: I/O display configuration management
 
 pub mod connection;
 pub mod control;
 pub mod execution;
 pub mod frame_tool;
 pub mod io;
+pub mod io_config;
 pub mod programs;
 pub mod robot_connections;
 pub mod settings;
@@ -248,6 +250,29 @@ pub async fn handle_request(
         }
         ClientRequest::GetControlStatus => {
             control::get_control_status(client_manager, client_id).await
+        }
+
+        // I/O Configuration
+        ClientRequest::GetIoConfig { robot_connection_id } => {
+            io_config::get_io_config(db, robot_connection_id).await
+        }
+        ClientRequest::UpdateIoConfig {
+            robot_connection_id,
+            io_type,
+            io_index,
+            display_name,
+            is_visible,
+            display_order,
+        } => {
+            io_config::update_io_config(
+                db,
+                robot_connection_id,
+                io_type,
+                io_index,
+                display_name,
+                is_visible,
+                display_order,
+            ).await
         }
     }
 }

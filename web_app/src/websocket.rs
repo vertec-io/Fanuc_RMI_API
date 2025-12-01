@@ -175,6 +175,20 @@ pub enum ClientRequest {
     #[serde(rename = "write_gout")]
     WriteGout { port_number: u16, port_value: u32 },
 
+    // I/O Configuration
+    #[serde(rename = "get_io_config")]
+    GetIoConfig { robot_connection_id: i64 },
+
+    #[serde(rename = "update_io_config")]
+    UpdateIoConfig {
+        robot_connection_id: i64,
+        io_type: String,
+        io_index: i32,
+        display_name: Option<String>,
+        is_visible: bool,
+        display_order: Option<i32>,
+    },
+
     // Control Locking
     /// Request control of the robot
     #[serde(rename = "request_control")]
@@ -329,6 +343,10 @@ pub enum ServerResponse {
     #[serde(rename = "gin_value")]
     GinValue { port_number: u16, port_value: u32 },
 
+    // I/O configuration responses
+    #[serde(rename = "io_config")]
+    IoConfig { configs: Vec<IoDisplayConfigDto> },
+
     // Control lock responses
     /// Control of the robot was acquired
     #[serde(rename = "control_acquired")]
@@ -436,6 +454,16 @@ pub struct FrameToolData {
     pub r: f64,
 }
 
+/// I/O display configuration DTO.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IoDisplayConfigDto {
+    pub io_type: String,
+    pub io_index: i32,
+    pub display_name: Option<String>,
+    pub is_visible: bool,
+    pub display_order: Option<i32>,
+}
+
 // ========== WebSocket Manager ==========
 
 #[derive(Clone, Copy)]
@@ -519,6 +547,9 @@ pub struct WebSocketManager {
     /// Group output values - indexed by port number
     pub gout_values: ReadSignal<HashMap<u16, u32>>,
     set_gout_values: WriteSignal<HashMap<u16, u32>>,
+    /// I/O display configuration - keyed by (io_type, io_index)
+    pub io_config: ReadSignal<HashMap<(String, i32), IoDisplayConfigDto>>,
+    set_io_config: WriteSignal<HashMap<(String, i32), IoDisplayConfigDto>>,
     // Control lock state
     /// Whether this client has control of the robot
     pub has_control: ReadSignal<bool>,
@@ -586,6 +617,7 @@ impl WebSocketManager {
         let (aout_values, set_aout_values) = signal::<HashMap<u16, f64>>(HashMap::new());
         let (gin_values, set_gin_values) = signal::<HashMap<u16, u32>>(HashMap::new());
         let (gout_values, set_gout_values) = signal::<HashMap<u16, u32>>(HashMap::new());
+        let (io_config, set_io_config) = signal::<HashMap<(String, i32), IoDisplayConfigDto>>(HashMap::new());
         // Control lock state
         let (has_control, set_has_control) = signal(false);
         let ws: StoredValue<Option<WebSocket>, LocalStorage> = StoredValue::new_local(None);
@@ -650,6 +682,8 @@ impl WebSocketManager {
             set_gin_values,
             gout_values,
             set_gout_values,
+            io_config,
+            set_io_config,
             has_control,
             set_has_control,
             ws,
@@ -700,6 +734,7 @@ impl WebSocketManager {
         let _set_aout_values = self.set_aout_values;
         let set_gin_values = self.set_gin_values;
         let _set_gout_values = self.set_gout_values;
+        let set_io_config = self.set_io_config;
         let set_has_control = self.set_has_control;
 
         // On open
@@ -928,6 +963,15 @@ impl WebSocketManager {
                             log::debug!("GIN[{}] = {}", port_number, port_value);
                             set_gin_values.update(|map| {
                                 map.insert(port_number, port_value);
+                            });
+                        }
+                        ServerResponse::IoConfig { configs } => {
+                            log::debug!("Received I/O config: {} entries", configs.len());
+                            set_io_config.update(|map| {
+                                map.clear();
+                                for cfg in configs {
+                                    map.insert((cfg.io_type.clone(), cfg.io_index), cfg);
+                                }
                             });
                         }
                         ServerResponse::ExecutionStateChanged { state, program_id, current_line, total_lines, message } => {
@@ -1384,6 +1428,33 @@ impl WebSocketManager {
     pub fn update_gout_cache(&self, port: u16, value: u32) {
         self.set_gout_values.update(|map| {
             map.insert(port, value);
+        });
+    }
+
+    // ========== I/O Configuration ==========
+
+    /// Get I/O display configuration for a robot
+    pub fn get_io_config(&self, robot_connection_id: i64) {
+        self.send_api_request(ClientRequest::GetIoConfig { robot_connection_id });
+    }
+
+    /// Update I/O display configuration
+    pub fn update_io_config(
+        &self,
+        robot_connection_id: i64,
+        io_type: String,
+        io_index: i32,
+        display_name: Option<String>,
+        is_visible: bool,
+        display_order: Option<i32>,
+    ) {
+        self.send_api_request(ClientRequest::UpdateIoConfig {
+            robot_connection_id,
+            io_type,
+            io_index,
+            display_name,
+            is_visible,
+            display_order,
         });
     }
 
