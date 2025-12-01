@@ -230,7 +230,7 @@ async fn start_program(
     // Also build sequence_to_line as we receive sent notifications
     let mut sequence_to_line: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
     let mut last_request_id: Option<u64> = None;
-    let mut last_sequence_id: u32 = 0;
+    let last_sequence_id: u32 = 0;
 
     // Send first InstructionSent to UI to indicate program is starting
     // (highlight line 1 as the first instruction being executed)
@@ -268,7 +268,7 @@ async fn start_program(
             // Process both SentInstructionInfo and InstructionResponse concurrently
             // This ensures we can track progress in real-time as instructions complete
             let mut sequence_to_line = sequence_to_line;
-            let mut last_sequence_id = last_sequence_id;
+            let _last_sequence_id = last_sequence_id; // Track for potential future use
             let mut pending_sent_notifications = request_to_line.len();
             let mut completed_count = 0;
             let mut highest_completed_line = 0usize;
@@ -289,9 +289,6 @@ async fn start_program(
                                     pending_sent_notifications -= 1;
                                     debug!("Mapped seq_id {} to line {} (pending: {})",
                                           sent_info.sequence_id, line, pending_sent_notifications);
-                                    if sent_info.request_id == last_req_id {
-                                        last_sequence_id = sent_info.sequence_id;
-                                    }
 
                                     // Check if any buffered responses can now be processed
                                     let mut i = 0;

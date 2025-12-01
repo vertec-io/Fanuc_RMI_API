@@ -2,7 +2,7 @@
 
 A comprehensive Rust library for communicating with and controlling FANUC robots via the Remote Motion Interface (RMI) protocol. Includes driver implementation, web-based control interface, and simulation capabilities.
 
-**Current Version**: 0.5.0
+**Current Version**: 0.6.0
 **Status**: Active Development
 **License**: See LICENSE file
 
@@ -10,16 +10,26 @@ A comprehensive Rust library for communicating with and controlling FANUC robots
 
 ## ⚠️ Important Updates
 
-### Latest Changes (v0.5.0) - 2025-11-25
+### Latest Changes (v0.6.0) - 2025-12-01
+
+**Major Web Interface Overhaul:**
+- ✨ **Desktop-Style UI**: Professional application layout with left navbar, main workspace, and right panel
+- ✨ **Program Management**: Create, upload CSV, run, pause, stop programs
+- ✨ **Real-time Execution**: Line-by-line progress tracking with visual highlighting
+- ✨ **Floating Jog Controls**: Draggable window with persistent settings
+- ✨ **SQLite Database**: Persistent storage for programs and settings
+- ✨ **Robot Connection Management**: Save and manage multiple robot connections
+
+See [Web Interface Implementation](docs/WEB_INTERFACE_IMPLEMENTATION.md) for details.
+
+### Previous Changes (v0.5.0) - 2025-11-25
 
 **API Improvements (No Breaking Changes):**
 - ✨ **Async Command Methods**: `abort()`, `initialize()`, `get_status()`, `disconnect()` now wait for responses
 - ✨ **Proper Error Handling**: Access FANUC error codes directly from responses
 - ✨ **Industry Standard Terminology**: `correlation_id` → `request_id`
-- ✨ **Clearer Method Names**: `send_command()` → `send_packet()`
-- 🐛 **No More Arbitrary Sleeps**: Async methods eliminate manual delay guessing
 
-**Migration:** See [v0.5.0 Migration Guide](docs/NAMING_MIGRATION_GUIDE_v0.5.0.md) - All old methods still work (deprecated)
+**Migration:** See [v0.5.0 Migration Guide](docs/NAMING_MIGRATION_GUIDE_v0.5.0.md)
 
 ### Previous Changes (v0.4.0)
 
@@ -42,11 +52,13 @@ See [v0.4.0 Release Notes](docs/releases/RELEASE_NOTES_v0.4.0.md) for details
 - ✅ **ExtractInner Trait**: Generic type-safe extraction from response enums
 - ✅ **Error Handling**: Comprehensive error types with FANUC error code mapping
 
-### Web Application
-- ✅ **Real-time Monitoring**: Live position, status, and motion tracking via WebSocket
-- ✅ **Jog Controls**: Interactive 6-axis cartesian jogging interface
+### Web Application (`web_app` + `web_server`)
+- ✅ **Desktop-Style Interface**: Professional layout with navbar, workspace, and sidebar
+- ✅ **Program Management**: Create, upload CSV, execute, and monitor programs
+- ✅ **Real-time Monitoring**: Live position, status, and execution progress via WebSocket
+- ✅ **Jog Controls**: Interactive 6-axis jogging with docked/floating modes
+- ✅ **SQLite Database**: Persistent storage for programs and robot settings
 - ✅ **Modern UI**: Clean dark mode design with Leptos + TailwindCSS
-- ✅ **WebSocket Bridge**: Bidirectional communication with FANUC driver
 
 ### Simulation
 - ✅ **RMI Simulator**: Software simulator for testing without hardware
@@ -145,41 +157,48 @@ The simulator emulates FANUC RMI protocol with:
 
 ## Web Application
 
-Modern web-based control interface with real-time monitoring.
+Professional desktop-style web interface for robot control and program management.
 
 ### Features
-- 🎮 **Interactive Jog Controls**: 6-axis cartesian jogging (X, Y, Z)
-- 📊 **Real-time Position Display**: Live coordinates with sub-millimeter precision
-- 🔴 **Status Indicators**: Servo ready, TP mode, motion status
-- 📝 **Motion Log**: History of completed movements
-- 🎨 **Clean Dark UI**: Professional industrial control aesthetic
+- 🖥️ **Desktop Layout**: Left navbar, main workspace, right panel with always-visible essentials
+- 📁 **Program Management**: Create, upload CSV, save, and manage robot programs
+- ▶️ **Program Execution**: Run, pause, stop with real-time line-by-line progress
+- 🎮 **Jog Controls**: Docked or floating window with persistent settings
+- 📊 **Real-time Monitoring**: Position, status, errors, joint angles
+- 💾 **SQLite Database**: Persistent storage for programs and settings
+- 🎨 **Dark Futuristic UI**: Professional industrial control aesthetic
 
 ### Quick Start
 
-**Option 1: Using Trunk (Recommended)**
 ```bash
 # Terminal 1: Start simulator
-cargo run -p sim -- --realtime
+cargo run -p sim
 
 # Terminal 2: Start WebSocket server
 cargo run -p web_server
 
 # Terminal 3: Build and serve web app
-cd web_app && trunk serve --release
+cd web_app && trunk serve --open
 ```
 
-**Option 2: Manual Build**
-```bash
-# Build WASM
-cd web_app && trunk build --release
+Open browser to `http://localhost:8080`
 
-# Serve (any HTTP server)
-python3 -m http.server 8000 --directory dist
+### Program CSV Format
+
+Minimal format (x, y, z required):
+```csv
+x,y,z,speed
+100.0,200.0,300.0,50
+150.0,200.0,300.0,100
 ```
 
-Open browser to `http://localhost:8080` (trunk) or `http://localhost:8000` (manual)
+Full format (all optional except x, y, z):
+```csv
+x,y,z,w,p,r,ext1,ext2,ext3,speed,term_type,uframe,utool
+100.0,200.0,300.0,0.0,90.0,0.0,0.0,0.0,0.0,50,CNT,3,1
+```
 
-See [web_app/README.md](web_app/README.md) and [web_server/README.md](web_server/README.md) for details.
+See [Web Interface Implementation](docs/WEB_INTERFACE_IMPLEMENTATION.md) for details.
 
 ---
 
@@ -188,10 +207,10 @@ See [web_app/README.md](web_app/README.md) and [web_server/README.md](web_server
 📚 **[Complete Documentation](docs/README.md)**
 
 ### Key Documents
-- **[Sequence ID Migration Guide](docs/SEQUENCE_ID_MIGRATION_GUIDE.md)** - ⚠️ Required reading for v0.3.0+
-- **[Position Precision Fix](docs/POSITION_PRECISION_FIX.md)** - f32→f64 precision improvement
-- **[Robot Configuration](docs/ROBOT_CONFIGURATION.md)** - Supported robot models
+- **[Web Interface Implementation](docs/WEB_INTERFACE_IMPLEMENTATION.md)** - Web app architecture and features
+- **[Implementation Roadmap V2](docs/IMPLEMENTATION_ROADMAP_V2.md)** - Design specification
 - **[Protocol & DTO System](docs/architecture/protocol_dto_system.md)** - Architecture overview
+- **[RMI Commands Reference](docs/RMI_COMMANDS_REFERENCE.md)** - Protocol reference
 - **[Basic Usage Examples](docs/examples/basic_usage.md)** - Code examples
 
 ### API Documentation
