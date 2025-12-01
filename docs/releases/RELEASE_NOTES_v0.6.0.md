@@ -1,7 +1,7 @@
 # Release Notes v0.6.0 - Web Interface Overhaul
 
-**Release Date**: 2025-12-01  
-**Status**: ✅ Complete
+**Release Date**: 2025-12-01
+**Status**: ✅ Complete (Superseded by v0.7.0)
 
 ---
 
@@ -45,81 +45,8 @@ Major web interface overhaul with a professional desktop-style UI for robot cont
 
 ---
 
-## 🔧 Technical Details
-
-### Frontend (web_app)
-- Leptos 0.8.x with signal-based reactivity
-- leptos_router for view navigation
-- leptos-use for drag functionality
-- Tailwind CSS dark theme
-
-### Backend (web_server)
-- Axum async web server
-- SQLite with rusqlite
-- tokio-tungstenite WebSocket
-- bincode + serde_json serialization
-
----
-
-## 📁 File Structure
-
-```
-web_app/
-├── src/
-│   ├── lib.rs              # App entry point
-│   ├── websocket.rs        # WebSocket manager
-│   └── components/
-│       ├── jog_controls.rs
-│       ├── position_display.rs
-│       ├── robot_status.rs
-│       ├── error_log.rs
-│       └── layout/
-│           ├── mod.rs           # LayoutContext
-│           ├── left_navbar.rs
-│           ├── top_bar.rs
-│           ├── right_panel.rs
-│           └── main_workspace.rs
-
-web_server/
-├── src/
-│   ├── main.rs             # Server entry
-│   ├── api_handler.rs      # Request processing
-│   ├── api_types.rs        # ClientRequest/ServerResponse
-│   ├── database.rs         # SQLite operations
-│   ├── program_parser.rs   # CSV parsing
-│   └── program_executor.rs # Buffered execution
-```
-
----
-
-## 🚀 Running the Application
-
-```bash
-# Terminal 1: Start simulator
-cargo run -p sim -- --realtime
-
-# Terminal 2: Start web server
-cargo run -p web_server
-
-# Terminal 3: Build and serve frontend
-cd web_app && trunk serve --open
-```
-
-Open browser to `http://localhost:8080`
-
----
-
-## 📋 Known Limitations
-
-- Frame/Tool RMI commands not exposed in web API (available in library)
-- No responsive design for tablet/mobile
-- Programs are read-only after upload (no inline editing)
-
----
-
 ## 📚 Related Documentation
 
 - [Web Interface Implementation](../WEB_INTERFACE_IMPLEMENTATION.md)
-- [Implementation Roadmap V2](../IMPLEMENTATION_ROADMAP_V2.md)
-- [UI Design Mockup](../UI_DESIGN_MOCKUP.md)
+- [v0.7.0 Release Notes](RELEASE_NOTES_v0.7.0.md) - Latest version
 

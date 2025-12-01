@@ -17,7 +17,7 @@ use crate::components::layout::workspace::context::WorkspaceContext;
 #[component]
 pub fn DashboardView() -> impl IntoView {
     let _ctx = use_context::<WorkspaceContext>().expect("WorkspaceContext not found");
-    let (active_tab, set_active_tab) = signal("info".to_string());
+    let (active_tab, set_active_tab) = signal("control".to_string());
 
     view! {
         <div class="h-full flex flex-col">

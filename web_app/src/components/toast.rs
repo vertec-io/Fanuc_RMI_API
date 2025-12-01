@@ -11,7 +11,8 @@ pub fn ToastContainer() -> impl IntoView {
     let api_error = ws.api_error;
 
     view! {
-        <div class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+        // Position: bottom-left to avoid overlapping with jog controls (bottom-right)
+        <div class="fixed bottom-4 left-4 z-50 flex flex-col gap-2 max-w-sm">
             // Success/Info toast
             <Show when=move || api_message.get().is_some()>
                 <SuccessToast message=Signal::derive(move || api_message.get().unwrap_or_default()) />
