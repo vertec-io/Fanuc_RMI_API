@@ -413,6 +413,13 @@ pub fn execution_state_to_response(state: &crate::program_executor::ExecutionSta
             total_lines: None,
             message: None,
         },
+        ExecutionState::Loaded { program_id, total_lines } => ServerResponse::ExecutionStateChanged {
+            state: "loaded".to_string(),
+            program_id: Some(*program_id),
+            current_line: Some(0),
+            total_lines: Some(*total_lines),
+            message: None,
+        },
         ExecutionState::Running { program_id, total_lines, last_completed } => ServerResponse::ExecutionStateChanged {
             state: "running".to_string(),
             program_id: Some(*program_id),

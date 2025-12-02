@@ -29,14 +29,7 @@ use crate::RobotConnection;
 use fanuc_rmi::drivers::FanucDriver;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
-
-/// Type alias for the WebSocket sender
-pub type WsSender = Arc<Mutex<futures_util::stream::SplitSink<
-    tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-    Message
->>>;
 
 /// Check if the client has control of the robot.
 /// Returns Ok(()) if the client has control, or an error response if not.
@@ -77,7 +70,6 @@ pub async fn handle_request(
     db: Arc<Mutex<Database>>,
     driver: Option<Arc<FanucDriver>>,
     executor: Option<Arc<Mutex<ProgramExecutor>>>,
-    ws_sender: Option<WsSender>,
     robot_connection: Option<Arc<RwLock<RobotConnection>>>,
     client_manager: Option<Arc<ClientManager>>,
     client_id: Option<uuid::Uuid>,
@@ -110,11 +102,23 @@ pub async fn handle_request(
         ClientRequest::ResetDatabase => settings::reset_database(db).await,
 
         // Program execution (requires control)
+        ClientRequest::LoadProgram { program_id } => {
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
+            execution::load_program(db, executor, program_id, robot_connection, client_manager).await
+        }
+        ClientRequest::UnloadProgram => {
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
+            execution::unload_program(driver, executor, client_manager).await
+        }
         ClientRequest::StartProgram { program_id } => {
             if let Err(e) = require_control(&client_manager, client_id).await {
                 return e;
             }
-            execution::start_program(db, driver, executor, program_id, ws_sender, client_manager).await
+            execution::start_program(db, driver, executor, program_id, robot_connection, client_manager).await
         }
         ClientRequest::PauseProgram => {
             if let Err(e) = require_control(&client_manager, client_id).await {
@@ -141,12 +145,24 @@ pub async fn handle_request(
             connection::get_connection_status(robot_connection).await
         }
         ClientRequest::ConnectRobot { robot_addr, robot_port } => {
+            // Requires control - changes which robot the server is connected to
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
             connection::connect_robot(robot_connection, robot_addr, robot_port).await
         }
         ClientRequest::ConnectToSavedRobot { connection_id } => {
-            connection::connect_to_saved_robot(db, robot_connection, connection_id).await
+            // Requires control - changes which robot the server is connected to
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
+            connection::connect_to_saved_robot(db, robot_connection, client_manager, connection_id).await
         }
         ClientRequest::DisconnectRobot => {
+            // Requires control - disconnects the robot
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
             connection::disconnect_robot(robot_connection).await
         }
 
@@ -163,8 +179,18 @@ pub async fn handle_request(
         ClientRequest::UpdateRobotConnection { id, name, description, ip_address, port } => {
             robot_connections::update_robot_connection(db, id, &name, description.as_deref(), &ip_address, port).await
         }
-        ClientRequest::UpdateRobotConnectionDefaults { id, default_speed, default_term_type, default_uframe, default_utool, default_w, default_p, default_r } => {
-            robot_connections::update_robot_connection_defaults(db, id, default_speed, default_term_type.as_deref(), default_uframe, default_utool, default_w, default_p, default_r).await
+        ClientRequest::UpdateRobotConnectionDefaults {
+            id, default_speed, default_term_type, default_uframe, default_utool,
+            default_w, default_p, default_r,
+            default_front, default_up, default_left, default_flip,
+            default_turn4, default_turn5, default_turn6,
+        } => {
+            robot_connections::update_robot_connection_defaults(
+                db, id, default_speed, default_term_type.as_deref(), default_uframe, default_utool,
+                default_w, default_p, default_r,
+                default_front, default_up, default_left, default_flip,
+                default_turn4, default_turn5, default_turn6,
+            ).await
         }
         ClientRequest::DeleteRobotConnection { id } => {
             robot_connections::delete_robot_connection(db, id).await
@@ -179,7 +205,7 @@ pub async fn handle_request(
             if let Err(e) = require_control(&client_manager, client_id).await {
                 return e;
             }
-            frame_tool::set_active_frame_tool(robot_connection, uframe, utool).await
+            frame_tool::set_active_frame_tool(robot_connection, client_manager, uframe, utool).await
         }
         ClientRequest::ReadFrameData { frame_number } => {
             frame_tool::read_frame_data(robot_connection, frame_number).await

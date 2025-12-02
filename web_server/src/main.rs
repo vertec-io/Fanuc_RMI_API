@@ -30,6 +30,12 @@ pub struct RobotConnection {
     pub connected: bool,
     pub robot_addr: String,
     pub robot_port: u32,
+    /// Saved robot connection configuration from database (for defaults)
+    pub saved_connection: Option<database::RobotConnection>,
+    /// Currently active UFrame number on the robot
+    pub active_uframe: u8,
+    /// Currently active UTool number on the robot
+    pub active_utool: u8,
 }
 
 impl RobotConnection {
@@ -39,10 +45,21 @@ impl RobotConnection {
             connected: false,
             robot_addr,
             robot_port,
+            saved_connection: None,
+            active_uframe: 0,
+            active_utool: 1,
         }
     }
 
     pub async fn connect(&mut self) -> Result<(), String> {
+        // Disconnect from existing robot first if connected
+        if self.connected {
+            info!("Disconnecting from current robot before connecting to new one");
+            self.disconnect();
+            // Give the old connection time to clean up
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+
         let driver_config = FanucDriverConfig {
             addr: self.robot_addr.clone(),
             port: self.robot_port,
@@ -83,6 +100,11 @@ impl RobotConnection {
     }
 
     pub fn disconnect(&mut self) {
+        if let Some(ref driver) = self.driver {
+            info!("Disconnecting from robot at {}:{}", self.robot_addr, self.robot_port);
+            // The driver will clean up its connections when dropped
+            drop(driver.clone());
+        }
         self.driver = None;
         self.connected = false;
     }
@@ -136,44 +158,90 @@ async fn main() {
     let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(100);
     let broadcast_tx = Arc::new(broadcast_tx);
 
-    // Start response broadcast task (only if connected)
+    // Start response broadcast task - forwards robot responses to all WebSocket clients
     let robot_connection_clone = Arc::clone(&robot_connection);
     let broadcast_tx_clone = Arc::clone(&broadcast_tx);
     tokio::spawn(async move {
+        // Track which driver we're currently subscribed to (by its channel address)
+        let mut current_driver_id: Option<usize> = None;
+
         loop {
-            // Get driver if connected
+            // Get current driver
             let driver_opt = {
                 let conn = robot_connection_clone.read().await;
                 conn.driver.clone()
             };
 
             if let Some(driver) = driver_opt {
+                // Check if this is a different driver than we were subscribed to
+                let driver_id = Arc::as_ptr(&driver) as usize;
+
+                if current_driver_id != Some(driver_id) {
+                    // New driver - subscribe to its response channel
+                    info!("Subscribing to new robot driver response channel");
+                    current_driver_id = Some(driver_id);
+                }
+
                 let mut response_rx = driver.response_tx.subscribe();
-                // Broadcast until disconnected
+
+                // Broadcast responses, but periodically check if driver changed
                 loop {
-                    match response_rx.recv().await {
-                        Ok(response) => {
-                            let dto_response: dto::ResponsePacket = response.into();
-                            if let Ok(binary) = bincode::serialize(&dto_response) {
-                                let _ = broadcast_tx_clone.send(binary);
+                    // Use select to either receive a message or timeout to check for driver change
+                    tokio::select! {
+                        result = response_rx.recv() => {
+                            match result {
+                                Ok(response) => {
+                                    let dto_response: dto::ResponsePacket = response.into();
+                                    if let Ok(binary) = bincode::serialize(&dto_response) {
+                                        let _ = broadcast_tx_clone.send(binary);
+                                    }
+                                }
+                                Err(broadcast::error::RecvError::Closed) => {
+                                    warn!("Driver response channel closed - robot disconnected");
+                                    current_driver_id = None;
+                                    break;
+                                }
+                                Err(broadcast::error::RecvError::Lagged(n)) => {
+                                    warn!("Lagged {} messages", n);
+                                }
                             }
                         }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            warn!("Driver response channel closed - robot disconnected");
-                            break;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!("Lagged {} messages", n);
+                        _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
+                            // Periodically check if the driver has changed
+                            let new_driver_opt = {
+                                let conn = robot_connection_clone.read().await;
+                                conn.driver.clone()
+                            };
+
+                            match new_driver_opt {
+                                Some(new_driver) => {
+                                    let new_id = Arc::as_ptr(&new_driver) as usize;
+                                    if Some(new_id) != current_driver_id {
+                                        info!("Robot driver changed - resubscribing to new channel");
+                                        break; // Exit inner loop to resubscribe
+                                    }
+                                }
+                                None => {
+                                    info!("Robot driver disconnected");
+                                    current_driver_id = None;
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
-                // Mark as disconnected
-                let mut conn = robot_connection_clone.write().await;
-                conn.connected = false;
+
+                // Mark as disconnected if driver channel closed (not just switched)
+                if current_driver_id.is_none() {
+                    let mut conn = robot_connection_clone.write().await;
+                    conn.connected = false;
+                }
+            } else {
+                current_driver_id = None;
             }
 
             // Wait before trying again
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     });
 
@@ -293,6 +361,23 @@ async fn handle_connection(
             match msg {
                 Ok(Message::Binary(data)) => {
                     // Binary = Robot protocol (bincode-encoded DTO)
+                    // Requires control to send robot commands
+                    let has_control = client_manager_clone.has_control(client_id_for_recv).await;
+                    if !has_control {
+                        warn!("Client {} tried to send robot command without control", client_id_for_recv);
+                        // Send error response back to client
+                        let error_response = ServerResponse::Error {
+                            message: "You must have control to send robot commands. Request control first.".to_string(),
+                        };
+                        let error_json = serde_json::to_string(&error_response).unwrap_or_default();
+                        let mut sender = ws_sender_clone.lock().await;
+                        let _ = sender.send(Message::Text(error_json)).await;
+                        continue;
+                    }
+
+                    // Touch activity to reset control timeout
+                    client_manager_clone.touch_control(client_id_for_recv).await;
+
                     if let Ok(dto_packet) = bincode::deserialize::<dto::SendPacket>(&data) {
                         info!("Received robot command from client: {:?}", dto_packet);
                         let driver_opt = {
@@ -304,6 +389,13 @@ async fn handle_connection(
                             let _ = driver.send_packet(packet, PacketPriority::Standard);
                         } else {
                             warn!("Robot not connected - cannot send command");
+                            // Send error response back to client
+                            let error_response = ServerResponse::Error {
+                                message: "Robot not connected".to_string(),
+                            };
+                            let error_json = serde_json::to_string(&error_response).unwrap_or_default();
+                            let mut sender = ws_sender_clone.lock().await;
+                            let _ = sender.send(Message::Text(error_json)).await;
                         }
                     } else {
                         warn!("Failed to deserialize binary packet from client");
@@ -324,7 +416,6 @@ async fn handle_connection(
                                 Arc::clone(&db),
                                 driver_opt,
                                 Some(Arc::clone(&executor)),
-                                Some(Arc::clone(&ws_sender_clone)),
                                 Some(Arc::clone(&robot_connection_clone)),
                                 Some(Arc::clone(&client_manager_clone)),
                                 Some(client_id_for_recv),

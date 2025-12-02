@@ -26,6 +26,13 @@ pub async fn list_robot_connections(db: Arc<Mutex<Database>>) -> ServerResponse 
                 default_w: c.default_w,
                 default_p: c.default_p,
                 default_r: c.default_r,
+                default_front: c.default_front,
+                default_up: c.default_up,
+                default_left: c.default_left,
+                default_flip: c.default_flip,
+                default_turn4: c.default_turn4,
+                default_turn5: c.default_turn5,
+                default_turn6: c.default_turn6,
             }).collect();
             ServerResponse::RobotConnections { connections }
         }
@@ -52,6 +59,13 @@ pub async fn get_robot_connection(db: Arc<Mutex<Database>>, id: i64) -> ServerRe
                     default_w: c.default_w,
                     default_p: c.default_p,
                     default_r: c.default_r,
+                    default_front: c.default_front,
+                    default_up: c.default_up,
+                    default_left: c.default_left,
+                    default_flip: c.default_flip,
+                    default_turn4: c.default_turn4,
+                    default_turn5: c.default_turn5,
+                    default_turn6: c.default_turn6,
                 }
             }
         }
@@ -109,6 +123,13 @@ pub async fn update_robot_connection_defaults(
     default_w: Option<f64>,
     default_p: Option<f64>,
     default_r: Option<f64>,
+    default_front: Option<i32>,
+    default_up: Option<i32>,
+    default_left: Option<i32>,
+    default_flip: Option<i32>,
+    default_turn4: Option<i32>,
+    default_turn5: Option<i32>,
+    default_turn6: Option<i32>,
 ) -> ServerResponse {
     let db = db.lock().await;
     match db.update_robot_connection_defaults(
@@ -120,6 +141,13 @@ pub async fn update_robot_connection_defaults(
         default_w,
         default_p,
         default_r,
+        default_front,
+        default_up,
+        default_left,
+        default_flip,
+        default_turn4,
+        default_turn5,
+        default_turn6,
     ) {
         Ok(_) => {
             info!("Updated robot connection defaults for id={}", id);

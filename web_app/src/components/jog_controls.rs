@@ -13,19 +13,41 @@ pub fn JogControls() -> impl IntoView {
     let step_distance = layout_ctx.jog_step;
 
     let send_jog = move |dx: f64, dy: f64, dz: f64| {
+        // Get UFrame/UTool from server-synced active_frame_tool (set via Info tab)
+        // This is the authoritative value that reflects what the robot is actually using
+        let (u_frame, u_tool) = ws.active_frame_tool.get_untracked()
+            .unwrap_or((0, 1)); // Default: UFrame 0, UTool 1
+
+        // Get arm configuration from robot connection defaults
+        let active_conn = ws.get_active_connection();
+        let (front, up, left, flip, turn4, turn5, turn6) = if let Some(conn) = active_conn {
+            (
+                conn.default_front.unwrap_or(1) as u8,  // Default: Front
+                conn.default_up.unwrap_or(1) as u8,     // Default: Up
+                conn.default_left.unwrap_or(0) as u8,   // Default: Right
+                conn.default_flip.unwrap_or(0) as u8,   // Default: NoFlip
+                conn.default_turn4.unwrap_or(0) as u8,
+                conn.default_turn5.unwrap_or(0) as u8,
+                conn.default_turn6.unwrap_or(0) as u8,
+            )
+        } else {
+            // Fallback defaults when no robot connection is active
+            (1, 1, 0, 0, 0, 0, 0)
+        };
+
         let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(
             FrcLinearRelative {
                 sequence_id: 0, // Will be assigned by driver
                 configuration: Configuration {
-                    u_tool_number: 4, // Update to match your physical robot
-                    u_frame_number: 3, // Update to match your physical robot
-                    front: 1,
-                    up: 1,
-                    left: 0,
-                    flip: 0,
-                    turn4: 0,
-                    turn5: 0,
-                    turn6: 0,
+                    u_tool_number: u_tool,
+                    u_frame_number: u_frame,
+                    front,
+                    up,
+                    left,
+                    flip,
+                    turn4,
+                    turn5,
+                    turn6,
                 },
                 position: Position {
                     x: dx,

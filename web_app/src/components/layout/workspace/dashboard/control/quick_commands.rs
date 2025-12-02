@@ -14,13 +14,28 @@ pub fn QuickCommandsPanel() -> impl IntoView {
     // Local signal for slider value (synced with robot status when available)
     let (speed_override, set_speed_override) = signal(100u32);
 
+    // Track when user is actively changing the value (to prevent polling from overwriting)
+    let (user_editing, set_user_editing) = signal(false);
+    // Timestamp of last user edit (to debounce sync with robot status)
+    let (last_edit_time, set_last_edit_time) = signal(0.0f64);
+
     // Control lock state from WebSocketManager
     let has_control = ws.has_control;
 
-    // Sync with robot status when it changes
+    // Sync with robot status when it changes, but only if user isn't actively editing
+    // and enough time has passed since last edit (1000ms debounce)
     let status = ws.status;
     Effect::new(move |_| {
         if let Some(s) = status.get() {
+            // Don't overwrite if user is dragging the slider
+            if user_editing.get() {
+                return;
+            }
+            // Don't overwrite if user recently changed the value (give robot time to confirm)
+            let now = js_sys::Date::now();
+            if now - last_edit_time.get() < 1000.0 {
+                return;
+            }
             set_speed_override.set(s.speed_override);
         }
     });
@@ -28,6 +43,7 @@ pub fn QuickCommandsPanel() -> impl IntoView {
     // Send override command when slider changes
     let send_override = move |value: u32| {
         let clamped = value.min(100) as u8;
+        set_last_edit_time.set(js_sys::Date::now());
         ws.send_command(SendPacket::Command(Command::FrcSetOverRide(FrcSetOverRide { value: clamped })));
     };
 
@@ -126,12 +142,18 @@ pub fn QuickCommandsPanel() -> impl IntoView {
                         step="5"
                         class="w-20 h-1 bg-[#333] rounded-lg appearance-none cursor-pointer accent-[#00d9ff]"
                         prop:value=move || speed_override.get()
+                        on:mousedown=move |_| set_user_editing.set(true)
+                        on:touchstart=move |_| set_user_editing.set(true)
                         on:input=move |ev| {
+                            // Mark that user is interacting - prevents status polling from overwriting
+                            set_last_edit_time.set(js_sys::Date::now());
                             if let Ok(val) = event_target_value(&ev).parse::<u32>() {
                                 set_speed_override.set(val);
                             }
                         }
                         on:change=move |ev| {
+                            // User finished interacting - send the command
+                            set_user_editing.set(false);
                             if let Ok(val) = event_target_value(&ev).parse::<u32>() {
                                 send_override(val);
                             }

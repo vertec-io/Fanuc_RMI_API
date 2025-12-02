@@ -32,6 +32,14 @@ pub enum ClientRequest {
         start_position: Option<StartPosition>,
     },
 
+    /// Load a program into the executor (does not start execution)
+    #[serde(rename = "load_program")]
+    LoadProgram { program_id: i64 },
+
+    /// Unload the current program from the executor
+    #[serde(rename = "unload_program")]
+    UnloadProgram,
+
     #[serde(rename = "start_program")]
     StartProgram { program_id: i64 },
 
@@ -111,6 +119,14 @@ pub enum ClientRequest {
         default_w: Option<f64>,
         default_p: Option<f64>,
         default_r: Option<f64>,
+        // Robot arm configuration defaults
+        default_front: Option<i32>,
+        default_up: Option<i32>,
+        default_left: Option<i32>,
+        default_flip: Option<i32>,
+        default_turn4: Option<i32>,
+        default_turn5: Option<i32>,
+        default_turn6: Option<i32>,
     },
 
     #[serde(rename = "delete_robot_connection")]
@@ -396,6 +412,14 @@ pub struct RobotConnectionDto {
     pub default_w: Option<f64>,
     pub default_p: Option<f64>,
     pub default_r: Option<f64>,
+    // Robot arm configuration defaults
+    pub default_front: Option<i32>,
+    pub default_up: Option<i32>,
+    pub default_left: Option<i32>,
+    pub default_flip: Option<i32>,
+    pub default_turn4: Option<i32>,
+    pub default_turn5: Option<i32>,
+    pub default_turn6: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -502,6 +526,12 @@ pub struct WebSocketManager {
     // Program execution state
     pub program_running: ReadSignal<bool>,
     set_program_running: WriteSignal<bool>,
+    /// Program is paused
+    pub program_paused: ReadSignal<bool>,
+    set_program_paused: WriteSignal<bool>,
+    /// Currently loaded program ID (from server state)
+    pub loaded_program_id: ReadSignal<Option<i64>>,
+    set_loaded_program_id: WriteSignal<Option<i64>>,
     /// Program progress (completed_line, total_lines)
     pub program_progress: ReadSignal<Option<(usize, usize)>>,
     set_program_progress: WriteSignal<Option<(usize, usize)>>,
@@ -512,6 +542,9 @@ pub struct WebSocketManager {
     set_robot_connected: WriteSignal<bool>,
     pub robot_addr: ReadSignal<String>,
     set_robot_addr: WriteSignal<String>,
+    /// Name of the currently connected robot (from saved connection)
+    pub connected_robot_name: ReadSignal<Option<String>>,
+    set_connected_robot_name: WriteSignal<Option<String>>,
     // Saved robot connections
     pub robot_connections: ReadSignal<Vec<RobotConnectionDto>>,
     set_robot_connections: WriteSignal<Vec<RobotConnectionDto>>,
@@ -597,11 +630,14 @@ impl WebSocketManager {
         let (execution_status, set_execution_status) = signal(None);
         // Program execution state
         let (program_running, set_program_running) = signal(false);
+        let (program_paused, set_program_paused) = signal(false);
+        let (loaded_program_id, set_loaded_program_id) = signal::<Option<i64>>(None);
         let (program_progress, set_program_progress) = signal(None);
         let (executing_line, set_executing_line) = signal(None);
         // Robot connection status
         let (robot_connected, set_robot_connected) = signal(false);
         let (robot_addr, set_robot_addr) = signal("127.0.0.1:16001".to_string());
+        let (connected_robot_name, set_connected_robot_name) = signal::<Option<String>>(None);
         // Saved robot connections
         let (robot_connections, set_robot_connections) = signal(Vec::new());
         // Currently active/selected connection
@@ -652,6 +688,10 @@ impl WebSocketManager {
             set_execution_status,
             program_running,
             set_program_running,
+            program_paused,
+            set_program_paused,
+            loaded_program_id,
+            set_loaded_program_id,
             program_progress,
             set_program_progress,
             executing_line,
@@ -660,6 +700,8 @@ impl WebSocketManager {
             set_robot_connected,
             robot_addr,
             set_robot_addr,
+            connected_robot_name,
+            set_connected_robot_name,
             robot_connections,
             set_robot_connections,
             active_connection_id,
@@ -719,11 +761,15 @@ impl WebSocketManager {
         let set_api_error = self.set_api_error;
         let set_execution_status = self.set_execution_status;
         let set_program_running = self.set_program_running;
+        let set_program_paused = self.set_program_paused;
+        let set_loaded_program_id = self.set_loaded_program_id;
         let set_program_progress = self.set_program_progress;
         let set_executing_line = self.set_executing_line;
         let set_robot_connected = self.set_robot_connected;
         let set_robot_addr = self.set_robot_addr;
+        let set_connected_robot_name = self.set_connected_robot_name;
         let set_robot_connections = self.set_robot_connections;
+        let set_active_connection_id = self.set_active_connection_id;
         let set_active_frame_tool = self.set_active_frame_tool;
         let set_frame_data = self.set_frame_data;
         let set_tool_data = self.set_tool_data;
@@ -881,9 +927,14 @@ impl WebSocketManager {
                             log::info!("Robot connection status: connected={}, addr={}:{}", connected, robot_addr, robot_port);
                             set_robot_connected.set(connected);
                             set_robot_addr.set(format!("{}:{}", robot_addr, robot_port));
+                            // Clear connection name if disconnected
+                            if !connected {
+                                set_connected_robot_name.set(None);
+                                set_active_connection_id.set(None);
+                            }
                         }
                         ServerResponse::RobotConnected {
-                            connection_id: _,
+                            connection_id,
                             connection_name,
                             robot_addr,
                             robot_port,
@@ -901,6 +952,9 @@ impl WebSocketManager {
                                 effective_w, effective_p, effective_r);
                             set_robot_connected.set(true);
                             set_robot_addr.set(format!("{}:{}", robot_addr, robot_port));
+                            // Set the active connection ID and name
+                            set_active_connection_id.set(Some(connection_id));
+                            set_connected_robot_name.set(Some(connection_name.clone()));
                             // Update settings with effective values from the saved connection
                             set_settings.set(Some(RobotSettingsDto {
                                 default_w: effective_w,
@@ -976,16 +1030,32 @@ impl WebSocketManager {
                         }
                         ServerResponse::ExecutionStateChanged { state, program_id, current_line, total_lines, message } => {
                             log::info!("Execution state changed: {} (program={:?}, line={:?}/{:?})", state, program_id, current_line, total_lines);
+                            // Update loaded program ID if provided
+                            set_loaded_program_id.set(program_id);
                             // Update execution status based on broadcast state
                             match state.as_str() {
+                                "loaded" => {
+                                    // Program is loaded but not running yet
+                                    set_program_running.set(false);
+                                    set_program_paused.set(false);
+                                    if let (Some(line), Some(total)) = (current_line, total_lines) {
+                                        set_program_progress.set(Some((line, total)));
+                                    }
+                                    set_executing_line.set(Some(0));
+                                    if let Some(msg) = message {
+                                        set_api_message.set(Some(msg));
+                                    }
+                                }
                                 "running" => {
                                     set_program_running.set(true);
+                                    set_program_paused.set(false);
                                     if let (Some(line), Some(total)) = (current_line, total_lines) {
                                         set_program_progress.set(Some((line, total)));
                                     }
                                 }
                                 "paused" => {
-                                    // Keep program_running true but could add a paused signal
+                                    set_program_running.set(true); // Still running, just paused
+                                    set_program_paused.set(true);
                                     if let (Some(line), Some(total)) = (current_line, total_lines) {
                                         set_program_progress.set(Some((line, total)));
                                     }
@@ -995,6 +1065,7 @@ impl WebSocketManager {
                                 }
                                 "idle" | "completed" | "stopping" => {
                                     set_program_running.set(false);
+                                    set_program_paused.set(false);
                                     set_program_progress.set(None);
                                     set_executing_line.set(None);
                                     if let Some(msg) = message {
@@ -1003,6 +1074,7 @@ impl WebSocketManager {
                                 }
                                 "error" => {
                                     set_program_running.set(false);
+                                    set_program_paused.set(false);
                                     set_program_progress.set(None);
                                     set_executing_line.set(None);
                                     if let Some(msg) = message {
@@ -1062,6 +1134,24 @@ impl WebSocketManager {
         onerror_callback.forget();
 
         self.ws.set_value(Some(ws));
+
+        // Request initial state after connection is established
+        // Use a small delay to ensure the WebSocket is fully ready
+        let ws_ref = self.ws.get_value();
+        if let Some(ws) = ws_ref {
+            // Request robot connection status
+            if let Ok(json) = serde_json::to_string(&ClientRequest::GetConnectionStatus) {
+                let _ = ws.send_with_str(&json);
+            }
+            // Request control status
+            if let Ok(json) = serde_json::to_string(&ClientRequest::GetControlStatus) {
+                let _ = ws.send_with_str(&json);
+            }
+            // Request execution state (what program is loaded and running)
+            if let Ok(json) = serde_json::to_string(&ClientRequest::GetExecutionState) {
+                let _ = ws.send_with_str(&json);
+            }
+        }
     }
 
     /// Send a robot protocol command (binary/bincode)
@@ -1113,7 +1203,17 @@ impl WebSocketManager {
         });
     }
 
-    /// Start program execution
+    /// Load a program into the executor (without starting execution)
+    pub fn load_program(&self, program_id: i64) {
+        self.send_api_request(ClientRequest::LoadProgram { program_id });
+    }
+
+    /// Unload the current program from the executor
+    pub fn unload_program(&self) {
+        self.send_api_request(ClientRequest::UnloadProgram);
+    }
+
+    /// Start program execution (loads and starts)
     pub fn start_program(&self, program_id: i64) {
         self.send_api_request(ClientRequest::StartProgram { program_id });
     }
@@ -1294,6 +1394,13 @@ impl WebSocketManager {
         default_w: Option<f64>,
         default_p: Option<f64>,
         default_r: Option<f64>,
+        default_front: Option<i32>,
+        default_up: Option<i32>,
+        default_left: Option<i32>,
+        default_flip: Option<i32>,
+        default_turn4: Option<i32>,
+        default_turn5: Option<i32>,
+        default_turn6: Option<i32>,
     ) {
         self.send_api_request(ClientRequest::UpdateRobotConnectionDefaults {
             id,
@@ -1304,6 +1411,13 @@ impl WebSocketManager {
             default_w,
             default_p,
             default_r,
+            default_front,
+            default_up,
+            default_left,
+            default_flip,
+            default_turn4,
+            default_turn5,
+            default_turn6,
         });
     }
 
@@ -1473,6 +1587,13 @@ impl WebSocketManager {
     /// Get current control status
     pub fn get_control_status(&self) {
         self.send_api_request(ClientRequest::GetControlStatus);
+    }
+
+    /// Get the currently active robot connection (if any)
+    pub fn get_active_connection(&self) -> Option<RobotConnectionDto> {
+        let active_id = self.active_connection_id.get_untracked();
+        let connections = self.robot_connections.get_untracked();
+        active_id.and_then(|id| connections.into_iter().find(|c| c.id == id))
     }
 }
 

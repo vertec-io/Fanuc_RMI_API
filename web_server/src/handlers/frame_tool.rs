@@ -4,9 +4,10 @@
 //! on the FANUC robot controller.
 
 use crate::api_types::ServerResponse;
+use crate::session::ClientManager;
 use crate::RobotConnection;
 use fanuc_rmi::commands::{
-    FrcGetUFrameUTool, FrcReadUFrameData, FrcReadUToolData, FrcSetUFrameUTool,
+    FrcReadUFrameData, FrcReadUToolData, FrcSetUFrameUTool,
     FrcWriteUFrameData, FrcWriteUToolData,
 };
 use fanuc_rmi::packets::{Command, CommandResponse, ResponsePacket, SendPacket, PacketPriority};
@@ -16,6 +17,10 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 /// Get the currently active UFrame and UTool numbers.
+///
+/// Returns the server-side state (which is synchronized with the robot on connection
+/// and when changed via SetActiveFrameTool). This is faster than querying the robot
+/// and ensures all clients see consistent values.
 pub async fn get_active_frame_tool(
     robot_connection: Option<Arc<RwLock<RobotConnection>>>,
 ) -> ServerResponse {
@@ -26,59 +31,28 @@ pub async fn get_active_frame_tool(
     };
 
     let conn = conn.read().await;
-    let Some(ref driver) = conn.driver else {
+    if !conn.connected {
         return ServerResponse::Error {
             message: "Robot driver not initialized".to_string(),
         };
-    };
-
-    // Send FrcGetUFrameUTool command
-    let cmd = FrcGetUFrameUTool::new(None);
-    let packet = SendPacket::Command(Command::FrcGetUFrameUTool(cmd));
-
-    let mut response_rx = driver.response_tx.subscribe();
-    if let Err(e) = driver.send_packet(packet, PacketPriority::Standard) {
-        return ServerResponse::Error {
-            message: format!("Failed to send command: {}", e),
-        };
     }
 
-    // Wait for response
-    match tokio::time::timeout(Duration::from_secs(5), async {
-        while let Ok(response) = response_rx.recv().await {
-            if let ResponsePacket::CommandResponse(CommandResponse::FrcGetUFrameUTool(resp)) =
-                response
-            {
-                return Some(resp);
-            }
-        }
-        None
-    })
-    .await
-    {
-        Ok(Some(resp)) => {
-            if resp.error_id != 0 {
-                return ServerResponse::Error {
-                    message: format!("Robot error: {}", resp.error_id),
-                };
-            }
-            ServerResponse::ActiveFrameTool {
-                uframe: resp.u_frame_number,
-                utool: resp.u_tool_number,
-            }
-        }
-        Ok(None) => ServerResponse::Error {
-            message: "No response received".to_string(),
-        },
-        Err(_) => ServerResponse::Error {
-            message: "Timeout waiting for response".to_string(),
-        },
+    // Return server-side state (synchronized with robot on connection and changes)
+    ServerResponse::ActiveFrameTool {
+        uframe: conn.active_uframe,
+        utool: conn.active_utool,
     }
 }
 
 /// Set the active UFrame and UTool numbers.
+///
+/// This function:
+/// 1. Sends the command to the robot
+/// 2. Updates server-side state (active_uframe/active_utool)
+/// 3. Broadcasts the change to all connected clients
 pub async fn set_active_frame_tool(
     robot_connection: Option<Arc<RwLock<RobotConnection>>>,
+    client_manager: Option<Arc<ClientManager>>,
     uframe: u8,
     utool: u8,
 ) -> ServerResponse {
@@ -88,7 +62,8 @@ pub async fn set_active_frame_tool(
         };
     };
 
-    let conn = conn.read().await;
+    // Need write lock to update server state after success
+    let mut conn = conn.write().await;
     let Some(ref driver) = conn.driver else {
         return ServerResponse::Error {
             message: "Robot driver not initialized".to_string(),
@@ -125,9 +100,18 @@ pub async fn set_active_frame_tool(
                     message: format!("Robot error: {}", resp.error_id),
                 };
             }
-            ServerResponse::Success {
-                message: format!("Set UFrame={}, UTool={}", uframe, utool),
+
+            // Update server-side state
+            conn.active_uframe = uframe;
+            conn.active_utool = utool;
+
+            // Broadcast to all clients
+            let broadcast_response = ServerResponse::ActiveFrameTool { uframe, utool };
+            if let Some(ref client_manager) = client_manager {
+                client_manager.broadcast_all(&broadcast_response).await;
             }
+
+            broadcast_response
         }
         Ok(None) => ServerResponse::Error {
             message: "No response received".to_string(),

@@ -102,8 +102,12 @@ pub fn LoadProgramModal(on_close: impl Fn() + 'static + Clone) -> impl IntoView 
                         disabled=move || selected_id.get().is_none() || loading.get()
                         on:click=move |_| {
                             if let Some(id) = selected_id.get() {
-                                set_loading.set(true);
+                                // Send LoadProgram to server (requires control)
+                                // Server will broadcast ExecutionStateChanged with program_id
+                                ws.load_program(id);
+                                // Also fetch program details for local display
                                 ws.get_program(id);
+                                set_loading.set(true);
                             }
                         }
                     >
@@ -113,13 +117,13 @@ pub fn LoadProgramModal(on_close: impl Fn() + 'static + Clone) -> impl IntoView 
             </div>
         </div>
 
-        // Effect to handle program loaded
+        // Effect to handle program loaded - wait for program details to arrive
         {
             let on_close = on_close_clone.clone();
             Effect::new(move |_| {
                 if loading.get() {
                     if let Some(detail) = ws.current_program.get() {
-                        // Convert instructions to ProgramLine format
+                        // Convert instructions to ProgramLine format for local display
                         let lines: Vec<ProgramLine> = detail.instructions.iter().map(|i| {
                             ProgramLine {
                                 line_number: i.line_number as usize,

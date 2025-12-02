@@ -30,6 +30,15 @@ pub enum ClientRequest {
     },
 
     // Program Execution
+    /// Load a program into the executor (does not start execution)
+    #[serde(rename = "load_program")]
+    LoadProgram { program_id: i64 },
+
+    /// Unload the current program from the executor
+    #[serde(rename = "unload_program")]
+    UnloadProgram,
+
+    /// Start/resume execution of the loaded program
     #[serde(rename = "start_program")]
     StartProgram { program_id: i64 },
 
@@ -111,6 +120,14 @@ pub enum ClientRequest {
         default_w: Option<f64>,
         default_p: Option<f64>,
         default_r: Option<f64>,
+        // Robot arm configuration defaults
+        default_front: Option<i32>,
+        default_up: Option<i32>,
+        default_left: Option<i32>,
+        default_flip: Option<i32>,
+        default_turn4: Option<i32>,
+        default_turn5: Option<i32>,
+        default_turn6: Option<i32>,
     },
 
     #[serde(rename = "delete_robot_connection")]
@@ -452,6 +469,14 @@ pub struct RobotConnectionDto {
     pub default_w: Option<f64>,
     pub default_p: Option<f64>,
     pub default_r: Option<f64>,
+    // Robot arm configuration defaults
+    pub default_front: Option<i32>,
+    pub default_up: Option<i32>,
+    pub default_left: Option<i32>,
+    pub default_flip: Option<i32>,
+    pub default_turn4: Option<i32>,
+    pub default_turn5: Option<i32>,
+    pub default_turn6: Option<i32>,
 }
 
 /// I/O display configuration DTO.

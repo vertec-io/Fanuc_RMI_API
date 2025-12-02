@@ -119,6 +119,14 @@ pub async fn upload_csv(
         term_type: settings.default_term_type.clone(),
         uframe: Some(settings.default_uframe),
         utool: Some(settings.default_utool),
+        // Configuration defaults are not used during CSV parsing, only during execution
+        front: None,
+        up: None,
+        left: None,
+        flip: None,
+        turn4: None,
+        turn5: None,
+        turn6: None,
     };
 
     // Parse CSV

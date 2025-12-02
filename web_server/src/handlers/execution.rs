@@ -5,15 +5,12 @@
 use crate::api_types::ServerResponse;
 use crate::database::Database;
 use crate::program_executor::ProgramExecutor;
-use crate::handlers::WsSender;
 use crate::session::{ClientManager, execution_state_to_response};
 use fanuc_rmi::drivers::FanucDriver;
 use fanuc_rmi::packets::{PacketPriority, SendPacket, DriverCommand, SentInstructionInfo, ResponsePacket, Command};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, error, warn, debug};
-use futures_util::SinkExt;
-use tokio_tungstenite::tungstenite::Message;
 
 /// Pause program execution.
 ///
@@ -180,6 +177,89 @@ pub async fn get_execution_state(
     }
 }
 
+/// Load a program into the executor without starting execution.
+///
+/// Loads the program from the database into the executor's pending queue.
+/// The program is ready to run but won't start until start_program is called.
+/// Broadcasts the "loaded" state to all connected clients.
+pub async fn load_program(
+    db: Arc<Mutex<Database>>,
+    executor: Option<Arc<Mutex<ProgramExecutor>>>,
+    program_id: i64,
+    robot_connection: Option<Arc<tokio::sync::RwLock<crate::RobotConnection>>>,
+    client_manager: Option<Arc<ClientManager>>,
+) -> ServerResponse {
+    let executor = match executor {
+        Some(e) => e,
+        None => return ServerResponse::Error { message: "Executor not available".to_string() }
+    };
+
+    // Get robot connection defaults if available
+    let robot_defaults = if let Some(ref conn) = robot_connection {
+        let conn_guard = conn.read().await;
+        conn_guard.saved_connection.clone()
+    } else {
+        None
+    };
+
+    // Load program into executor
+    let state_response = {
+        let db_guard = db.lock().await;
+        let mut exec_guard = executor.lock().await;
+        if let Err(e) = exec_guard.load_program(&db_guard, program_id, robot_defaults.as_ref()) {
+            return ServerResponse::Error { message: format!("Failed to load program: {}", e) };
+        }
+        execution_state_to_response(&exec_guard.get_state())
+    };
+
+    info!("Loaded program {} into executor", program_id);
+
+    // Broadcast state change to all clients
+    if let Some(ref client_manager) = client_manager {
+        client_manager.broadcast_all(&state_response).await;
+    }
+
+    ServerResponse::Success { message: format!("Program {} loaded", program_id) }
+}
+
+/// Unload the current program from the executor.
+///
+/// Stops any running execution and clears the executor state.
+/// Broadcasts the "idle" state to all connected clients.
+pub async fn unload_program(
+    driver: Option<Arc<FanucDriver>>,
+    executor: Option<Arc<Mutex<ProgramExecutor>>>,
+    client_manager: Option<Arc<ClientManager>>,
+) -> ServerResponse {
+    // If program is running, stop it first
+    if let Some(ref driver) = driver {
+        // Send stop command to robot
+        let stop_packet = SendPacket::Command(Command::FrcAbort);
+        let _ = driver.send_packet(stop_packet, PacketPriority::High);
+
+        // Resume driver (in case it was paused)
+        let unpause = SendPacket::DriverCommand(DriverCommand::Unpause);
+        let _ = driver.send_packet(unpause, PacketPriority::High);
+    }
+
+    // Reset the executor
+    let state_response = if let Some(ref executor) = executor {
+        let mut exec_guard = executor.lock().await;
+        exec_guard.reset();
+        info!("Executor reset - program unloaded");
+        Some(execution_state_to_response(&exec_guard.get_state()))
+    } else {
+        None
+    };
+
+    // Broadcast state change to all clients
+    if let (Some(client_manager), Some(state_response)) = (&client_manager, state_response) {
+        client_manager.broadcast_all(&state_response).await;
+    }
+
+    ServerResponse::Success { message: "Program unloaded".to_string() }
+}
+
 /// Start program execution with buffered streaming.
 ///
 /// This sends instructions in batches of up to 5 (MAX_BUFFER), waiting for
@@ -191,7 +271,7 @@ pub async fn start_program(
     driver: Option<Arc<FanucDriver>>,
     executor: Option<Arc<Mutex<ProgramExecutor>>>,
     program_id: i64,
-    ws_sender: Option<WsSender>,
+    robot_connection: Option<Arc<tokio::sync::RwLock<crate::RobotConnection>>>,
     client_manager: Option<Arc<ClientManager>>,
 ) -> ServerResponse {
     let driver = match driver {
@@ -204,14 +284,22 @@ pub async fn start_program(
         None => return ServerResponse::Error { message: "Executor not available".to_string() }
     };
 
-    // Load program into executor
+    // Get robot connection defaults if available
+    let robot_defaults = if let Some(ref conn) = robot_connection {
+        let conn_guard = conn.read().await;
+        conn_guard.saved_connection.clone()
+    } else {
+        None
+    };
+
+    // Load program into executor, then start it
     let (total_instructions, state_response) = {
         let db_guard = db.lock().await;
         let mut exec_guard = executor.lock().await;
-        if let Err(e) = exec_guard.load_program(&db_guard, program_id) {
+        if let Err(e) = exec_guard.load_program(&db_guard, program_id, robot_defaults.as_ref()) {
             return ServerResponse::Error { message: format!("Failed to load program: {}", e) };
         }
-        exec_guard.start(program_id);
+        exec_guard.start(); // Transitions from Loaded to Running
         let total = exec_guard.total_instructions();
         let state = execution_state_to_response(&exec_guard.get_state());
         (total, state)
@@ -250,22 +338,19 @@ pub async fn start_program(
         }
     }
 
-    // Send first InstructionSent to UI
-    if let Some(ref ws_sender) = ws_sender {
+    // Send first InstructionSent to all clients
+    if let Some(ref client_manager) = client_manager {
         let sent_msg = ServerResponse::InstructionSent {
             current_line: 1,
             total_lines: total_instructions,
         };
-        if let Ok(json) = serde_json::to_string(&sent_msg) {
-            let mut sender = ws_sender.lock().await;
-            let _ = sender.send(Message::Text(json.into())).await;
-        }
+        client_manager.broadcast_all(&sent_msg).await;
     }
 
-    // Spawn buffered execution task
-    if let Some(ws_sender) = ws_sender {
+    // Spawn buffered execution task (broadcasts progress to all clients)
+    if let Some(client_manager) = client_manager {
         spawn_buffered_executor(
-            driver, executor, sent_rx, response_rx, ws_sender,
+            driver, executor, sent_rx, response_rx, client_manager,
             total_instructions, program_id,
         );
     }
@@ -281,14 +366,14 @@ pub async fn start_program(
 /// This task:
 /// 1. Maps request_ids to sequence_ids when SentInstructionInfo arrives
 /// 2. Handles instruction completions and sends more instructions
-/// 3. Sends progress updates to the client
+/// 3. Broadcasts progress updates to all connected clients
 /// 4. Handles completion/error states
 fn spawn_buffered_executor(
     driver: Arc<FanucDriver>,
     executor: Arc<Mutex<ProgramExecutor>>,
     mut sent_rx: tokio::sync::broadcast::Receiver<SentInstructionInfo>,
     mut response_rx: tokio::sync::broadcast::Receiver<ResponsePacket>,
-    ws_sender: WsSender,
+    client_manager: Arc<ClientManager>,
     total_instructions: usize,
     program_id: i64,
 ) {
@@ -331,22 +416,22 @@ fn spawn_buffered_executor(
                             if let Some(line) = completed_line {
                                 info!("📍 Line {} completed (seq_id {})", line, seq_id);
 
-                                // Send progress update
-                                send_progress_update(&ws_sender, line, total_instructions).await;
+                                // Broadcast progress update to all clients
+                                broadcast_progress_update(&client_manager, line, total_instructions).await;
 
                                 // Check for error
                                 if error_id != 0 {
                                     error!("Instruction {} failed with error {}", line, error_id);
                                     let mut exec_guard = executor.lock().await;
                                     exec_guard.reset();
-                                    send_error_completion(&ws_sender, program_id, line, error_id).await;
+                                    broadcast_error_completion(&client_manager, program_id, line, error_id).await;
                                     return;
                                 }
 
                                 // Check for completion
                                 if is_complete {
                                     info!("Program {} completed successfully", program_id);
-                                    send_success_completion(&ws_sender, program_id, total_instructions).await;
+                                    broadcast_success_completion(&client_manager, program_id, total_instructions).await;
                                     return;
                                 }
 
@@ -368,7 +453,7 @@ fn spawn_buffered_executor(
                                                 error!("Failed to send instruction {}: {}", line_number, e);
                                                 let mut exec_guard = executor.lock().await;
                                                 exec_guard.reset();
-                                                send_error_completion(&ws_sender, program_id, line_number, 999).await;
+                                                broadcast_error_completion(&client_manager, program_id, line_number, 999).await;
                                                 return;
                                             }
                                         }
@@ -401,56 +486,44 @@ fn spawn_buffered_executor(
         }
     });
 }
-/// Send a progress update to the client.
-async fn send_progress_update(ws_sender: &WsSender, current_line: usize, total_lines: usize) {
+/// Broadcast a progress update to all connected clients.
+async fn broadcast_progress_update(client_manager: &ClientManager, current_line: usize, total_lines: usize) {
     let progress = ServerResponse::InstructionProgress {
         current_line,
         total_lines,
     };
-    if let Ok(json) = serde_json::to_string(&progress) {
-        let mut sender = ws_sender.lock().await;
-        let _ = sender.send(Message::Text(json)).await;
-    }
+    client_manager.broadcast_all(&progress).await;
 
-    // Send InstructionSent for the next line
+    // Broadcast InstructionSent for the next line
     let next_line = current_line + 1;
     if next_line <= total_lines {
         let sent_msg = ServerResponse::InstructionSent {
             current_line: next_line,
             total_lines,
         };
-        if let Ok(json) = serde_json::to_string(&sent_msg) {
-            let mut sender = ws_sender.lock().await;
-            let _ = sender.send(Message::Text(json)).await;
-        }
+        client_manager.broadcast_all(&sent_msg).await;
     }
 }
 
-/// Send an error completion message.
-async fn send_error_completion(ws_sender: &WsSender, program_id: i64, line: usize, error_id: u32) {
+/// Broadcast an error completion message to all connected clients.
+async fn broadcast_error_completion(client_manager: &ClientManager, program_id: i64, line: usize, error_id: u32) {
     error!("Instruction {} failed with error {}", line, error_id);
     let response = ServerResponse::ProgramComplete {
         program_id,
         success: false,
         message: Some(format!("Error at line {}: error_id {}", line, error_id)),
     };
-    if let Ok(json) = serde_json::to_string(&response) {
-        let mut sender = ws_sender.lock().await;
-        let _ = sender.send(Message::Text(json)).await;
-    }
+    client_manager.broadcast_all(&response).await;
 }
 
-/// Send a success completion message.
-async fn send_success_completion(ws_sender: &WsSender, program_id: i64, total_instructions: usize) {
+/// Broadcast a success completion message to all connected clients.
+async fn broadcast_success_completion(client_manager: &ClientManager, program_id: i64, total_instructions: usize) {
     info!("Program {} completed successfully ({} instructions)", program_id, total_instructions);
     let response = ServerResponse::ProgramComplete {
         program_id,
         success: true,
         message: Some(format!("Completed {} instructions", total_instructions)),
     };
-    if let Ok(json) = serde_json::to_string(&response) {
-        let mut sender = ws_sender.lock().await;
-        let _ = sender.send(Message::Text(json)).await;
-    }
+    client_manager.broadcast_all(&response).await;
 }
 

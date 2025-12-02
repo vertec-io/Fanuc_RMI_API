@@ -627,7 +627,8 @@ async fn handle_secondary_client(
                             })
                         }
                         Some("FRC_SetOverRide") => {
-                            let override_val = request_json["Override"].as_u64().unwrap_or(100) as u8;
+                            // The struct uses "Value" field (serde rename)
+                            let override_val = request_json["Value"].as_u64().unwrap_or(100) as u8;
                             executor_control.set_speed_override(override_val);
                             println!("⚡ FRC_SetOverRide: {}%", override_val);
                             json!({

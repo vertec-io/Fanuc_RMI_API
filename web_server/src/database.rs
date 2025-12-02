@@ -86,6 +86,14 @@ pub struct RobotConnection {
     pub default_w: Option<f64>,
     pub default_p: Option<f64>,
     pub default_r: Option<f64>,
+    // Robot arm configuration defaults
+    pub default_front: Option<i32>,
+    pub default_up: Option<i32>,
+    pub default_left: Option<i32>,
+    pub default_flip: Option<i32>,
+    pub default_turn4: Option<i32>,
+    pub default_turn5: Option<i32>,
+    pub default_turn6: Option<i32>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -129,7 +137,55 @@ impl Database {
         let conn = Connection::open(path)?;
         let db = Self { conn };
         db.initialize_schema()?;
+        db.run_migrations()?;
         Ok(db)
+    }
+
+    /// Run database migrations to add columns that may be missing from older schemas.
+    fn run_migrations(&self) -> Result<()> {
+        // Migration: Add new columns to robot_connections if they don't exist
+        let columns_to_add = [
+            ("default_speed", "REAL"),
+            ("default_term_type", "TEXT"),
+            ("default_uframe", "INTEGER"),
+            ("default_utool", "INTEGER"),
+            ("default_w", "REAL"),
+            ("default_p", "REAL"),
+            ("default_r", "REAL"),
+            // Robot arm configuration defaults
+            ("default_front", "INTEGER"),
+            ("default_up", "INTEGER"),
+            ("default_left", "INTEGER"),
+            ("default_flip", "INTEGER"),
+            ("default_turn4", "INTEGER"),
+            ("default_turn5", "INTEGER"),
+            ("default_turn6", "INTEGER"),
+        ];
+
+        for (column_name, column_type) in columns_to_add {
+            // Check if column exists by trying to select it
+            let column_exists = self
+                .conn
+                .prepare(&format!(
+                    "SELECT {} FROM robot_connections LIMIT 1",
+                    column_name
+                ))
+                .is_ok();
+
+            if !column_exists {
+                // Add the column
+                self.conn.execute(
+                    &format!(
+                        "ALTER TABLE robot_connections ADD COLUMN {} {}",
+                        column_name, column_type
+                    ),
+                    [],
+                )?;
+                tracing::info!("Migration: Added column {} to robot_connections", column_name);
+            }
+        }
+
+        Ok(())
     }
 
     /// Initialize database schema.
@@ -468,7 +524,10 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, ip_address, port,
                     default_speed, default_term_type, default_uframe, default_utool,
-                    default_w, default_p, default_r, created_at, updated_at
+                    default_w, default_p, default_r,
+                    default_front, default_up, default_left, default_flip,
+                    default_turn4, default_turn5, default_turn6,
+                    created_at, updated_at
              FROM robot_connections WHERE id = ?1"
         )?;
 
@@ -487,8 +546,15 @@ impl Database {
                 default_w: row.get(9)?,
                 default_p: row.get(10)?,
                 default_r: row.get(11)?,
-                created_at: row.get(12)?,
-                updated_at: row.get(13)?,
+                default_front: row.get(12)?,
+                default_up: row.get(13)?,
+                default_left: row.get(14)?,
+                default_flip: row.get(15)?,
+                default_turn4: row.get(16)?,
+                default_turn5: row.get(17)?,
+                default_turn6: row.get(18)?,
+                created_at: row.get(19)?,
+                updated_at: row.get(20)?,
             }))
         } else {
             Ok(None)
@@ -500,7 +566,10 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, ip_address, port,
                     default_speed, default_term_type, default_uframe, default_utool,
-                    default_w, default_p, default_r, created_at, updated_at
+                    default_w, default_p, default_r,
+                    default_front, default_up, default_left, default_flip,
+                    default_turn4, default_turn5, default_turn6,
+                    created_at, updated_at
              FROM robot_connections ORDER BY name"
         )?;
 
@@ -518,8 +587,15 @@ impl Database {
                 default_w: row.get(9)?,
                 default_p: row.get(10)?,
                 default_r: row.get(11)?,
-                created_at: row.get(12)?,
-                updated_at: row.get(13)?,
+                default_front: row.get(12)?,
+                default_up: row.get(13)?,
+                default_left: row.get(14)?,
+                default_flip: row.get(15)?,
+                default_turn4: row.get(16)?,
+                default_turn5: row.get(17)?,
+                default_turn6: row.get(18)?,
+                created_at: row.get(19)?,
+                updated_at: row.get(20)?,
             })
         })?;
 
@@ -549,13 +625,29 @@ impl Database {
         default_w: Option<f64>,
         default_p: Option<f64>,
         default_r: Option<f64>,
+        default_front: Option<i32>,
+        default_up: Option<i32>,
+        default_left: Option<i32>,
+        default_flip: Option<i32>,
+        default_turn4: Option<i32>,
+        default_turn5: Option<i32>,
+        default_turn6: Option<i32>,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE robot_connections SET
                 default_speed = ?1, default_term_type = ?2, default_uframe = ?3, default_utool = ?4,
-                default_w = ?5, default_p = ?6, default_r = ?7, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?8",
-            params![default_speed, default_term_type, default_uframe, default_utool, default_w, default_p, default_r, id],
+                default_w = ?5, default_p = ?6, default_r = ?7,
+                default_front = ?8, default_up = ?9, default_left = ?10, default_flip = ?11,
+                default_turn4 = ?12, default_turn5 = ?13, default_turn6 = ?14,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?15",
+            params![
+                default_speed, default_term_type, default_uframe, default_utool,
+                default_w, default_p, default_r,
+                default_front, default_up, default_left, default_flip,
+                default_turn4, default_turn5, default_turn6,
+                id
+            ],
         )?;
         Ok(())
     }

@@ -19,16 +19,85 @@ pub fn ProgramVisualDisplay() -> impl IntoView {
     let is_paused = ctx.program_paused;
     let (show_load_modal, set_show_load_modal) = signal(false);
 
+    // Request execution state when WebSocket connects (for new clients or reconnection)
+    Effect::new(move |_| {
+        if ws.connected.get() {
+            // Request current execution state from server
+            ws.get_execution_state();
+        }
+    });
+
+    // Sync loaded program ID from server - server is the source of truth
+    // When server broadcasts a program is loaded/unloaded, update local context
+    Effect::new(move |_| {
+        let ws_program_id = ws.loaded_program_id.get();
+        let local_program_id = ctx.loaded_program_id.get();
+
+        if ws_program_id != local_program_id {
+            match ws_program_id {
+                Some(id) => {
+                    // A program was loaded on the server - fetch its details
+                    ctx.loaded_program_id.set(Some(id));
+                    ws.get_program(id);
+                }
+                None => {
+                    // Program was unloaded from server - clear local state
+                    ctx.loaded_program_id.set(None);
+                    ctx.loaded_program_name.set(None);
+                    ctx.program_lines.set(Vec::new());
+                    ctx.executing_line.set(-1);
+                    ctx.program_running.set(false);
+                    ctx.program_paused.set(false);
+                }
+            }
+        }
+    });
+
+    // Sync current_program details to local state when fetched
+    Effect::new(move |_| {
+        if let Some(detail) = ws.current_program.get() {
+            // Only update if this is the loaded program
+            if ctx.loaded_program_id.get() == Some(detail.id) {
+                // Convert instructions to ProgramLine format
+                let lines: Vec<ProgramLine> = detail.instructions.iter().map(|i| {
+                    ProgramLine {
+                        line_number: i.line_number as usize,
+                        x: i.x,
+                        y: i.y,
+                        z: i.z,
+                        w: i.w.unwrap_or(0.0),
+                        p: i.p.unwrap_or(0.0),
+                        r: i.r.unwrap_or(0.0),
+                        speed: i.speed.unwrap_or(100.0),
+                        term_type: i.term_type.clone().unwrap_or_else(|| "CNT".to_string()),
+                    }
+                }).collect();
+
+                ctx.program_lines.set(lines);
+                ctx.loaded_program_name.set(Some(detail.name.clone()));
+            }
+        }
+    });
+
     // Sync WebSocket program_running state with context
+    // Server is the source of truth - only update context from server state
     Effect::new(move |_| {
         let ws_running = ws.program_running.get();
         if is_running.get() != ws_running {
             ctx.program_running.set(ws_running);
             if !ws_running {
-                // Program completed - reset paused state and executing line
-                ctx.program_paused.set(false);
+                // Program completed/stopped - reset executing line
                 ctx.executing_line.set(-1);
             }
+        }
+    });
+
+    // Sync WebSocket program_paused state with context
+    // Server is the source of truth - UI only changes when server confirms
+    Effect::new(move |_| {
+        let ws_paused = ws.program_paused.get();
+        if is_paused.get() != ws_paused {
+            ctx.program_paused.set(ws_paused);
         }
     });
 
@@ -72,9 +141,8 @@ pub fn ProgramVisualDisplay() -> impl IntoView {
                                 class="bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] text-[8px] px-2 py-0.5 rounded hover:bg-[#22c55e30]"
                                 on:click=move |_| {
                                     if let Some(id) = loaded_id.get() {
+                                        // Send request - server will broadcast state change
                                         ws.start_program(id);
-                                        ctx.program_running.set(true);
-                                        ctx.program_paused.set(false);
                                     }
                                 }
                             >
@@ -89,8 +157,8 @@ pub fn ProgramVisualDisplay() -> impl IntoView {
                                         <button
                                             class="bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] text-[8px] px-2 py-0.5 rounded hover:bg-[#22c55e30]"
                                             on:click=move |_| {
+                                                // Send request - server will broadcast state change if control check passes
                                                 ws.resume_program();
-                                                ctx.program_paused.set(false);
                                             }
                                         >
                                             "▶ Resume"
@@ -101,8 +169,8 @@ pub fn ProgramVisualDisplay() -> impl IntoView {
                                         <button
                                             class="bg-[#f59e0b20] border border-[#f59e0b40] text-[#f59e0b] text-[8px] px-2 py-0.5 rounded hover:bg-[#f59e0b30]"
                                             on:click=move |_| {
+                                                // Send request - server will broadcast state change if control check passes
                                                 ws.pause_program();
-                                                ctx.program_paused.set(true);
                                             }
                                         >
                                             "⏸ Pause"
@@ -116,10 +184,8 @@ pub fn ProgramVisualDisplay() -> impl IntoView {
                             <button
                                 class="bg-[#ff444420] border border-[#ff444440] text-[#ff4444] text-[8px] px-2 py-0.5 rounded hover:bg-[#ff444430]"
                                 on:click=move |_| {
+                                    // Send request - server will broadcast state change if control check passes
                                     ws.stop_program();
-                                    ctx.program_running.set(false);
-                                    ctx.program_paused.set(false);
-                                    ctx.executing_line.set(-1);
                                 }
                             >
                                 "■ Stop"
@@ -131,15 +197,11 @@ pub fn ProgramVisualDisplay() -> impl IntoView {
                         <button
                             class="bg-[#ff444420] border border-[#ff444440] text-[#ff4444] text-[8px] px-2 py-0.5 rounded hover:bg-[#ff444430] flex items-center gap-1"
                             on:click=move |_| {
-                                ws.stop_program();
-                                ctx.program_lines.set(Vec::new());
-                                ctx.loaded_program_name.set(None);
-                                ctx.loaded_program_id.set(None);
-                                ctx.executing_line.set(-1);
-                                ctx.program_running.set(false);
-                                ctx.program_paused.set(false);
+                                // Send UnloadProgram to server (requires control)
+                                // Server will broadcast ExecutionStateChanged with idle state and program_id=None
+                                ws.unload_program();
                             }
-                            title="Unload program from dashboard"
+                            title="Unload program from robot"
                         >
                             <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>

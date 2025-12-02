@@ -52,6 +52,14 @@ pub struct ProgramDefaults {
     pub term_type: String,
     pub uframe: Option<i32>,
     pub utool: Option<i32>,
+    // Robot arm configuration defaults
+    pub front: Option<i32>,
+    pub up: Option<i32>,
+    pub left: Option<i32>,
+    pub flip: Option<i32>,
+    pub turn4: Option<i32>,
+    pub turn5: Option<i32>,
+    pub turn6: Option<i32>,
 }
 
 impl Default for ProgramDefaults {
@@ -67,6 +75,14 @@ impl Default for ProgramDefaults {
             term_type: "CNT".to_string(),
             uframe: None,
             utool: None,
+            // Robot arm configuration defaults (None = use robot defaults)
+            front: None,
+            up: None,
+            left: None,
+            flip: None,
+            turn4: None,
+            turn5: None,
+            turn6: None,
         }
     }
 }

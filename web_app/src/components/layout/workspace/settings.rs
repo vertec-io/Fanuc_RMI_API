@@ -1,1021 +1,288 @@
 //! Settings module - Robot and connection configuration.
 //!
-//! This module contains components for:
-//! - Connection settings (IP addresses, ports)
-//! - Saved robot connections management
-//! - Motion defaults (speed, termination, frame/tool)
-//! - Default rotation values
-//! - Display preferences
+//! This module uses a two-panel layout similar to the Program browser:
+//! - Left sidebar: Robot browser (list of saved robots) + System Settings
+//! - Right panel: Robot-specific settings for the selected robot
+//!
+//! Settings are organized into:
+//! - System Settings: WebSocket server URL, display preferences
+//! - Robot Settings: Per-robot motion defaults, orientation, I/O config
 
 use leptos::prelude::*;
 use crate::websocket::WebSocketManager;
 
-/// Settings view.
+/// Settings view with two-panel layout.
 #[component]
 pub fn SettingsView() -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
 
-    let (settings_changed, set_settings_changed) = signal(false);
-    let (save_status, set_save_status) = signal::<Option<String>>(None);
+    // Selected robot for editing
+    let (selected_robot_id, set_selected_robot_id) = signal::<Option<i64>>(None);
 
-    // Connection settings (local only, not persisted to database)
-    let (robot_ip, set_robot_ip) = signal("127.0.0.1".to_string());
-    let (web_server_ip, set_web_server_ip) = signal("127.0.0.1".to_string());
-    let (ws_port, set_ws_port) = signal("9000".to_string());
-    let (rmi_port, set_rmi_port) = signal("16001".to_string());
+    // Modal states
+    let (show_add_robot, set_show_add_robot) = signal(false);
+    let (show_delete_confirm, set_show_delete_confirm) = signal(false);
+    let (robot_to_delete, set_robot_to_delete) = signal::<Option<(i64, String)>>(None);
 
-    // Robot defaults (synced with database)
-    let (default_speed, set_default_speed) = signal(50.0f64);
-    let (default_term, set_default_term) = signal("CNT".to_string());
-    let (default_uframe, set_default_uframe) = signal(0i32);
-    let (default_utool, set_default_utool) = signal(0i32);
-
-    // Default rotation (W, P, R)
-    let (default_w, set_default_w) = signal(0.0f64);
-    let (default_p, set_default_p) = signal(0.0f64);
-    let (default_r, set_default_r) = signal(0.0f64);
-
-    // Display preferences (local only)
-    let (show_mm, set_show_mm) = signal(true);
-    let (show_degrees, set_show_degrees) = signal(true);
-    let (compact_mode, set_compact_mode) = signal(false);
-
-    // Saved robot connections management
-    let (show_add_connection, set_show_add_connection) = signal(false);
-    let (editing_connection_id, set_editing_connection_id) = signal::<Option<i64>>(None);
-    let (new_conn_name, set_new_conn_name) = signal(String::new());
-    let (new_conn_desc, set_new_conn_desc) = signal(String::new());
-    let (new_conn_ip, set_new_conn_ip) = signal("127.0.0.1".to_string());
-    let (new_conn_port, set_new_conn_port) = signal("16001".to_string());
+    // New robot form fields
+    let (new_robot_name, set_new_robot_name) = signal(String::new());
+    let (new_robot_desc, set_new_robot_desc) = signal(String::new());
+    let (new_robot_ip, set_new_robot_ip) = signal("127.0.0.1".to_string());
+    let (new_robot_port, set_new_robot_port) = signal("16001".to_string());
 
     let saved_connections = ws.robot_connections;
 
-    // Load settings on mount
+    // Load robot connections on mount
     Effect::new(move |_| {
-        ws.get_settings();
         ws.list_robot_connections();
     });
 
-    // Update local state when settings are received from server
-    Effect::new(move |_| {
-        if let Some(settings) = ws.settings.get() {
-            set_default_speed.set(settings.default_speed);
-            set_default_term.set(settings.default_term_type.clone());
-            set_default_uframe.set(settings.default_uframe);
-            set_default_utool.set(settings.default_utool);
-            set_default_w.set(settings.default_w);
-            set_default_p.set(settings.default_p);
-            set_default_r.set(settings.default_r);
-            set_settings_changed.set(false);
-        }
-    });
+    // Get selected robot details (using a derived signal instead of Memo since RobotConnectionDto doesn't impl PartialEq)
+    let selected_robot = move || {
+        let id = selected_robot_id.get()?;
+        saved_connections.get().into_iter().find(|r| r.id == id)
+    };
 
     view! {
-        <div class="h-full p-2 flex flex-col gap-2">
-            // Header with save button
-            <SettingsHeader
-                settings_changed=settings_changed
-                set_settings_changed=set_settings_changed
-                save_status=save_status
-                set_save_status=set_save_status
-                default_w=default_w
-                default_p=default_p
-                default_r=default_r
-                default_speed=default_speed
-                default_term=default_term
-                default_uframe=default_uframe
-                default_utool=default_utool
-                set_robot_ip=set_robot_ip
-                set_web_server_ip=set_web_server_ip
-                set_ws_port=set_ws_port
-                set_rmi_port=set_rmi_port
-                set_default_speed=set_default_speed
-                set_default_term=set_default_term
-                set_default_uframe=set_default_uframe
-                set_default_utool=set_default_utool
-                set_default_w=set_default_w
-                set_default_p=set_default_p
-                set_default_r=set_default_r
-            />
-
-            // Settings grid
-            <div class="flex-1 overflow-auto">
-                <div class="grid grid-cols-2 gap-2">
-                    // Connection settings
-                    <ConnectionSettingsPanel
-                        robot_ip=robot_ip
-                        set_robot_ip=set_robot_ip
-                        web_server_ip=web_server_ip
-                        set_web_server_ip=set_web_server_ip
-                        ws_port=ws_port
-                        set_ws_port=set_ws_port
-                        rmi_port=rmi_port
-                        set_rmi_port=set_rmi_port
-                        set_settings_changed=set_settings_changed
-                    />
-
-                    // Saved Robot Connections
-                    <SavedConnectionsPanel
-                        saved_connections=saved_connections
-                        show_add_connection=show_add_connection
-                        set_show_add_connection=set_show_add_connection
-                        editing_connection_id=editing_connection_id
-                        set_editing_connection_id=set_editing_connection_id
-                        new_conn_name=new_conn_name
-                        set_new_conn_name=set_new_conn_name
-                        new_conn_desc=new_conn_desc
-                        set_new_conn_desc=set_new_conn_desc
-                        new_conn_ip=new_conn_ip
-                        set_new_conn_ip=set_new_conn_ip
-                        new_conn_port=new_conn_port
-                        set_new_conn_port=set_new_conn_port
-                    />
-
-                    // Robot defaults
-                    <MotionDefaultsPanel
-                        default_speed=default_speed
-                        set_default_speed=set_default_speed
-                        default_term=default_term
-                        set_default_term=set_default_term
-                        default_uframe=default_uframe
-                        set_default_uframe=set_default_uframe
-                        default_utool=default_utool
-                        set_default_utool=set_default_utool
-                        set_settings_changed=set_settings_changed
-                    />
-
-                    // Default rotation
-                    <DefaultRotationPanel
-                        default_w=default_w
-                        set_default_w=set_default_w
-                        default_p=default_p
-                        set_default_p=set_default_p
-                        default_r=default_r
-                        set_default_r=set_default_r
-                        set_settings_changed=set_settings_changed
-                    />
-
-                    // Display preferences
-                    <DisplayPreferencesPanel
-                        show_mm=show_mm
-                        set_show_mm=set_show_mm
-                        show_degrees=show_degrees
-                        set_show_degrees=set_show_degrees
-                        compact_mode=compact_mode
-                        set_compact_mode=set_compact_mode
-                        set_settings_changed=set_settings_changed
-                    />
-
-                    // About / Info panel
-                    <AboutPanel />
-
-                    // Danger Zone panel
-                    <DangerZonePanel />
-                </div>
+        <div class="h-full flex flex-col">
+            // Header
+            <div class="h-8 border-b border-[#ffffff08] flex items-center px-3 shrink-0 bg-[#0d0d0d]">
+                <h2 class="text-[11px] font-semibold text-white flex items-center">
+                    <svg class="w-3.5 h-3.5 mr-1.5 text-[#00d9ff]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                    "Settings"
+                </h2>
             </div>
+
+            // Main content - two panel layout
+            <div class="flex-1 p-2 flex gap-2 min-h-0">
+                // Left sidebar: Robot browser + System settings
+                <RobotBrowser
+                    saved_connections=saved_connections
+                    selected_robot_id=selected_robot_id
+                    set_selected_robot_id=set_selected_robot_id
+                    set_show_add_robot=set_show_add_robot
+                    set_show_delete_confirm=set_show_delete_confirm
+                    set_robot_to_delete=set_robot_to_delete
+                />
+
+                // Right panel: Robot settings (or empty state)
+                <RobotSettingsPanel
+                    selected_robot=selected_robot
+                    selected_robot_id=selected_robot_id
+                />
+            </div>
+
+            // Add Robot Modal
+            <Show when=move || show_add_robot.get()>
+                <AddRobotModal
+                    new_robot_name=new_robot_name
+                    set_new_robot_name=set_new_robot_name
+                    new_robot_desc=new_robot_desc
+                    set_new_robot_desc=set_new_robot_desc
+                    new_robot_ip=new_robot_ip
+                    set_new_robot_ip=set_new_robot_ip
+                    new_robot_port=new_robot_port
+                    set_new_robot_port=set_new_robot_port
+                    on_close=move || set_show_add_robot.set(false)
+                    on_created=move |id| {
+                        set_show_add_robot.set(false);
+                        set_selected_robot_id.set(Some(id));
+                    }
+                />
+            </Show>
+
+            // Delete Confirmation Modal
+            <Show when=move || show_delete_confirm.get()>
+                <DeleteConfirmModal
+                    robot_to_delete=robot_to_delete
+                    set_show_delete_confirm=set_show_delete_confirm
+                    set_robot_to_delete=set_robot_to_delete
+                    set_selected_robot_id=set_selected_robot_id
+                    selected_robot_id=selected_robot_id
+                />
+            </Show>
         </div>
     }
 }
 
-/// Settings header with save/reset buttons
+/// Left sidebar: Robot browser with list of saved robots + System Settings
 #[component]
-fn SettingsHeader(
-    settings_changed: ReadSignal<bool>,
-    set_settings_changed: WriteSignal<bool>,
-    save_status: ReadSignal<Option<String>>,
-    set_save_status: WriteSignal<Option<String>>,
-    default_w: ReadSignal<f64>,
-    default_p: ReadSignal<f64>,
-    default_r: ReadSignal<f64>,
-    default_speed: ReadSignal<f64>,
-    default_term: ReadSignal<String>,
-    default_uframe: ReadSignal<i32>,
-    default_utool: ReadSignal<i32>,
-    set_robot_ip: WriteSignal<String>,
-    set_web_server_ip: WriteSignal<String>,
-    set_ws_port: WriteSignal<String>,
-    set_rmi_port: WriteSignal<String>,
-    set_default_speed: WriteSignal<f64>,
-    set_default_term: WriteSignal<String>,
-    set_default_uframe: WriteSignal<i32>,
-    set_default_utool: WriteSignal<i32>,
-    set_default_w: WriteSignal<f64>,
-    set_default_p: WriteSignal<f64>,
-    set_default_r: WriteSignal<f64>,
+fn RobotBrowser(
+    saved_connections: ReadSignal<Vec<crate::websocket::RobotConnectionDto>>,
+    selected_robot_id: ReadSignal<Option<i64>>,
+    set_selected_robot_id: WriteSignal<Option<i64>>,
+    set_show_add_robot: WriteSignal<bool>,
+    set_show_delete_confirm: WriteSignal<bool>,
+    set_robot_to_delete: WriteSignal<Option<(i64, String)>>,
 ) -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
 
     view! {
-        <div class="flex items-center justify-between bg-[#0a0a0a] rounded border border-[#ffffff08] p-2">
-            <h2 class="text-xs font-semibold text-white flex items-center">
-                <svg class="w-3.5 h-3.5 mr-1.5 text-[#00d9ff]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div class="w-64 flex flex-col gap-2 shrink-0">
+            // Robot Connections section
+            <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] flex flex-col flex-1 min-h-0">
+                <div class="flex items-center justify-between p-2 border-b border-[#ffffff08]">
+                    <h3 class="text-[10px] font-semibold text-[#00d9ff] uppercase tracking-wide flex items-center">
+                        <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+                        </svg>
+                        "Robot Connections"
+                    </h3>
+                    <button
+                        class="text-[8px] px-2 py-0.5 bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] rounded hover:bg-[#22c55e30]"
+                        on:click=move |_| set_show_add_robot.set(true)
+                    >
+                        "+ Add"
+                    </button>
+                </div>
+
+                // Robot list
+                <div class="flex-1 overflow-y-auto p-1.5 space-y-1">
+                    <For
+                        each=move || saved_connections.get()
+                        key=|conn| conn.id
+                        children=move |conn| {
+                            let conn_id = conn.id;
+                            let conn_name = conn.name.clone();
+                            let conn_name_for_delete = conn.name.clone();
+                            let conn_ip = conn.ip_address.clone();
+                            let conn_port = conn.port;
+                            let has_defaults = conn.default_speed.is_some()
+                                || conn.default_term_type.is_some()
+                                || conn.default_uframe.is_some()
+                                || conn.default_utool.is_some();
+
+                            view! {
+                                <div
+                                    class=move || format!(
+                                        "p-2 rounded border cursor-pointer transition-colors {}",
+                                        if selected_robot_id.get() == Some(conn_id) {
+                                            "bg-[#00d9ff10] border-[#00d9ff40]"
+                                        } else {
+                                            "bg-[#111111] border-[#ffffff08] hover:border-[#ffffff15]"
+                                        }
+                                    )
+                                    on:click=move |_| set_selected_robot_id.set(Some(conn_id))
+                                >
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex-1 min-w-0">
+                                            <div class="text-[9px] text-white font-medium truncate flex items-center gap-1">
+                                                {conn_name.clone()}
+                                                {if has_defaults {
+                                                    view! { <span class="text-[7px] text-[#00d9ff]" title="Has custom defaults">"⚙"</span> }.into_any()
+                                                } else {
+                                                    view! { <span></span> }.into_any()
+                                                }}
+                                            </div>
+                                            <div class="text-[8px] text-[#666666] font-mono">{format!("{}:{}", conn_ip, conn_port)}</div>
+                                        </div>
+                                        <div class="flex gap-1 ml-2">
+                                            <button
+                                                class="text-[8px] px-1.5 py-0.5 text-[#22c55e] hover:bg-[#22c55e10] rounded font-medium"
+                                                title="Connect"
+                                                on:click=move |ev| {
+                                                    ev.stop_propagation();
+                                                    ws.connect_to_saved_robot(conn_id);
+                                                }
+                                            >
+                                                "▶"
+                                            </button>
+                                            <button
+                                                class="text-[8px] px-1.5 py-0.5 text-[#ff4444] hover:bg-[#ff444410] rounded"
+                                                title="Delete"
+                                                on:click=move |ev| {
+                                                    ev.stop_propagation();
+                                                    set_robot_to_delete.set(Some((conn_id, conn_name_for_delete.clone())));
+                                                    set_show_delete_confirm.set(true);
+                                                }
+                                            >
+                                                "×"
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        }
+                    />
+                    {move || if saved_connections.get().is_empty() {
+                        view! {
+                            <div class="text-[8px] text-[#555555] text-center py-4">
+                                "No saved robots"<br/>
+                                "Click + Add to create one"
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! { <div></div> }.into_any()
+                    }}
+                </div>
+            </div>
+
+            // System Settings section
+            <SystemSettingsPanel />
+        </div>
+    }
+}
+
+/// System settings panel (global settings not tied to any robot)
+#[component]
+fn SystemSettingsPanel() -> impl IntoView {
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
+    let (confirm_reset, set_confirm_reset) = signal(false);
+
+    view! {
+        <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-2">
+            <h3 class="text-[10px] font-semibold text-[#888888] mb-2 uppercase tracking-wide flex items-center">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
                 </svg>
-                "Settings"
-            </h2>
-            <div class="flex items-center gap-2">
-                {move || save_status.get().map(|s| view! {
-                    <span class="text-[9px] text-[#22c55e]">{s}</span>
-                })}
-                <button
-                    class={move || format!(
-                        "text-[9px] px-3 py-1 rounded transition-colors {}",
-                        if settings_changed.get() {
-                            "bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] hover:bg-[#22c55e30]"
-                        } else {
-                            "bg-[#111111] border border-[#ffffff08] text-[#555555]"
-                        }
-                    )}
-                    disabled=move || !settings_changed.get()
-                    on:click=move |_| {
-                        ws.update_settings(
-                            default_w.get(),
-                            default_p.get(),
-                            default_r.get(),
-                            default_speed.get(),
-                            default_term.get(),
-                            default_uframe.get(),
-                            default_utool.get(),
-                        );
-                        set_save_status.set(Some("✓ Settings saved".to_string()));
-                        set_settings_changed.set(false);
-                    }
-                >
-                    "Save Settings"
-                </button>
-                <button
-                    class="bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] hover:text-white text-[9px] px-3 py-1 rounded"
-                    on:click=move |_| {
-                        set_robot_ip.set("127.0.0.1".to_string());
-                        set_web_server_ip.set("127.0.0.1".to_string());
-                        set_ws_port.set("9000".to_string());
-                        set_rmi_port.set("16001".to_string());
-                        set_default_speed.set(50.0);
-                        set_default_term.set("CNT".to_string());
-                        set_default_uframe.set(0);
-                        set_default_utool.set(0);
-                        set_default_w.set(0.0);
-                        set_default_p.set(0.0);
-                        set_default_r.set(0.0);
-                        ws.update_settings(0.0, 0.0, 0.0, 50.0, "CNT".to_string(), 0, 0);
-                        set_settings_changed.set(false);
-                        set_save_status.set(Some("✓ Reset to defaults".to_string()));
-                    }
-                >
-                    "Reset to Defaults"
-                </button>
-            </div>
-        </div>
-    }
-}
-
-/// Connection settings panel
-#[component]
-fn ConnectionSettingsPanel(
-    robot_ip: ReadSignal<String>,
-    set_robot_ip: WriteSignal<String>,
-    web_server_ip: ReadSignal<String>,
-    set_web_server_ip: WriteSignal<String>,
-    ws_port: ReadSignal<String>,
-    set_ws_port: WriteSignal<String>,
-    rmi_port: ReadSignal<String>,
-    set_rmi_port: WriteSignal<String>,
-    set_settings_changed: WriteSignal<bool>,
-) -> impl IntoView {
-    view! {
-        <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-3">
-            <h3 class="text-[10px] font-semibold text-[#00d9ff] mb-2 uppercase tracking-wide flex items-center">
-                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/>
-                </svg>
-                "Connection"
+                "System"
             </h3>
-            <div class="space-y-2">
-                <div class="grid grid-cols-2 gap-2">
-                    <div>
-                        <label class="block text-[#666666] text-[9px] mb-0.5">"Robot IP Address"</label>
-                        <input
-                            type="text"
-                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
-                            prop:value=move || robot_ip.get()
-                            on:input=move |ev| {
-                                set_robot_ip.set(event_target_value(&ev));
-                                set_settings_changed.set(true);
-                            }
-                        />
-                        <p class="text-[8px] text-[#555555] mt-0.5">"Robot controller IP"</p>
-                    </div>
-                    <div>
-                        <label class="block text-[#666666] text-[9px] mb-0.5">"Web Server IP"</label>
-                        <input
-                            type="text"
-                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
-                            prop:value=move || web_server_ip.get()
-                            on:input=move |ev| {
-                                set_web_server_ip.set(event_target_value(&ev));
-                                set_settings_changed.set(true);
-                            }
-                        />
-                        <p class="text-[8px] text-[#555555] mt-0.5">"WebSocket server IP"</p>
-                    </div>
+            <div class="space-y-2 text-[9px]">
+                <div class="flex items-center justify-between">
+                    <span class="text-[#666666]">"Version"</span>
+                    <span class="text-white font-mono">"0.8.0"</span>
                 </div>
-                <div class="grid grid-cols-2 gap-2">
-                    <div>
-                        <label class="block text-[#666666] text-[9px] mb-0.5">"WebSocket Port"</label>
-                        <input
-                            type="text"
-                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
-                            prop:value=move || ws_port.get()
-                            on:input=move |ev| {
-                                set_ws_port.set(event_target_value(&ev));
-                                set_settings_changed.set(true);
-                            }
-                        />
-                    </div>
-                    <div>
-                        <label class="block text-[#666666] text-[9px] mb-0.5">"RMI Port"</label>
-                        <input
-                            type="text"
-                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
-                            prop:value=move || rmi_port.get()
-                            on:input=move |ev| {
-                                set_rmi_port.set(event_target_value(&ev));
-                                set_settings_changed.set(true);
-                            }
-                        />
-                    </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-[#666666]">"RMI Protocol"</span>
+                    <span class="text-white font-mono">"v5+"</span>
                 </div>
-            </div>
-        </div>
-    }
-}
-
-/// Saved robot connections panel
-#[component]
-fn SavedConnectionsPanel(
-    saved_connections: ReadSignal<Vec<crate::websocket::RobotConnectionDto>>,
-    show_add_connection: ReadSignal<bool>,
-    set_show_add_connection: WriteSignal<bool>,
-    editing_connection_id: ReadSignal<Option<i64>>,
-    set_editing_connection_id: WriteSignal<Option<i64>>,
-    new_conn_name: ReadSignal<String>,
-    set_new_conn_name: WriteSignal<String>,
-    new_conn_desc: ReadSignal<String>,
-    set_new_conn_desc: WriteSignal<String>,
-    new_conn_ip: ReadSignal<String>,
-    set_new_conn_ip: WriteSignal<String>,
-    new_conn_port: ReadSignal<String>,
-    set_new_conn_port: WriteSignal<String>,
-) -> impl IntoView {
-    let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
-
-    // Per-robot defaults (for editing)
-    let (show_defaults, set_show_defaults) = signal(false);
-    let (conn_default_speed, set_conn_default_speed) = signal::<Option<f64>>(None);
-    let (conn_default_term, set_conn_default_term) = signal::<Option<String>>(None);
-    let (conn_default_uframe, set_conn_default_uframe) = signal::<Option<i32>>(None);
-    let (conn_default_utool, set_conn_default_utool) = signal::<Option<i32>>(None);
-    let (conn_default_w, set_conn_default_w) = signal::<Option<f64>>(None);
-    let (conn_default_p, set_conn_default_p) = signal::<Option<f64>>(None);
-    let (conn_default_r, set_conn_default_r) = signal::<Option<f64>>(None);
-
-    view! {
-        <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-3">
-            <h3 class="text-[10px] font-semibold text-[#00d9ff] mb-2 uppercase tracking-wide flex items-center justify-between">
-                <span class="flex items-center">
-                    <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
-                    </svg>
-                    "Saved Connections"
-                </span>
-                <button
-                    class="text-[8px] px-2 py-0.5 bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] rounded hover:bg-[#22c55e30]"
-                    on:click=move |_| {
-                        set_show_add_connection.set(true);
-                        set_editing_connection_id.set(None);
-                        set_new_conn_name.set(String::new());
-                        set_new_conn_desc.set(String::new());
-                        set_new_conn_ip.set("127.0.0.1".to_string());
-                        set_new_conn_port.set("16001".to_string());
-                        set_show_defaults.set(false);
-                        // Reset per-robot defaults
-                        set_conn_default_speed.set(None);
-                        set_conn_default_term.set(None);
-                        set_conn_default_uframe.set(None);
-                        set_conn_default_utool.set(None);
-                        set_conn_default_w.set(None);
-                        set_conn_default_p.set(None);
-                        set_conn_default_r.set(None);
-                    }
-                >
-                    "+ Add"
-                </button>
-            </h3>
-
-            // Add/Edit form
-            <Show when=move || show_add_connection.get()>
-                <div class="mb-2 p-2 bg-[#111111] rounded border border-[#ffffff10]">
-                    <div class="grid grid-cols-2 gap-2 mb-2">
-                        <div>
-                            <label class="block text-[#666666] text-[8px] mb-0.5">"Name"</label>
-                            <input
-                                type="text"
-                                class="w-full bg-[#0a0a0a] border border-[#ffffff08] rounded px-2 py-1 text-[9px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                placeholder="My Robot"
-                                prop:value=move || new_conn_name.get()
-                                on:input=move |ev| set_new_conn_name.set(event_target_value(&ev))
-                            />
-                        </div>
-                        <div>
-                            <label class="block text-[#666666] text-[8px] mb-0.5">"Description"</label>
-                            <input
-                                type="text"
-                                class="w-full bg-[#0a0a0a] border border-[#ffffff08] rounded px-2 py-1 text-[9px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                placeholder="Optional"
-                                prop:value=move || new_conn_desc.get()
-                                on:input=move |ev| set_new_conn_desc.set(event_target_value(&ev))
-                            />
-                        </div>
-                        <div>
-                            <label class="block text-[#666666] text-[8px] mb-0.5">"IP Address"</label>
-                            <input
-                                type="text"
-                                class="w-full bg-[#0a0a0a] border border-[#ffffff08] rounded px-2 py-1 text-[9px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
-                                prop:value=move || new_conn_ip.get()
-                                on:input=move |ev| set_new_conn_ip.set(event_target_value(&ev))
-                            />
-                        </div>
-                        <div>
-                            <label class="block text-[#666666] text-[8px] mb-0.5">"Port"</label>
-                            <input
-                                type="text"
-                                class="w-full bg-[#0a0a0a] border border-[#ffffff08] rounded px-2 py-1 text-[9px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
-                                prop:value=move || new_conn_port.get()
-                                on:input=move |ev| set_new_conn_port.set(event_target_value(&ev))
-                            />
-                        </div>
-                    </div>
-
-                    // Per-robot defaults toggle (only when editing)
-                    <Show when=move || editing_connection_id.get().is_some()>
-                        <button
-                            class="w-full text-[8px] px-2 py-1 mb-2 bg-[#0a0a0a] border border-[#ffffff08] text-[#888888] rounded hover:text-white flex items-center justify-between"
-                            on:click=move |_| set_show_defaults.set(!show_defaults.get())
-                        >
-                            <span>"Per-Robot Defaults (optional)"</span>
-                            <span>{move || if show_defaults.get() { "▼" } else { "▶" }}</span>
-                        </button>
-
-                        <Show when=move || show_defaults.get()>
-                            <div class="p-2 mb-2 bg-[#0a0a0a] rounded border border-[#ffffff08]">
-                                <p class="text-[7px] text-[#555555] mb-2">"Override global defaults for this robot. Leave empty to use global settings."</p>
-                                <div class="grid grid-cols-4 gap-1">
-                                    <div>
-                                        <label class="block text-[#666666] text-[7px] mb-0.5">"Speed"</label>
-                                        <input
-                                            type="number"
-                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="50"
-                                            prop:value=move || conn_default_speed.get().map(|v| v.to_string()).unwrap_or_default()
-                                            on:input=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_conn_default_speed.set(val.parse().ok());
-                                            }
-                                        />
-                                    </div>
-                                    <div>
-                                        <label class="block text-[#666666] text-[7px] mb-0.5">"Term"</label>
-                                        <select
-                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            on:change=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_conn_default_term.set(if val.is_empty() { None } else { Some(val) });
-                                            }
-                                        >
-                                            <option value="" selected=move || conn_default_term.get().is_none()>"(global)"</option>
-                                            <option value="CNT" selected=move || conn_default_term.get().as_deref() == Some("CNT")>"CNT"</option>
-                                            <option value="FINE" selected=move || conn_default_term.get().as_deref() == Some("FINE")>"FINE"</option>
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label class="block text-[#666666] text-[7px] mb-0.5">"UFrame"</label>
-                                        <input
-                                            type="number"
-                                            min="0" max="9"
-                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || conn_default_uframe.get().map(|v| v.to_string()).unwrap_or_default()
-                                            on:input=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_conn_default_uframe.set(val.parse().ok());
-                                            }
-                                        />
-                                    </div>
-                                    <div>
-                                        <label class="block text-[#666666] text-[7px] mb-0.5">"UTool"</label>
-                                        <input
-                                            type="number"
-                                            min="0" max="9"
-                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || conn_default_utool.get().map(|v| v.to_string()).unwrap_or_default()
-                                            on:input=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_conn_default_utool.set(val.parse().ok());
-                                            }
-                                        />
-                                    </div>
-                                </div>
-                                <div class="grid grid-cols-3 gap-1 mt-1">
-                                    <div>
-                                        <label class="block text-[#666666] text-[7px] mb-0.5">"W (deg)"</label>
-                                        <input
-                                            type="number"
-                                            step="0.1"
-                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || conn_default_w.get().map(|v| v.to_string()).unwrap_or_default()
-                                            on:input=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_conn_default_w.set(val.parse().ok());
-                                            }
-                                        />
-                                    </div>
-                                    <div>
-                                        <label class="block text-[#666666] text-[7px] mb-0.5">"P (deg)"</label>
-                                        <input
-                                            type="number"
-                                            step="0.1"
-                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || conn_default_p.get().map(|v| v.to_string()).unwrap_or_default()
-                                            on:input=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_conn_default_p.set(val.parse().ok());
-                                            }
-                                        />
-                                    </div>
-                                    <div>
-                                        <label class="block text-[#666666] text-[7px] mb-0.5">"R (deg)"</label>
-                                        <input
-                                            type="number"
-                                            step="0.1"
-                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-[8px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || conn_default_r.get().map(|v| v.to_string()).unwrap_or_default()
-                                            on:input=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_conn_default_r.set(val.parse().ok());
-                                            }
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        </Show>
-                    </Show>
-
-                    <div class="flex gap-1">
-                        <button
-                            class="flex-1 text-[8px] px-2 py-1 bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] rounded hover:bg-[#22c55e30]"
-                            on:click=move |_| {
-                                let name = new_conn_name.get();
-                                let desc = new_conn_desc.get();
-                                let ip = new_conn_ip.get();
-                                let port: u32 = new_conn_port.get().parse().unwrap_or(16001);
-                                let description = if desc.is_empty() { None } else { Some(desc) };
-
-                                if let Some(id) = editing_connection_id.get() {
-                                    ws.update_robot_connection(id, name, description, ip, port);
-                                    // Also update defaults if any were set
-                                    if show_defaults.get() {
-                                        ws.update_robot_connection_defaults(
-                                            id,
-                                            conn_default_speed.get(),
-                                            conn_default_term.get(),
-                                            conn_default_uframe.get(),
-                                            conn_default_utool.get(),
-                                            conn_default_w.get(),
-                                            conn_default_p.get(),
-                                            conn_default_r.get(),
-                                        );
-                                    }
-                                } else {
-                                    ws.create_robot_connection(name, description, ip, port);
-                                }
-                                set_show_add_connection.set(false);
-                                ws.list_robot_connections();
-                            }
-                        >
-                            {move || if editing_connection_id.get().is_some() { "Update" } else { "Save" }}
-                        </button>
-                        <button
-                            class="text-[8px] px-2 py-1 bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] rounded hover:text-white"
-                            on:click=move |_| set_show_add_connection.set(false)
-                        >
-                            "Cancel"
-                        </button>
-                    </div>
-                </div>
-            </Show>
-
-            // Connections list
-            <div class="space-y-1 max-h-32 overflow-y-auto">
-                <For
-                    each=move || saved_connections.get()
-                    key=|conn| conn.id
-                    children=move |conn| {
-                        let conn_id = conn.id;
-                        let conn_name = conn.name.clone();
-                        let conn_desc = conn.description.clone();
-                        let conn_ip = conn.ip_address.clone();
-                        let conn_port = conn.port;
-                        // Capture per-robot defaults for editing
-                        let edit_speed = conn.default_speed;
-                        let edit_term = conn.default_term_type.clone();
-                        let edit_uframe = conn.default_uframe;
-                        let edit_utool = conn.default_utool;
-                        let edit_w = conn.default_w;
-                        let edit_p = conn.default_p;
-                        let edit_r = conn.default_r;
-                        let has_defaults = edit_speed.is_some() || edit_term.is_some() || edit_uframe.is_some() || edit_utool.is_some();
-                        view! {
-                            <div class="flex items-center justify-between p-1.5 bg-[#111111] rounded border border-[#ffffff08] hover:border-[#ffffff15]">
-                                <div class="flex-1 min-w-0">
-                                    <div class="text-[9px] text-white font-medium truncate flex items-center gap-1">
-                                        {conn_name.clone()}
-                                        {if has_defaults {
-                                            view! { <span class="text-[7px] text-[#00d9ff]" title="Has per-robot defaults">"⚙"</span> }.into_any()
-                                        } else {
-                                            view! { <span></span> }.into_any()
-                                        }}
-                                    </div>
-                                    <div class="text-[8px] text-[#666666] font-mono">{format!("{}:{}", conn_ip.clone(), conn_port)}</div>
-                                </div>
-                                <div class="flex gap-1 ml-2">
-                                    <button
-                                        class="text-[8px] px-1.5 py-0.5 text-[#22c55e] hover:bg-[#22c55e10] rounded font-medium"
-                                        title="Connect to this robot"
-                                        on:click=move |_| {
-                                            ws.connect_to_saved_robot(conn_id);
-                                        }
-                                    >
-                                        "Connect"
-                                    </button>
-                                    <button
-                                        class="text-[8px] px-1.5 py-0.5 text-[#00d9ff] hover:bg-[#00d9ff10] rounded"
-                                        title="Edit"
-                                        on:click=move |_| {
-                                            set_editing_connection_id.set(Some(conn_id));
-                                            set_new_conn_name.set(conn_name.clone());
-                                            set_new_conn_desc.set(conn_desc.clone().unwrap_or_default());
-                                            set_new_conn_ip.set(conn_ip.clone());
-                                            set_new_conn_port.set(conn_port.to_string());
-                                            // Load per-robot defaults
-                                            set_conn_default_speed.set(edit_speed);
-                                            set_conn_default_term.set(edit_term.clone());
-                                            set_conn_default_uframe.set(edit_uframe);
-                                            set_conn_default_utool.set(edit_utool);
-                                            set_conn_default_w.set(edit_w);
-                                            set_conn_default_p.set(edit_p);
-                                            set_conn_default_r.set(edit_r);
-                                            set_show_defaults.set(has_defaults);
-                                            set_show_add_connection.set(true);
-                                        }
-                                    >
-                                        "Edit"
-                                    </button>
-                                    <button
-                                        class="text-[8px] px-1.5 py-0.5 text-[#ff4444] hover:bg-[#ff444410] rounded"
-                                        title="Delete"
-                                        on:click=move |_| {
-                                            ws.delete_robot_connection(conn_id);
-                                            ws.list_robot_connections();
-                                        }
-                                    >
-                                        "×"
-                                    </button>
-                                </div>
-                            </div>
-                        }
-                    }
-                />
-                {move || if saved_connections.get().is_empty() {
-                    view! {
-                        <div class="text-[8px] text-[#555555] text-center py-2">"No saved connections"</div>
-                    }.into_any()
-                } else {
-                    view! { <div></div> }.into_any()
-                }}
-            </div>
-        </div>
-    }
-}
-
-/// Motion defaults panel
-#[component]
-fn MotionDefaultsPanel(
-    default_speed: ReadSignal<f64>,
-    set_default_speed: WriteSignal<f64>,
-    default_term: ReadSignal<String>,
-    set_default_term: WriteSignal<String>,
-    default_uframe: ReadSignal<i32>,
-    set_default_uframe: WriteSignal<i32>,
-    default_utool: ReadSignal<i32>,
-    set_default_utool: WriteSignal<i32>,
-    set_settings_changed: WriteSignal<bool>,
-) -> impl IntoView {
-    view! {
-        <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-3">
-            <h3 class="text-[10px] font-semibold text-[#00d9ff] mb-2 uppercase tracking-wide flex items-center">
-                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
-                </svg>
-                "Motion Defaults"
-            </h3>
-            <div class="grid grid-cols-2 gap-2">
-                <div>
-                    <label class="block text-[#666666] text-[9px] mb-0.5">"Speed (mm/s)"</label>
-                    <input
-                        type="number"
-                        class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                        prop:value=move || default_speed.get()
-                        on:input=move |ev| {
-                            if let Ok(v) = event_target_value(&ev).parse() {
-                                set_default_speed.set(v);
-                                set_settings_changed.set(true);
-                            }
-                        }
-                    />
-                </div>
-                <div>
-                    <label class="block text-[#666666] text-[9px] mb-0.5">"Termination"</label>
-                    <select
-                        class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                        on:change=move |ev| {
-                            set_default_term.set(event_target_value(&ev));
-                            set_settings_changed.set(true);
-                        }
-                    >
-                        <option value="CNT" selected=move || default_term.get() == "CNT">"CNT (Continuous)"</option>
-                        <option value="FINE" selected=move || default_term.get() == "FINE">"FINE (Stop)"</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-[#666666] text-[9px] mb-0.5">"UFrame"</label>
-                    <input
-                        type="number"
-                        min="0" max="9"
-                        class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                        prop:value=move || default_uframe.get()
-                        on:input=move |ev| {
-                            if let Ok(v) = event_target_value(&ev).parse() {
-                                set_default_uframe.set(v);
-                                set_settings_changed.set(true);
-                            }
-                        }
-                    />
-                </div>
-                <div>
-                    <label class="block text-[#666666] text-[9px] mb-0.5">"UTool"</label>
-                    <input
-                        type="number"
-                        min="0" max="9"
-                        class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                        prop:value=move || default_utool.get()
-                        on:input=move |ev| {
-                            if let Ok(v) = event_target_value(&ev).parse() {
-                                set_default_utool.set(v);
-                                set_settings_changed.set(true);
-                            }
-                        }
-                    />
-                </div>
-            </div>
-        </div>
-    }
-}
-
-/// Default rotation panel
-#[component]
-fn DefaultRotationPanel(
-    default_w: ReadSignal<f64>,
-    set_default_w: WriteSignal<f64>,
-    default_p: ReadSignal<f64>,
-    set_default_p: WriteSignal<f64>,
-    default_r: ReadSignal<f64>,
-    set_default_r: WriteSignal<f64>,
-    set_settings_changed: WriteSignal<bool>,
-) -> impl IntoView {
-    view! {
-        <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-3">
-            <h3 class="text-[10px] font-semibold text-[#00d9ff] mb-2 uppercase tracking-wide flex items-center">
-                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                </svg>
-                "Default Rotation"
-            </h3>
-            <p class="text-[8px] text-[#555555] mb-2">"Used when rotation not specified in CSV"</p>
-            <div class="grid grid-cols-3 gap-2">
-                <div>
-                    <label class="block text-[#666666] text-[9px] mb-0.5">"W (deg)"</label>
-                    <input
-                        type="number"
-                        step="0.1"
-                        class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                        prop:value=move || default_w.get()
-                        on:input=move |ev| {
-                            if let Ok(v) = event_target_value(&ev).parse() {
-                                set_default_w.set(v);
-                                set_settings_changed.set(true);
-                            }
-                        }
-                    />
-                </div>
-                <div>
-                    <label class="block text-[#666666] text-[9px] mb-0.5">"P (deg)"</label>
-                    <input
-                        type="number"
-                        step="0.1"
-                        class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                        prop:value=move || default_p.get()
-                        on:input=move |ev| {
-                            if let Ok(v) = event_target_value(&ev).parse() {
-                                set_default_p.set(v);
-                                set_settings_changed.set(true);
-                            }
-                        }
-                    />
-                </div>
-                <div>
-                    <label class="block text-[#666666] text-[9px] mb-0.5">"R (deg)"</label>
-                    <input
-                        type="number"
-                        step="0.1"
-                        class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                        prop:value=move || default_r.get()
-                        on:input=move |ev| {
-                            if let Ok(v) = event_target_value(&ev).parse() {
-                                set_default_r.set(v);
-                                set_settings_changed.set(true);
-                            }
-                        }
-                    />
-                </div>
-            </div>
-        </div>
-    }
-}
-
-/// Display preferences panel
-#[component]
-fn DisplayPreferencesPanel(
-    show_mm: ReadSignal<bool>,
-    set_show_mm: WriteSignal<bool>,
-    show_degrees: ReadSignal<bool>,
-    set_show_degrees: WriteSignal<bool>,
-    compact_mode: ReadSignal<bool>,
-    set_compact_mode: WriteSignal<bool>,
-    set_settings_changed: WriteSignal<bool>,
-) -> impl IntoView {
-    view! {
-        <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-3">
-            <h3 class="text-[10px] font-semibold text-[#00d9ff] mb-2 uppercase tracking-wide flex items-center">
-                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-                </svg>
-                "Display Preferences"
-            </h3>
-            <div class="space-y-2">
-                <label class="flex items-center gap-2 text-[9px] text-[#888888] cursor-pointer">
-                    <input
-                        type="checkbox"
-                        class="accent-[#00d9ff]"
-                        prop:checked=move || show_mm.get()
-                        on:change=move |ev| {
-                            set_show_mm.set(event_target_checked(&ev));
-                            set_settings_changed.set(true);
-                        }
-                    />
-                    "Show position in millimeters"
-                </label>
-                <label class="flex items-center gap-2 text-[9px] text-[#888888] cursor-pointer">
-                    <input
-                        type="checkbox"
-                        class="accent-[#00d9ff]"
-                        prop:checked=move || show_degrees.get()
-                        on:change=move |ev| {
-                            set_show_degrees.set(event_target_checked(&ev));
-                            set_settings_changed.set(true);
-                        }
-                    />
-                    "Show angles in degrees"
-                </label>
-                <label class="flex items-center gap-2 text-[9px] text-[#888888] cursor-pointer">
-                    <input
-                        type="checkbox"
-                        class="accent-[#00d9ff]"
-                        prop:checked=move || compact_mode.get()
-                        on:change=move |ev| {
-                            set_compact_mode.set(event_target_checked(&ev));
-                            set_settings_changed.set(true);
-                        }
-                    />
-                    "Compact mode (smaller text and spacing)"
-                </label>
-            </div>
-        </div>
-    }
-}
-
-/// About panel
-#[component]
-fn AboutPanel() -> impl IntoView {
-    view! {
-        <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-3 col-span-2">
-            <h3 class="text-[10px] font-semibold text-[#00d9ff] mb-2 uppercase tracking-wide flex items-center">
-                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-                "About"
-            </h3>
-            <div class="grid grid-cols-3 gap-4 text-[9px]">
-                <div>
-                    <span class="text-[#555555]">"Version:"</span>
-                    <span class="text-white ml-1">"0.1.0"</span>
-                </div>
-                <div>
-                    <span class="text-[#555555]">"RMI Protocol:"</span>
-                    <span class="text-white ml-1">"v5+"</span>
-                </div>
-                <div>
-                    <span class="text-[#555555]">"Database:"</span>
-                    <span class="text-white ml-1">"SQLite"</span>
-                </div>
-            </div>
-        </div>
-    }
-}
-
-/// Danger Zone panel - destructive operations
-#[component]
-fn DangerZonePanel() -> impl IntoView {
-    let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
-    let (confirm_reset, set_confirm_reset) = signal(false);
-    let (reset_status, set_reset_status) = signal::<Option<String>>(None);
-
-    view! {
-        <div class="bg-[#0a0a0a] rounded border border-[#ff444440] p-3 col-span-2">
-            <h3 class="text-[10px] font-semibold text-[#ff4444] mb-2 uppercase tracking-wide flex items-center">
-                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                </svg>
-                "Danger Zone"
-            </h3>
-            <p class="text-[8px] text-[#888888] mb-3">"These actions are destructive and cannot be undone."</p>
-
-            <div class="flex items-center justify-between p-2 bg-[#111111] rounded border border-[#ff444420]">
-                <div>
-                    <div class="text-[9px] text-white font-medium">"Reset Database"</div>
-                    <div class="text-[8px] text-[#666666]">"Delete all programs, settings, and saved connections"</div>
-                </div>
-                <div class="flex items-center gap-2">
-                    {move || reset_status.get().map(|s| view! {
-                        <span class="text-[8px] text-[#22c55e]">{s}</span>
-                    })}
+                <div class="pt-2 border-t border-[#ffffff08]">
                     <Show
                         when=move || confirm_reset.get()
                         fallback=move || view! {
                             <button
-                                class="text-[8px] px-3 py-1 bg-[#ff444420] border border-[#ff444440] text-[#ff4444] rounded hover:bg-[#ff444430]"
+                                class="w-full text-[8px] px-2 py-1 bg-[#ff444410] border border-[#ff444420] text-[#ff4444] rounded hover:bg-[#ff444420]"
                                 on:click=move |_| set_confirm_reset.set(true)
                             >
                                 "Reset Database"
                             </button>
                         }
                     >
-                        <div class="flex items-center gap-1">
-                            <span class="text-[8px] text-[#ff4444]">"Are you sure?"</span>
-                            <button
-                                class="text-[8px] px-2 py-1 bg-[#ff4444] text-white rounded hover:bg-[#ff5555]"
-                                on:click=move |_| {
-                                    ws.reset_database();
-                                    set_confirm_reset.set(false);
-                                    set_reset_status.set(Some("✓ Database reset".to_string()));
-                                    // Refresh data
-                                    ws.list_programs();
-                                    ws.get_settings();
-                                    ws.list_robot_connections();
-                                }
-                            >
-                                "Yes, Reset"
-                            </button>
-                            <button
-                                class="text-[8px] px-2 py-1 bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] rounded hover:text-white"
-                                on:click=move |_| set_confirm_reset.set(false)
-                            >
-                                "Cancel"
-                            </button>
+                        <div class="space-y-1">
+                            <p class="text-[8px] text-[#ff4444]">"Delete all data?"</p>
+                            <div class="flex gap-1">
+                                <button
+                                    class="flex-1 text-[8px] px-2 py-1 bg-[#ff4444] text-white rounded hover:bg-[#ff5555]"
+                                    on:click=move |_| {
+                                        ws.reset_database();
+                                        set_confirm_reset.set(false);
+                                        ws.list_programs();
+                                        ws.list_robot_connections();
+                                    }
+                                >
+                                    "Yes"
+                                </button>
+                                <button
+                                    class="flex-1 text-[8px] px-2 py-1 bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] rounded hover:text-white"
+                                    on:click=move |_| set_confirm_reset.set(false)
+                                >
+                                    "No"
+                                </button>
+                            </div>
                         </div>
                     </Show>
                 </div>
@@ -1024,10 +291,615 @@ fn DangerZonePanel() -> impl IntoView {
     }
 }
 
-fn event_target_checked(ev: &leptos::ev::Event) -> bool {
-    use wasm_bindgen::JsCast;
-    ev.target()
-        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-        .map(|e| e.checked())
-        .unwrap_or(false)
+/// Right panel: Robot settings for selected robot (or empty state)
+#[component]
+fn RobotSettingsPanel<F>(
+    selected_robot: F,
+    selected_robot_id: ReadSignal<Option<i64>>,
+) -> impl IntoView
+where
+    F: Fn() -> Option<crate::websocket::RobotConnectionDto> + Copy + Send + Sync + 'static,
+{
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
+
+    // Editable fields for the selected robot
+    let (edit_name, set_edit_name) = signal(String::new());
+    let (edit_desc, set_edit_desc) = signal(String::new());
+    let (edit_ip, set_edit_ip) = signal(String::new());
+    let (edit_port, set_edit_port) = signal(String::new());
+    let (edit_speed, set_edit_speed) = signal::<Option<f64>>(None);
+    let (edit_term, set_edit_term) = signal::<Option<String>>(None);
+    let (edit_uframe, set_edit_uframe) = signal::<Option<i32>>(None);
+    let (edit_utool, set_edit_utool) = signal::<Option<i32>>(None);
+    let (edit_w, set_edit_w) = signal::<Option<f64>>(None);
+    let (edit_p, set_edit_p) = signal::<Option<f64>>(None);
+    let (edit_r, set_edit_r) = signal::<Option<f64>>(None);
+    // Robot arm configuration defaults
+    let (edit_front, set_edit_front) = signal::<Option<i32>>(None);
+    let (edit_up, set_edit_up) = signal::<Option<i32>>(None);
+    let (edit_left, set_edit_left) = signal::<Option<i32>>(None);
+    let (edit_flip, set_edit_flip) = signal::<Option<i32>>(None);
+    let (edit_turn4, set_edit_turn4) = signal::<Option<i32>>(None);
+    let (edit_turn5, set_edit_turn5) = signal::<Option<i32>>(None);
+    let (edit_turn6, set_edit_turn6) = signal::<Option<i32>>(None);
+    let (has_changes, set_has_changes) = signal(false);
+    let (save_status, set_save_status) = signal::<Option<String>>(None);
+
+    // Load robot data when selection changes
+    Effect::new(move |_| {
+        if let Some(robot) = selected_robot() {
+            set_edit_name.set(robot.name.clone());
+            set_edit_desc.set(robot.description.clone().unwrap_or_default());
+            set_edit_ip.set(robot.ip_address.clone());
+            set_edit_port.set(robot.port.to_string());
+            set_edit_speed.set(robot.default_speed);
+            set_edit_term.set(robot.default_term_type.clone());
+            set_edit_uframe.set(robot.default_uframe);
+            set_edit_utool.set(robot.default_utool);
+            set_edit_w.set(robot.default_w);
+            set_edit_p.set(robot.default_p);
+            set_edit_r.set(robot.default_r);
+            set_edit_front.set(robot.default_front);
+            set_edit_up.set(robot.default_up);
+            set_edit_left.set(robot.default_left);
+            set_edit_flip.set(robot.default_flip);
+            set_edit_turn4.set(robot.default_turn4);
+            set_edit_turn5.set(robot.default_turn5);
+            set_edit_turn6.set(robot.default_turn6);
+            set_has_changes.set(false);
+            set_save_status.set(None);
+        }
+    });
+
+    view! {
+        <div class="flex-1 bg-[#0a0a0a] rounded border border-[#ffffff08] flex flex-col min-h-0">
+            {move || {
+                if let Some(robot) = selected_robot() {
+                    let robot_name = robot.name.clone();
+                    view! {
+                        // Header with robot name
+                        <div class="flex items-center justify-between p-3 border-b border-[#ffffff08]">
+                            <h3 class="text-[11px] font-semibold text-white flex items-center">
+                                <svg class="w-4 h-4 mr-2 text-[#00d9ff]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+                                </svg>
+                                "Robot Settings: "
+                                <span class="text-[#00d9ff] ml-1">{robot_name}</span>
+                            </h3>
+                            <div class="flex items-center gap-2">
+                                {move || save_status.get().map(|s| view! {
+                                    <span class="text-[9px] text-[#22c55e]">{s}</span>
+                                })}
+                                <button
+                                    class=move || format!(
+                                        "text-[9px] px-3 py-1 rounded transition-colors {}",
+                                        if has_changes.get() {
+                                            "bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] hover:bg-[#22c55e30]"
+                                        } else {
+                                            "bg-[#111111] border border-[#ffffff08] text-[#555555]"
+                                        }
+                                    )
+                                    disabled=move || !has_changes.get()
+                                    on:click=move |_| {
+                                        if let Some(id) = selected_robot_id.get() {
+                                            let name = edit_name.get();
+                                            let desc = edit_desc.get();
+                                            let ip = edit_ip.get();
+                                            let port: u32 = edit_port.get().parse().unwrap_or(16001);
+                                            let description = if desc.is_empty() { None } else { Some(desc) };
+
+                                            ws.update_robot_connection(id, name, description, ip, port);
+                                            ws.update_robot_connection_defaults(
+                                                id,
+                                                edit_speed.get(),
+                                                edit_term.get(),
+                                                edit_uframe.get(),
+                                                edit_utool.get(),
+                                                edit_w.get(),
+                                                edit_p.get(),
+                                                edit_r.get(),
+                                                edit_front.get(),
+                                                edit_up.get(),
+                                                edit_left.get(),
+                                                edit_flip.get(),
+                                                edit_turn4.get(),
+                                                edit_turn5.get(),
+                                                edit_turn6.get(),
+                                            );
+                                            set_has_changes.set(false);
+                                            set_save_status.set(Some("✓ Saved".to_string()));
+                                            ws.list_robot_connections();
+                                        }
+                                    }
+                                >
+                                    "Save Changes"
+                                </button>
+                            </div>
+                        </div>
+
+                        // Settings content
+                        <div class="flex-1 overflow-y-auto p-3 space-y-4">
+                            // Connection Details
+                            <div>
+                                <h4 class="text-[10px] font-semibold text-[#888888] mb-2 uppercase tracking-wide">"Connection Details"</h4>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"Name"</label>
+                                        <input
+                                            type="text"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            prop:value=move || edit_name.get()
+                                            on:input=move |ev| {
+                                                set_edit_name.set(event_target_value(&ev));
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"Description"</label>
+                                        <input
+                                            type="text"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="Optional"
+                                            prop:value=move || edit_desc.get()
+                                            on:input=move |ev| {
+                                                set_edit_desc.set(event_target_value(&ev));
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"IP Address"</label>
+                                        <input
+                                            type="text"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
+                                            prop:value=move || edit_ip.get()
+                                            on:input=move |ev| {
+                                                set_edit_ip.set(event_target_value(&ev));
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"Port"</label>
+                                        <input
+                                            type="text"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
+                                            prop:value=move || edit_port.get()
+                                            on:input=move |ev| {
+                                                set_edit_port.set(event_target_value(&ev));
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            // Motion Defaults
+                            <div>
+                                <h4 class="text-[10px] font-semibold text-[#888888] mb-2 uppercase tracking-wide">"Motion Defaults"</h4>
+                                <div class="grid grid-cols-4 gap-3">
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"Speed (mm/s)"</label>
+                                        <input
+                                            type="number"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="50"
+                                            prop:value=move || edit_speed.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                set_edit_speed.set(event_target_value(&ev).parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"Termination"</label>
+                                        <select
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            on:change=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_edit_term.set(if val.is_empty() { None } else { Some(val) });
+                                                set_has_changes.set(true);
+                                            }
+                                        >
+                                            <option value="" selected=move || edit_term.get().is_none()>"Default"</option>
+                                            <option value="CNT" selected=move || edit_term.get().as_deref() == Some("CNT")>"CNT"</option>
+                                            <option value="FINE" selected=move || edit_term.get().as_deref() == Some("FINE")>"FINE"</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"UFrame"</label>
+                                        <input
+                                            type="number"
+                                            min="0" max="9"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || edit_uframe.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                set_edit_uframe.set(event_target_value(&ev).parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"UTool"</label>
+                                        <input
+                                            type="number"
+                                            min="0" max="9"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || edit_utool.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                set_edit_utool.set(event_target_value(&ev).parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            // Orientation Defaults
+                            <div>
+                                <h4 class="text-[10px] font-semibold text-[#888888] mb-2 uppercase tracking-wide">"Orientation Defaults (W, P, R)"</h4>
+                                <div class="grid grid-cols-3 gap-3">
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"W (deg)"</label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || edit_w.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                set_edit_w.set(event_target_value(&ev).parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"P (deg)"</label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || edit_p.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                set_edit_p.set(event_target_value(&ev).parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"R (deg)"</label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || edit_r.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                set_edit_r.set(event_target_value(&ev).parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            // Robot Arm Configuration
+                            <div>
+                                <h4 class="text-[10px] font-semibold text-[#888888] mb-2 uppercase tracking-wide">"Robot Arm Configuration"</h4>
+                                <div class="grid grid-cols-4 gap-3">
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"Front/Back"</label>
+                                        <select
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            on:change=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_edit_front.set(val.parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        >
+                                            <option value="" selected=move || edit_front.get().is_none()>"Default"</option>
+                                            <option value="1" selected=move || edit_front.get() == Some(1)>"Front"</option>
+                                            <option value="0" selected=move || edit_front.get() == Some(0)>"Back"</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"Up/Down"</label>
+                                        <select
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            on:change=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_edit_up.set(val.parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        >
+                                            <option value="" selected=move || edit_up.get().is_none()>"Default"</option>
+                                            <option value="1" selected=move || edit_up.get() == Some(1)>"Up"</option>
+                                            <option value="0" selected=move || edit_up.get() == Some(0)>"Down"</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"Left/Right"</label>
+                                        <select
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            on:change=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_edit_left.set(val.parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        >
+                                            <option value="" selected=move || edit_left.get().is_none()>"Default"</option>
+                                            <option value="1" selected=move || edit_left.get() == Some(1)>"Left"</option>
+                                            <option value="0" selected=move || edit_left.get() == Some(0)>"Right"</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"Flip/NoFlip"</label>
+                                        <select
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            on:change=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_edit_flip.set(val.parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        >
+                                            <option value="" selected=move || edit_flip.get().is_none()>"Default"</option>
+                                            <option value="1" selected=move || edit_flip.get() == Some(1)>"Flip"</option>
+                                            <option value="0" selected=move || edit_flip.get() == Some(0)>"NoFlip"</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-3 gap-3 mt-3">
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"Turn4"</label>
+                                        <input
+                                            type="number"
+                                            min="0" max="1"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || edit_turn4.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                set_edit_turn4.set(event_target_value(&ev).parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"Turn5"</label>
+                                        <input
+                                            type="number"
+                                            min="0" max="1"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || edit_turn5.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                set_edit_turn5.set(event_target_value(&ev).parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-[#666666] text-[9px] mb-0.5">"Turn6"</label>
+                                        <input
+                                            type="number"
+                                            min="0" max="1"
+                                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                            placeholder="0"
+                                            prop:value=move || edit_turn6.get().map(|v| v.to_string()).unwrap_or_default()
+                                            on:input=move |ev| {
+                                                set_edit_turn6.set(event_target_value(&ev).parse().ok());
+                                                set_has_changes.set(true);
+                                            }
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            // Quick Connect button
+                            <div class="pt-2 border-t border-[#ffffff08]">
+                                <button
+                                    class="w-full text-[10px] px-4 py-2 bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] rounded hover:bg-[#22c55e30] font-medium"
+                                    on:click=move |_| {
+                                        if let Some(id) = selected_robot_id.get() {
+                                            ws.connect_to_saved_robot(id);
+                                        }
+                                    }
+                                >
+                                    "▶ Connect to this Robot"
+                                </button>
+                            </div>
+                        </div>
+                    }.into_any()
+                } else {
+                    // Empty state
+                    view! {
+                        <div class="flex-1 flex items-center justify-center">
+                            <div class="text-center">
+                                <svg class="w-12 h-12 mx-auto mb-3 text-[#333333]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+                                </svg>
+                                <p class="text-[11px] text-[#555555]">"Select a robot connection"</p>
+                                <p class="text-[9px] text-[#444444] mt-1">"to view and edit its settings"</p>
+                            </div>
+                        </div>
+                    }.into_any()
+                }
+            }}
+        </div>
+    }
+}
+
+/// Modal for adding a new robot connection
+#[component]
+fn AddRobotModal<F1, F2>(
+    new_robot_name: ReadSignal<String>,
+    set_new_robot_name: WriteSignal<String>,
+    new_robot_desc: ReadSignal<String>,
+    set_new_robot_desc: WriteSignal<String>,
+    new_robot_ip: ReadSignal<String>,
+    set_new_robot_ip: WriteSignal<String>,
+    new_robot_port: ReadSignal<String>,
+    set_new_robot_port: WriteSignal<String>,
+    on_close: F1,
+    on_created: F2,
+) -> impl IntoView
+where
+    F1: Fn() + Clone + 'static,
+    F2: Fn(i64) + Clone + 'static,
+{
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
+    let on_close_clone = on_close.clone();
+
+    view! {
+        <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div class="bg-[#0d0d0d] border border-[#ffffff15] rounded-lg p-4 w-96 shadow-xl">
+                <h3 class="text-[12px] font-semibold text-white mb-4 flex items-center">
+                    <svg class="w-4 h-4 mr-2 text-[#00d9ff]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                    </svg>
+                    "Add Robot Connection"
+                </h3>
+
+                <div class="space-y-3">
+                    <div>
+                        <label class="block text-[#666666] text-[9px] mb-0.5">"Name"</label>
+                        <input
+                            type="text"
+                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-3 py-2 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                            placeholder="My Robot"
+                            prop:value=move || new_robot_name.get()
+                            on:input=move |ev| set_new_robot_name.set(event_target_value(&ev))
+                        />
+                    </div>
+                    <div>
+                        <label class="block text-[#666666] text-[9px] mb-0.5">"Description (optional)"</label>
+                        <input
+                            type="text"
+                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-3 py-2 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                            placeholder="Production cell #1"
+                            prop:value=move || new_robot_desc.get()
+                            on:input=move |ev| set_new_robot_desc.set(event_target_value(&ev))
+                        />
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-[#666666] text-[9px] mb-0.5">"IP Address"</label>
+                            <input
+                                type="text"
+                                class="w-full bg-[#111111] border border-[#ffffff08] rounded px-3 py-2 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
+                                prop:value=move || new_robot_ip.get()
+                                on:input=move |ev| set_new_robot_ip.set(event_target_value(&ev))
+                            />
+                        </div>
+                        <div>
+                            <label class="block text-[#666666] text-[9px] mb-0.5">"Port"</label>
+                            <input
+                                type="text"
+                                class="w-full bg-[#111111] border border-[#ffffff08] rounded px-3 py-2 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
+                                prop:value=move || new_robot_port.get()
+                                on:input=move |ev| set_new_robot_port.set(event_target_value(&ev))
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex gap-2 mt-4">
+                    <button
+                        class="flex-1 text-[10px] px-4 py-2 bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] rounded hover:bg-[#22c55e30] font-medium"
+                        on:click=move |_| {
+                            let name = new_robot_name.get();
+                            if name.is_empty() {
+                                return;
+                            }
+                            let desc = new_robot_desc.get();
+                            let ip = new_robot_ip.get();
+                            let port: u32 = new_robot_port.get().parse().unwrap_or(16001);
+                            let description = if desc.is_empty() { None } else { Some(desc) };
+
+                            ws.create_robot_connection(name, description, ip, port);
+                            ws.list_robot_connections();
+                            // Note: We don't have the ID yet, so we just close
+                            // The parent will need to select the new robot from the list
+                            on_created(0);
+                        }
+                    >
+                        "Create Robot"
+                    </button>
+                    <button
+                        class="text-[10px] px-4 py-2 bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] rounded hover:text-white"
+                        on:click=move |_| on_close_clone()
+                    >
+                        "Cancel"
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+/// Modal for confirming robot deletion
+#[component]
+fn DeleteConfirmModal(
+    robot_to_delete: ReadSignal<Option<(i64, String)>>,
+    set_show_delete_confirm: WriteSignal<bool>,
+    set_robot_to_delete: WriteSignal<Option<(i64, String)>>,
+    set_selected_robot_id: WriteSignal<Option<i64>>,
+    selected_robot_id: ReadSignal<Option<i64>>,
+) -> impl IntoView {
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
+
+    view! {
+        <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div class="bg-[#0d0d0d] border border-[#ff444440] rounded-lg p-4 w-80 shadow-xl">
+                <h3 class="text-[12px] font-semibold text-[#ff4444] mb-3 flex items-center">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                    </svg>
+                    "Delete Robot Connection"
+                </h3>
+
+                <p class="text-[10px] text-[#888888] mb-4">
+                    "Are you sure you want to delete "
+                    <span class="text-white font-medium">
+                        "\""
+                        {move || robot_to_delete.get().map(|(_, name)| name).unwrap_or_default()}
+                        "\""
+                    </span>
+                    "? This action cannot be undone."
+                </p>
+
+                <div class="flex gap-2">
+                    <button
+                        class="flex-1 text-[10px] px-4 py-2 bg-[#ff4444] text-white rounded hover:bg-[#ff5555] font-medium"
+                        on:click=move |_| {
+                            if let Some((id, _)) = robot_to_delete.get() {
+                                ws.delete_robot_connection(id);
+                                ws.list_robot_connections();
+                                // Clear selection if we deleted the selected robot
+                                if selected_robot_id.get() == Some(id) {
+                                    set_selected_robot_id.set(None);
+                                }
+                            }
+                            set_show_delete_confirm.set(false);
+                            set_robot_to_delete.set(None);
+                        }
+                    >
+                        "Delete"
+                    </button>
+                    <button
+                        class="flex-1 text-[10px] px-4 py-2 bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] rounded hover:text-white"
+                        on:click=move |_| {
+                            set_show_delete_confirm.set(false);
+                            set_robot_to_delete.set(None);
+                        }
+                    >
+                        "Cancel"
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
 }

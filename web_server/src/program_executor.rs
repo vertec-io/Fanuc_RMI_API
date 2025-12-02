@@ -19,8 +19,13 @@ pub const MAX_BUFFER: usize = 5;
 /// Program execution state.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExecutionState {
-    /// No program loaded or execution idle.
+    /// No program loaded.
     Idle,
+    /// Program is loaded but not yet running.
+    Loaded {
+        program_id: i64,
+        total_lines: usize,
+    },
     /// Program is running, sending instructions as buffer allows.
     Running {
         program_id: i64,
@@ -79,7 +84,17 @@ impl ProgramExecutor {
     }
 
     /// Load a program from the database and prepare for execution.
-    pub fn load_program(&mut self, db: &Database, program_id: i64) -> Result<(), String> {
+    ///
+    /// # Arguments
+    /// * `db` - Database connection
+    /// * `program_id` - ID of the program to load
+    /// * `robot_defaults` - Optional robot connection defaults for configuration (front, up, left, flip, turn4, turn5, turn6)
+    pub fn load_program(
+        &mut self,
+        db: &Database,
+        program_id: i64,
+        robot_defaults: Option<&crate::database::RobotConnection>,
+    ) -> Result<(), String> {
         let program = db.get_program(program_id)
             .map_err(|e| format!("Database error: {}", e))?
             .ok_or_else(|| format!("Program {} not found", program_id))?;
@@ -91,7 +106,7 @@ impl ProgramExecutor {
             return Err("Program has no instructions".to_string());
         }
 
-        // Set defaults from program
+        // Set defaults from program, with robot connection defaults for configuration
         self.defaults = ProgramDefaults {
             w: program.default_w,
             p: program.default_p,
@@ -103,6 +118,14 @@ impl ProgramExecutor {
             term_type: program.default_term_type.clone(),
             uframe: program.default_uframe,
             utool: program.default_utool,
+            // Use robot connection defaults for configuration if available
+            front: robot_defaults.and_then(|r| r.default_front),
+            up: robot_defaults.and_then(|r| r.default_up),
+            left: robot_defaults.and_then(|r| r.default_left),
+            flip: robot_defaults.and_then(|r| r.default_flip),
+            turn4: robot_defaults.and_then(|r| r.default_turn4),
+            turn5: robot_defaults.and_then(|r| r.default_turn5),
+            turn6: robot_defaults.and_then(|r| r.default_turn6),
         };
 
         // Build pending queue with all instructions
@@ -116,8 +139,11 @@ impl ProgramExecutor {
         }
 
         self.loaded_program = Some(program);
-        self.all_instructions = instructions;
-        self.state = ExecutionState::Idle;
+        self.all_instructions = instructions.clone();
+        self.state = ExecutionState::Loaded {
+            program_id,
+            total_lines: instructions.len(),
+        };
         self.in_flight_by_request.clear();
         self.in_flight_by_sequence.clear();
         self.completed_line = 0;
@@ -166,14 +192,15 @@ impl ProgramExecutor {
         !self.pending_queue.is_empty()
     }
 
-    /// Start execution (transition from Idle to Running).
-    pub fn start(&mut self, program_id: i64) {
-        let total = self.all_instructions.len();
-        self.state = ExecutionState::Running {
-            program_id,
-            total_lines: total,
-            last_completed: 0,
-        };
+    /// Start execution (transition from Loaded to Running).
+    pub fn start(&mut self) {
+        if let ExecutionState::Loaded { program_id, total_lines } = self.state {
+            self.state = ExecutionState::Running {
+                program_id,
+                total_lines,
+                last_completed: 0,
+            };
+        }
     }
 
     /// Pause execution (stop sending new instructions).
@@ -321,19 +348,19 @@ impl ProgramExecutor {
             ext3,
         };
 
-        // Build configuration with uframe/utool
+        // Build configuration with uframe/utool and robot arm configuration defaults
         let uframe = instruction.uframe.unwrap_or(self.defaults.uframe.unwrap_or(0)) as u8;
         let utool = instruction.utool.unwrap_or(self.defaults.utool.unwrap_or(0)) as u8;
         let configuration = Configuration {
             u_tool_number: utool,
             u_frame_number: uframe,
-            front: 0,
-            up: 0,
-            left: 0,
-            flip: 0,
-            turn4: 0,
-            turn5: 0,
-            turn6: 0,
+            front: self.defaults.front.unwrap_or(1) as u8,  // Default: Front
+            up: self.defaults.up.unwrap_or(1) as u8,        // Default: Up
+            left: self.defaults.left.unwrap_or(0) as u8,    // Default: Right
+            flip: self.defaults.flip.unwrap_or(0) as u8,    // Default: NoFlip
+            turn4: self.defaults.turn4.unwrap_or(0) as u8,
+            turn5: self.defaults.turn5.unwrap_or(0) as u8,
+            turn6: self.defaults.turn6.unwrap_or(0) as u8,
         };
 
         let motion = FrcLinearMotion::new(
