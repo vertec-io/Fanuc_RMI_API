@@ -10,6 +10,7 @@
 //! - `frame_tool`: Frame and tool data management
 //! - `io`: Digital I/O management (DIN/DOUT/AIN/AOUT/GIN/GOUT)
 //! - `io_config`: I/O display configuration management
+//! - `robot_control`: Robot control commands (abort/reset/initialize)
 
 pub mod connection;
 pub mod control;
@@ -19,6 +20,7 @@ pub mod io;
 pub mod io_config;
 pub mod programs;
 pub mod robot_connections;
+pub mod robot_control;
 pub mod settings;
 
 use crate::api_types::*;
@@ -139,6 +141,26 @@ pub async fn handle_request(
             execution::stop_program(driver, executor, client_manager).await
         }
         ClientRequest::GetExecutionState => execution::get_execution_state(executor).await,
+
+        // Robot control commands (requires control)
+        ClientRequest::RobotAbort => {
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
+            robot_control::robot_abort(driver, executor, client_manager).await
+        }
+        ClientRequest::RobotReset => {
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
+            robot_control::robot_reset(driver).await
+        }
+        ClientRequest::RobotInitialize { group_mask } => {
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
+            robot_control::robot_initialize(driver, group_mask.unwrap_or(1)).await
+        }
 
         // Robot connection management
         ClientRequest::GetConnectionStatus => {

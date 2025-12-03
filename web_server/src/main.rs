@@ -130,6 +130,9 @@ async fn main() {
     };
 
     // Load configuration from environment variables with defaults
+    // Note: FANUC_ROBOT_ADDR and FANUC_ROBOT_PORT are only used as defaults for the
+    // RobotConnection struct. The server does NOT auto-connect on startup.
+    // Users must explicitly connect via the UI by selecting a saved robot connection.
     let robot_addr = std::env::var("FANUC_ROBOT_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
     let robot_port = std::env::var("FANUC_ROBOT_PORT")
         .ok()
@@ -140,18 +143,10 @@ async fn main() {
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(9000);
 
-    // Create robot connection (may or may not connect on startup)
+    // Create robot connection in disconnected state
+    // Users must explicitly connect via the UI by selecting a saved robot connection
     let robot_connection = Arc::new(RwLock::new(RobotConnection::new(robot_addr.clone(), robot_port)));
-
-    // Try to connect to robot, but don't exit if it fails
-    {
-        let mut conn = robot_connection.write().await;
-        if let Err(e) = conn.connect().await {
-            warn!("⚠ Could not connect to robot on startup: {}", e);
-            warn!("  Web server will continue running. Connect via UI when robot is available.");
-            warn!("  Or start the simulator: cargo run -p sim -- --realtime");
-        }
-    }
+    info!("Robot connection initialized (not connected - use UI to connect)");
 
     let executor = Arc::new(tokio::sync::Mutex::new(ProgramExecutor::new()));
     let client_manager = Arc::new(ClientManager::new());
@@ -161,6 +156,8 @@ async fn main() {
     // Start response broadcast task - forwards robot responses to all WebSocket clients
     let robot_connection_clone = Arc::clone(&robot_connection);
     let broadcast_tx_clone = Arc::clone(&broadcast_tx);
+    let client_manager_broadcast = Arc::clone(&client_manager);
+    let executor_broadcast = Arc::clone(&executor);
     tokio::spawn(async move {
         // Track which driver we're currently subscribed to (by its channel address)
         let mut current_driver_id: Option<usize> = None;
@@ -235,12 +232,113 @@ async fn main() {
                 if current_driver_id.is_none() {
                     let mut conn = robot_connection_clone.write().await;
                     conn.connected = false;
+
+                    // Unload any running program - it's no longer valid
+                    {
+                        let mut exec = executor_broadcast.lock().await;
+                        if exec.is_running() {
+                            exec.stop();
+                            warn!("Stopped running program due to robot disconnect");
+                        }
+                        exec.reset();
+                        warn!("Reset executor due to robot disconnect");
+                    }
+
+                    // Broadcast robot disconnected to all clients
+                    let disconnect_response = ServerResponse::RobotDisconnected {
+                        reason: "Robot connection lost".to_string(),
+                    };
+                    client_manager_broadcast.broadcast_all(&disconnect_response).await;
+
+                    // Broadcast execution state change (program unloaded)
+                    let state_response = ServerResponse::ExecutionStateChanged {
+                        state: "idle".to_string(),
+                        program_id: None,
+                        current_line: None,
+                        total_lines: None,
+                        message: Some("Program unloaded due to robot disconnect".to_string()),
+                    };
+                    client_manager_broadcast.broadcast_all(&state_response).await;
+                    warn!("Broadcasted RobotDisconnected and ExecutionStateChanged to all clients");
                 }
             } else {
                 current_driver_id = None;
             }
 
             // Wait before trying again
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    });
+
+    // Start error broadcast task - forwards protocol errors to all WebSocket clients
+    let robot_connection_error = Arc::clone(&robot_connection);
+    let client_manager_error = Arc::clone(&client_manager);
+    tokio::spawn(async move {
+        let mut current_driver_id: Option<usize> = None;
+
+        loop {
+            let driver_opt = {
+                let conn = robot_connection_error.read().await;
+                conn.driver.clone()
+            };
+
+            if let Some(driver) = driver_opt {
+                let driver_id = Arc::as_ptr(&driver) as usize;
+
+                if current_driver_id != Some(driver_id) {
+                    info!("Subscribing to new robot driver error channel");
+                    current_driver_id = Some(driver_id);
+                }
+
+                let mut error_rx = driver.error_tx.subscribe();
+
+                loop {
+                    tokio::select! {
+                        result = error_rx.recv() => {
+                            match result {
+                                Ok(protocol_error) => {
+                                    warn!("Protocol error: {} - {}", protocol_error.error_type, protocol_error.message);
+                                    let response = ServerResponse::RobotError {
+                                        error_type: protocol_error.error_type,
+                                        message: protocol_error.message,
+                                        error_id: None,
+                                    };
+                                    client_manager_error.broadcast_all(&response).await;
+                                }
+                                Err(broadcast::error::RecvError::Closed) => {
+                                    current_driver_id = None;
+                                    break;
+                                }
+                                Err(broadcast::error::RecvError::Lagged(n)) => {
+                                    warn!("Error channel lagged {} messages", n);
+                                }
+                            }
+                        }
+                        _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
+                            // Check if driver changed
+                            let new_driver_opt = {
+                                let conn = robot_connection_error.read().await;
+                                conn.driver.clone()
+                            };
+                            match new_driver_opt {
+                                Some(new_driver) => {
+                                    let new_id = Arc::as_ptr(&new_driver) as usize;
+                                    if Some(new_id) != current_driver_id {
+                                        break;
+                                    }
+                                }
+                                None => {
+                                    current_driver_id = None;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                current_driver_id = None;
+            }
+
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     });
@@ -300,10 +398,8 @@ async fn main() {
     let websocket_addr = format!("0.0.0.0:{}", websocket_port);
     let ws_listener = tokio::net::TcpListener::bind(&websocket_addr).await.unwrap();
     info!("🚀 WebSocket server listening on ws://{}", websocket_addr);
-    info!("   Environment variables:");
-    info!("   - FANUC_ROBOT_ADDR={}", robot_addr);
-    info!("   - FANUC_ROBOT_PORT={}", robot_port);
-    info!("   - WEBSOCKET_PORT={}", websocket_port);
+    info!("   No robot connected - use UI to connect to a saved robot connection");
+    info!("   Environment: WEBSOCKET_PORT={}", websocket_port);
 
     while let Ok((stream, addr)) = ws_listener.accept().await {
         info!("New WebSocket connection from {}", addr);

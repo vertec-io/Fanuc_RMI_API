@@ -7,17 +7,31 @@ use fanuc_rmi::dto::{SendPacket, Instruction, FrcLinearRelative, FrcLinearMotion
 use fanuc_rmi::{SpeedType, TermType};
 
 /// Helper function to create a motion packet from a RecentCommand
-pub fn create_motion_packet(cmd: &RecentCommand) -> SendPacket {
+/// Uses the WebSocketManager to get arm configuration from robot connection defaults
+/// Returns None if no robot is connected (can't create valid packet without connection config)
+pub fn create_motion_packet(cmd: &RecentCommand, ws: &WebSocketManager) -> Option<SendPacket> {
+    // Get arm configuration from robot connection defaults
+    // If no robot is connected, we can't create a valid motion packet
+    let active_conn = ws.get_active_connection()?;
+
+    let front = active_conn.default_front.unwrap_or(1) as i8;
+    let up = active_conn.default_up.unwrap_or(1) as i8;
+    let left = active_conn.default_left.unwrap_or(0) as i8;
+    let flip = active_conn.default_flip.unwrap_or(0) as i8;
+    let turn4 = active_conn.default_turn4.unwrap_or(0) as i8;
+    let turn5 = active_conn.default_turn5.unwrap_or(0) as i8;
+    let turn6 = active_conn.default_turn6.unwrap_or(0) as i8;
+
     let config = Configuration {
-        u_tool_number: cmd.utool,
-        u_frame_number: cmd.uframe,
-        front: 1,
-        up: 1,
-        left: 0,
-        flip: 0,
-        turn4: 0,
-        turn5: 0,
-        turn6: 0,
+        u_tool_number: cmd.utool as i8,
+        u_frame_number: cmd.uframe as i8,
+        front,
+        up,
+        left,
+        flip,
+        turn4,
+        turn5,
+        turn6,
     };
     let position = Position {
         x: cmd.x,
@@ -34,7 +48,7 @@ pub fn create_motion_packet(cmd: &RecentCommand) -> SendPacket {
     let term_type = if cmd.term_type == "FINE" { TermType::FINE } else { TermType::CNT };
     let term_value = if cmd.term_type == "FINE" { 0 } else { 100 };
 
-    match cmd.command_type.as_str() {
+    Some(match cmd.command_type.as_str() {
         "linear_rel" => SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative {
             sequence_id: 0,
             configuration: config,
@@ -71,7 +85,7 @@ pub fn create_motion_packet(cmd: &RecentCommand) -> SendPacket {
             term_type,
             term_value,
         })),
-    }
+    })
 }
 
 /// Command input section with recent commands and composer button
@@ -147,15 +161,20 @@ pub fn CommandInputSection() -> impl IntoView {
                         if let Some(idx) = selected_cmd_id.get() {
                             let cmds = recent_commands.get();
                             if let Some(cmd) = cmds.iter().find(|c| c.id == idx) {
-                                let packet = create_motion_packet(cmd);
-                                ws.send_command(packet);
-                                ctx.command_log.update(|log| {
-                                    log.push(CommandLogEntry {
-                                        timestamp: js_sys::Date::new_0().to_locale_time_string("en-US").as_string().unwrap_or_else(|| "??:??:??".to_string()),
-                                        command: cmd.name.clone(),
-                                        status: CommandStatus::Pending,
+                                // Try to create motion packet - requires robot connection
+                                if let Some(packet) = create_motion_packet(cmd, &ws) {
+                                    ws.send_command(packet);
+                                    ctx.command_log.update(|log| {
+                                        log.push(CommandLogEntry {
+                                            timestamp: js_sys::Date::new_0().to_locale_time_string("en-US").as_string().unwrap_or_else(|| "??:??:??".to_string()),
+                                            command: cmd.name.clone(),
+                                            status: CommandStatus::Pending,
+                                        });
                                     });
-                                });
+                                } else {
+                                    // No robot connected - show error
+                                    ws.set_message("Cannot run command: No robot connected".to_string());
+                                }
                             }
                         }
                     }

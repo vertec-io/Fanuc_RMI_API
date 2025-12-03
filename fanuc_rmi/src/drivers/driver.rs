@@ -39,11 +39,21 @@ impl DriverPacket {
     }
 }
 
+/// Protocol error information for broadcasting to clients.
+#[derive(Debug, Clone)]
+pub struct ProtocolError {
+    pub error_type: String,
+    pub message: String,
+    pub raw_data: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FanucDriver {
     pub config: FanucDriverConfig,
     pub log_channel: tokio::sync::broadcast::Sender<String>,
     pub response_tx: tokio::sync::broadcast::Sender<ResponsePacket>,
+    /// Broadcast channel for protocol errors (deserialization failures, etc.)
+    pub error_tx: tokio::sync::broadcast::Sender<ProtocolError>,
     /// Broadcast channel for sent instruction notifications
     ///
     /// Subscribe to this channel to receive notifications when instructions are assigned
@@ -166,10 +176,14 @@ impl FanucDriver {
         let return_info = completed_packet_tx.subscribe();
         let completed_packet_channel = Arc::new(Mutex::new(return_info_rx));
 
+        // Error channel for protocol errors
+        let (error_tx, _) = broadcast::channel(100);
+
         let driver = Self {
             config,
             log_channel: message_channel,
             response_tx,
+            error_tx,
             sent_instruction_tx,
             next_available_sequence_number,
             fanuc_write: write_half,
@@ -289,6 +303,57 @@ impl FanucDriver {
         })
         .await
         .map_err(|_| "Timeout waiting for abort response".to_string())?
+    }
+
+    /// Send a reset command to the FANUC controller
+    ///
+    /// Returns the request ID for tracking this request.
+    pub fn send_reset(&self) -> Result<u64, String> {
+        let packet = SendPacket::Command(Command::FrcReset);
+        self.send_packet(packet, PacketPriority::Standard)
+    }
+
+    /// Send a reset command and wait for the response
+    ///
+    /// This is an async convenience method that sends the reset command and waits
+    /// for the response from the FANUC controller.
+    ///
+    /// **Note:** This method waits for the **next** FrcResetResponse. Do not call
+    /// this method concurrently for the same command type. For concurrent usage,
+    /// use `send_reset()` and subscribe to `response_tx` manually.
+    ///
+    /// # Returns
+    /// * `Ok(FrcResetResponse)` - The reset response from the controller
+    /// * `Err(String)` - Error if the command could not be sent or timeout (5 seconds)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use fanuc_rmi::drivers::FanucDriver;
+    /// # async fn example(driver: &FanucDriver) -> Result<(), String> {
+    /// let response = driver.reset().await?;
+    /// if response.error_id == 0 {
+    ///     println!("Reset successful");
+    /// } else {
+    ///     println!("Reset failed with error: {}", response.error_id);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn reset(&self) -> Result<FrcResetResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+        let _request_id = self.send_reset()?;
+
+        // Wait up to 5 seconds for response
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommandResponse(CommandResponse::FrcReset(reset_response)) = response {
+                    return Ok(reset_response);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for reset response".to_string())?
     }
 
     /// Send an initialize command to the FANUC controller
@@ -978,7 +1043,19 @@ impl FanucDriver {
                 }
             }
             Err(e) => {
-                self.log_error(format!("Invalid JSON ({}): {}", e, line)).await;
+                let error_msg = format!("Invalid JSON ({}): {}", e, line);
+                self.log_error(error_msg.clone()).await;
+
+                // Broadcast protocol error to subscribers
+                let protocol_error = ProtocolError {
+                    error_type: "protocol".to_string(),
+                    message: format!("Failed to parse robot response: {}", e),
+                    raw_data: Some(line.to_string()),
+                };
+                if let Err(send_err) = self.error_tx.send(protocol_error) {
+                    // No subscribers - that's okay, just log it
+                    debug!("No error channel subscribers: {}", send_err);
+                }
             }
         }
         Ok(())

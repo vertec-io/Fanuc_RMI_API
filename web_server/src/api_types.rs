@@ -55,6 +55,19 @@ pub enum ClientRequest {
     #[serde(rename = "get_execution_state")]
     GetExecutionState,
 
+    // Robot Control Commands
+    /// Abort current motion and clear motion queue
+    #[serde(rename = "robot_abort")]
+    RobotAbort,
+
+    /// Reset robot controller (clears errors)
+    #[serde(rename = "robot_reset")]
+    RobotReset,
+
+    /// Initialize robot controller
+    #[serde(rename = "robot_initialize")]
+    RobotInitialize { group_mask: Option<u8> },
+
     // Robot Settings
     #[serde(rename = "get_settings")]
     GetSettings,
@@ -306,6 +319,29 @@ pub enum ServerResponse {
         effective_w: f64,
         effective_p: f64,
         effective_r: f64,
+    },
+
+    /// Broadcast when robot connection is lost unexpectedly.
+    #[serde(rename = "robot_disconnected")]
+    RobotDisconnected {
+        reason: String,
+    },
+
+    /// Broadcast when a robot protocol error occurs.
+    #[serde(rename = "robot_error")]
+    RobotError {
+        error_type: String, // "protocol", "command", "communication"
+        message: String,
+        error_id: Option<i32>,
+    },
+
+    /// Response to robot control commands (abort, reset, initialize).
+    #[serde(rename = "robot_command_result")]
+    RobotCommandResult {
+        command: String, // "abort", "reset", "initialize"
+        success: bool,
+        error_id: Option<i32>,
+        message: Option<String>,
     },
 
     /// Broadcast when execution state changes (for multi-client sync).

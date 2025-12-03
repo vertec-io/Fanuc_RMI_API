@@ -74,45 +74,53 @@ pub struct FrameData {
 ///     "Turn6": byteValue9
 /// }
 /// ```
+///
+/// # Note on signed types
+/// The configuration fields use `i8` instead of `u8` because real FANUC robots
+/// may return negative values in error states (e.g., ErrorID 2556941 returns
+/// values like Left: -98, Flip: -32). Using signed types allows deserialization
+/// to succeed even when the robot is in an error state.
 #[cfg_attr(feature = "DTO", mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub struct Configuration {
     /// User Tool Number (1-based index)
     /// Corresponds to "UToolNumber" in FANUC JSON
-    pub u_tool_number: u8,
+    /// Note: Can be negative in error states
+    pub u_tool_number: i8,
 
     /// User Frame Number (1-based index)
     /// Corresponds to "UFrameNumber" in FANUC JSON
-    pub u_frame_number: u8,
+    /// Note: Can be negative in error states
+    pub u_frame_number: i8,
 
     /// Front configuration bit
     /// Corresponds to "Front" in FANUC JSON
-    pub front: u8,
+    pub front: i8,
 
     /// Up configuration bit
     /// Corresponds to "Up" in FANUC JSON
-    pub up: u8,
+    pub up: i8,
 
     /// Left configuration bit
     /// Corresponds to "Left" in FANUC JSON
-    pub left: u8,
+    pub left: i8,
 
     /// Flip configuration bit
     /// Corresponds to "Flip" in FANUC JSON
-    pub flip: u8,
+    pub flip: i8,
 
     /// Turn4 configuration bit (wrist axis 1)
     /// Corresponds to "Turn4" in FANUC JSON
-    pub turn4: u8,
+    pub turn4: i8,
 
     /// Turn5 configuration bit (wrist axis 2)
     /// Corresponds to "Turn5" in FANUC JSON
-    pub turn5: u8,
+    pub turn5: i8,
 
     /// Turn6 configuration bit (wrist axis 3)
     /// Corresponds to "Turn6" in FANUC JSON
-    pub turn6: u8,
+    pub turn6: i8,
 }
 
 impl Default for Configuration {

@@ -56,6 +56,19 @@ pub enum ClientRequest {
     #[serde(rename = "get_execution_state")]
     GetExecutionState,
 
+    // Robot Control Commands
+    /// Abort current motion and clear motion queue
+    #[serde(rename = "robot_abort")]
+    RobotAbort,
+
+    /// Reset robot controller (clears errors)
+    #[serde(rename = "robot_reset")]
+    RobotReset,
+
+    /// Initialize robot controller
+    #[serde(rename = "robot_initialize")]
+    RobotInitialize { group_mask: Option<u8> },
+
     #[serde(rename = "get_settings")]
     GetSettings,
 
@@ -302,6 +315,29 @@ pub enum ServerResponse {
         effective_w: f64,
         effective_p: f64,
         effective_r: f64,
+    },
+
+    /// Broadcast when robot connection is lost unexpectedly.
+    #[serde(rename = "robot_disconnected")]
+    RobotDisconnected {
+        reason: String,
+    },
+
+    /// Broadcast when a robot protocol error occurs.
+    #[serde(rename = "robot_error")]
+    RobotError {
+        error_type: String, // "protocol", "command", "communication"
+        message: String,
+        error_id: Option<i32>,
+    },
+
+    /// Response to robot control commands (abort, reset, initialize).
+    #[serde(rename = "robot_command_result")]
+    RobotCommandResult {
+        command: String, // "abort", "reset", "initialize"
+        success: bool,
+        error_id: Option<i32>,
+        message: Option<String>,
     },
 
     /// Broadcast when execution state changes (for multi-client sync).
@@ -1117,6 +1153,72 @@ impl WebSocketManager {
                             log::info!("Control status: has_control={}, holder={:?}", has_control, holder_id);
                             set_has_control.set(has_control);
                         }
+                        ServerResponse::RobotDisconnected { reason } => {
+                            log::warn!("Robot disconnected: {}", reason);
+                            // Update connection state
+                            set_robot_connected.set(false);
+                            set_connected_robot_name.set(None);
+                            set_active_connection_id.set(None);
+                            set_has_control.set(false);
+                            // Clear robot data
+                            set_position.set(None);
+                            set_status.set(None);
+                            set_joint_angles.set(None);
+                            // Show error toast
+                            set_api_error.set(Some(format!("Robot disconnected: {}", reason)));
+                        }
+                        ServerResponse::RobotError { error_type, message, error_id } => {
+                            log::error!("Robot error ({}): {} (error_id: {:?})", error_type, message, error_id);
+                            // Add to error log
+                            set_error_log.update(|log| {
+                                let error_msg = if let Some(id) = error_id {
+                                    format!("[{}] {} (ErrorID: {})", error_type, message, id)
+                                } else {
+                                    format!("[{}] {}", error_type, message)
+                                };
+                                log.push(error_msg);
+                                if log.len() > 20 {
+                                    log.remove(0);
+                                }
+                            });
+                            // Also show as toast for critical errors
+                            if error_type == "protocol" || error_type == "communication" {
+                                set_api_error.set(Some(format!("Robot error: {}", message)));
+                            }
+                        }
+                        ServerResponse::RobotCommandResult { command, success, error_id, message } => {
+                            log::info!("Robot command result: {} success={} error_id={:?}", command, success, error_id);
+                            // Add to motion log (command results are similar to motion feedback)
+                            set_motion_log.update(|log| {
+                                let msg = if success {
+                                    format!("✓ {} completed", command)
+                                } else if let Some(ref err_msg) = message {
+                                    format!("✗ {} failed: {}", command, err_msg)
+                                } else if let Some(id) = error_id {
+                                    format!("✗ {} failed (ErrorID: {})", command, id)
+                                } else {
+                                    format!("✗ {} failed", command)
+                                };
+                                log.push(msg);
+                                if log.len() > 20 {
+                                    log.remove(0);
+                                }
+                            });
+                            // Show toast for failures
+                            if !success {
+                                let err_msg = message.unwrap_or_else(|| {
+                                    if let Some(id) = error_id {
+                                        format!("{} failed (ErrorID: {})", command, id)
+                                    } else {
+                                        format!("{} failed", command)
+                                    }
+                                });
+                                set_api_error.set(Some(err_msg));
+                            } else {
+                                // Show success message
+                                set_api_message.set(Some(format!("{} completed", command)));
+                            }
+                        }
                     }
                 } else {
                     log::error!("Failed to parse API response: {}", text_str);
@@ -1127,11 +1229,47 @@ impl WebSocketManager {
         onmessage_callback.forget();
 
         // On error
+        let set_api_error_err = self.set_api_error;
         let onerror_callback = Closure::wrap(Box::new(move |e: ErrorEvent| {
             log::error!("WebSocket error: {:?}", e);
+            set_api_error_err.set(Some("WebSocket connection error".to_string()));
         }) as Box<dyn FnMut(ErrorEvent)>);
         ws.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
         onerror_callback.forget();
+
+        // On close - critical for detecting disconnects
+        let set_connected_close = self.set_connected;
+        let set_robot_connected_close = self.set_robot_connected;
+        let set_has_control_close = self.set_has_control;
+        let set_api_error_close = self.set_api_error;
+        let set_position_close = self.set_position;
+        let set_status_close = self.set_status;
+        let set_joint_angles_close = self.set_joint_angles;
+        let onclose_callback = Closure::wrap(Box::new(move |e: web_sys::CloseEvent| {
+            log::warn!("WebSocket closed: code={}, reason={}", e.code(), e.reason());
+
+            // Immediately update connection state
+            set_connected_close.set(false);
+            set_robot_connected_close.set(false);
+            set_has_control_close.set(false);
+
+            // Clear robot data
+            set_position_close.set(None);
+            set_status_close.set(None);
+            set_joint_angles_close.set(None);
+
+            // Show error toast based on close code
+            let error_msg = if e.code() == 1000 {
+                "WebSocket connection closed normally".to_string()
+            } else if e.code() == 1006 {
+                "WebSocket connection lost - server may be down".to_string()
+            } else {
+                format!("WebSocket disconnected: {} (code {})", e.reason(), e.code())
+            };
+            set_api_error_close.set(Some(error_msg));
+        }) as Box<dyn FnMut(web_sys::CloseEvent)>);
+        ws.set_onclose(Some(onclose_callback.as_ref().unchecked_ref()));
+        onclose_callback.forget();
 
         self.ws.set_value(Some(ws));
 
@@ -1346,6 +1484,23 @@ impl WebSocketManager {
     /// Clear the current program (close it)
     pub fn clear_current_program(&self) {
         self.set_current_program.set(None);
+    }
+
+    // ========== Robot Control Commands ==========
+
+    /// Abort current motion and clear motion queue
+    pub fn robot_abort(&self) {
+        self.send_api_request(ClientRequest::RobotAbort);
+    }
+
+    /// Reset robot controller (clears errors)
+    pub fn robot_reset(&self) {
+        self.send_api_request(ClientRequest::RobotReset);
+    }
+
+    /// Initialize robot controller
+    pub fn robot_initialize(&self, group_mask: Option<u8>) {
+        self.send_api_request(ClientRequest::RobotInitialize { group_mask });
     }
 
     // ========== Robot Connections (Saved Connections) ==========

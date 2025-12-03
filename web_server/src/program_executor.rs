@@ -349,18 +349,18 @@ impl ProgramExecutor {
         };
 
         // Build configuration with uframe/utool and robot arm configuration defaults
-        let uframe = instruction.uframe.unwrap_or(self.defaults.uframe.unwrap_or(0)) as u8;
-        let utool = instruction.utool.unwrap_or(self.defaults.utool.unwrap_or(0)) as u8;
+        let uframe = instruction.uframe.unwrap_or(self.defaults.uframe.unwrap_or(0)) as i8;
+        let utool = instruction.utool.unwrap_or(self.defaults.utool.unwrap_or(0)) as i8;
         let configuration = Configuration {
             u_tool_number: utool,
             u_frame_number: uframe,
-            front: self.defaults.front.unwrap_or(1) as u8,  // Default: Front
-            up: self.defaults.up.unwrap_or(1) as u8,        // Default: Up
-            left: self.defaults.left.unwrap_or(0) as u8,    // Default: Right
-            flip: self.defaults.flip.unwrap_or(0) as u8,    // Default: NoFlip
-            turn4: self.defaults.turn4.unwrap_or(0) as u8,
-            turn5: self.defaults.turn5.unwrap_or(0) as u8,
-            turn6: self.defaults.turn6.unwrap_or(0) as u8,
+            front: self.defaults.front.unwrap_or(1) as i8,  // Default: Front
+            up: self.defaults.up.unwrap_or(1) as i8,        // Default: Up
+            left: self.defaults.left.unwrap_or(0) as i8,    // Default: Right
+            flip: self.defaults.flip.unwrap_or(0) as i8,    // Default: NoFlip
+            turn4: self.defaults.turn4.unwrap_or(0) as i8,
+            turn5: self.defaults.turn5.unwrap_or(0) as i8,
+            turn6: self.defaults.turn6.unwrap_or(0) as i8,
         };
 
         let motion = FrcLinearMotion::new(

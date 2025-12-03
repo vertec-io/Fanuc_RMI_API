@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 use crate::components::layout::workspace::context::WorkspaceContext;
 use crate::websocket::WebSocketManager;
-use fanuc_rmi::dto::{SendPacket, Command, FrcInitialize, FrcSetOverRide};
+use fanuc_rmi::dto::{SendPacket, Command, FrcSetOverRide};
 
 /// Quick Commands panel for robot control (Initialize, Reset, Abort, Continue).
 #[component]
@@ -88,11 +88,11 @@ pub fn QuickCommandsPanel() -> impl IntoView {
                 </div>
             </div>
             <div class="flex gap-2 flex-wrap items-center">
-                // Initialize button
+                // Initialize button - uses API endpoint for proper error handling
                 <button
                     class="bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] text-[9px] px-3 py-1.5 rounded hover:bg-[#22c55e30] flex items-center gap-1"
                     on:click=move |_| {
-                        ws.send_command(SendPacket::Command(Command::FrcInitialize(FrcInitialize { group_mask: 1 })));
+                        ws.robot_initialize(Some(1));
                     }
                 >
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -100,11 +100,11 @@ pub fn QuickCommandsPanel() -> impl IntoView {
                     </svg>
                     "Initialize"
                 </button>
-                // Reset button
+                // Reset button - uses API endpoint for proper error handling
                 <button
                     class="bg-[#f59e0b20] border border-[#f59e0b40] text-[#f59e0b] text-[9px] px-3 py-1.5 rounded hover:bg-[#f59e0b30] flex items-center gap-1"
                     on:click=move |_| {
-                        ws.send_command(SendPacket::Command(Command::FrcReset));
+                        ws.robot_reset();
                     }
                 >
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -112,12 +112,12 @@ pub fn QuickCommandsPanel() -> impl IntoView {
                     </svg>
                     "Reset"
                 </button>
-                // Abort button
+                // Abort button - uses API endpoint for proper error handling and state sync
                 <button
                     class="bg-[#ff444420] border border-[#ff444440] text-[#ff4444] text-[9px] px-3 py-1.5 rounded hover:bg-[#ff444430] flex items-center gap-1"
                     on:click=move |_| {
-                        ws.send_command(SendPacket::Command(Command::FrcAbort));
-                        // Also stop any running program
+                        ws.robot_abort();
+                        // Also stop any running program (server will broadcast state change)
                         ctx.program_running.set(false);
                         ctx.program_paused.set(false);
                         ctx.executing_line.set(-1);
