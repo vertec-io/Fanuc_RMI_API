@@ -159,3 +159,25 @@ fn test_configuration_roundtrip_json() {
     assert_eq!(original, deserialized);
 }
 
+
+#[test]
+fn test_real_robot_joint_angles_response() {
+    use fanuc_rmi::packets::ResponsePacket;
+    
+    let json = r#"{"Command" : "FRC_ReadJointAngles", "ErrorID" : 2556941, "TimeTag" : 278829444, "Group": 248, "JointAngle" : {"J1" : 1.948e-04 , "J2" : 0.000, "J3" : 0.000, "J4" : 0.000, "J5" : 0.000, "J6" : 0.000, "J7" : 0.000, "J8" : 0.000,"J9" : 1.948e-04}}"#;
+    
+    let result = serde_json::from_str::<ResponsePacket>(json);
+    println!("Parse result: {:?}", result);
+    assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+}
+
+#[test]
+fn test_real_robot_cartesian_position_response() {
+    use fanuc_rmi::packets::ResponsePacket;
+    
+    let json = r#"{"Command" : "FRC_ReadCartesianPosition", "ErrorID" : 2556941, "TimeTag" : 278829424, "Group" : 248, "Configuration" : {"UToolNumber" :  0, "UFrameNumber" :  0, "Front" : 19, "Up" : 7, "Left" : -98, "Flip" : -32, "Turn4" : 19, "Turn5" : 7, "Turn6" : -97}, "Position" : {"X" : 1.948e-04,  "Y" : 0.000, "Z" : 0.000, "W" : 0.000, "P" : 0.000, "R" : 0.000, "Ext1" : 0.000, "Ext2" : 0.000, "Ext3" : 1.948e-04}}"#;
+    
+    let result = serde_json::from_str::<ResponsePacket>(json);
+    println!("Parse result: {:?}", result);
+    assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+}
