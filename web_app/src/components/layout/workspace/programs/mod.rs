@@ -447,16 +447,17 @@ fn ProgramDetails(
                         .and_then(|i| i.speed)
                         .map(|s| format!("{} mm/s", s))
                         .unwrap_or_else(|| "N/A".to_string());
-                    let frame_tool_str = "N/A".to_string();
-
-                    let preview_lines: Vec<String> = prog.instructions.iter()
-                        .take(5)
+                    // Get frame/tool from first instruction or show N/A
+                    let frame_tool_str = prog.instructions.first()
                         .map(|i| {
-                            let term = i.term_type.clone().unwrap_or_else(|| "CNT100".to_string());
-                            let spd = i.speed.unwrap_or(100.0);
-                            format!("{:03}: L P[{}] {:.0}mm/sec {}", i.line_number, i.line_number, spd, term)
+                            let uframe = i.uframe.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string());
+                            let utool = i.utool.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string());
+                            format!("F{}/T{}", uframe, utool)
                         })
-                        .collect();
+                        .unwrap_or_else(|| "N/A".to_string());
+
+                    // Clone instructions for the table display
+                    let instructions_for_table = prog.instructions.clone();
 
                     let program_lines_for_load: Vec<ProgramLine> = prog.instructions.iter()
                         .map(|i| ProgramLine {
@@ -469,6 +470,8 @@ fn ProgramDetails(
                             r: i.r.unwrap_or(0.0),
                             speed: i.speed.unwrap_or(100.0),
                             term_type: i.term_type.clone().unwrap_or_else(|| "CNT100".to_string()),
+                            uframe: i.uframe,
+                            utool: i.utool,
                         })
                         .collect();
 
@@ -539,25 +542,59 @@ fn ProgramDetails(
                                 </div>
                             </div>
 
-                            // Preview area
+                            // Full program table
                             <div class="flex-1 p-3 overflow-auto">
-                                <h4 class="text-[9px] text-[#666666] uppercase mb-2">"Program Preview"</h4>
-                                <div class="bg-[#111111] rounded border border-[#ffffff08] p-2 font-mono text-[9px] text-[#888888]">
-                                    {if preview_lines.is_empty() {
+                                <h4 class="text-[9px] text-[#666666] uppercase mb-2">"Program Instructions"</h4>
+                                <div class="bg-[#111111] rounded border border-[#ffffff08] overflow-auto max-h-[400px]">
+                                    {if instructions_for_table.is_empty() {
                                         Either::Left(view! {
-                                            <div class="text-[#555555]">"No instructions"</div>
+                                            <div class="p-4 text-center text-[#555555] text-[10px]">"No instructions - upload a CSV to add instructions"</div>
                                         })
                                     } else {
                                         Either::Right(view! {
-                                            <div class="text-[#555555]">"// First 5 lines preview"</div>
-                                            {preview_lines.into_iter().map(|line| view! {
-                                                <div>{line}</div>
-                                            }).collect_view()}
-                                            {if line_count > 5 {
-                                                Either::Left(view! { <div class="text-[#555555]">"..."</div> })
-                                            } else {
-                                                Either::Right(())
-                                            }}
+                                            <table class="w-full text-[9px] font-mono">
+                                                <thead class="bg-[#1a1a1a] sticky top-0">
+                                                    <tr class="text-[#666666] text-left">
+                                                        <th class="px-2 py-1.5 font-medium">"#"</th>
+                                                        <th class="px-2 py-1.5 font-medium">"X"</th>
+                                                        <th class="px-2 py-1.5 font-medium">"Y"</th>
+                                                        <th class="px-2 py-1.5 font-medium">"Z"</th>
+                                                        <th class="px-2 py-1.5 font-medium">"W"</th>
+                                                        <th class="px-2 py-1.5 font-medium">"P"</th>
+                                                        <th class="px-2 py-1.5 font-medium">"R"</th>
+                                                        <th class="px-2 py-1.5 font-medium">"Speed"</th>
+                                                        <th class="px-2 py-1.5 font-medium">"Term"</th>
+                                                        <th class="px-2 py-1.5 font-medium">"UFrame"</th>
+                                                        <th class="px-2 py-1.5 font-medium">"UTool"</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {instructions_for_table.into_iter().map(|instr| {
+                                                        let w_str = instr.w.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "-".to_string());
+                                                        let p_str = instr.p.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "-".to_string());
+                                                        let r_str = instr.r.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "-".to_string());
+                                                        let speed_str = instr.speed.map(|v| format!("{:.0}", v)).unwrap_or_else(|| "-".to_string());
+                                                        let term_str = instr.term_type.clone().unwrap_or_else(|| "-".to_string());
+                                                        let uframe_str = instr.uframe.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string());
+                                                        let utool_str = instr.utool.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string());
+                                                        view! {
+                                                            <tr class="border-t border-[#ffffff08] hover:bg-[#ffffff05]">
+                                                                <td class="px-2 py-1 text-[#00d9ff]">{instr.line_number}</td>
+                                                                <td class="px-2 py-1 text-white">{format!("{:.2}", instr.x)}</td>
+                                                                <td class="px-2 py-1 text-white">{format!("{:.2}", instr.y)}</td>
+                                                                <td class="px-2 py-1 text-white">{format!("{:.2}", instr.z)}</td>
+                                                                <td class="px-2 py-1 text-[#888888]">{w_str}</td>
+                                                                <td class="px-2 py-1 text-[#888888]">{p_str}</td>
+                                                                <td class="px-2 py-1 text-[#888888]">{r_str}</td>
+                                                                <td class="px-2 py-1 text-[#22c55e]">{speed_str}</td>
+                                                                <td class="px-2 py-1 text-[#888888]">{term_str}</td>
+                                                                <td class="px-2 py-1 text-[#888888]">{uframe_str}</td>
+                                                                <td class="px-2 py-1 text-[#888888]">{utool_str}</td>
+                                                            </tr>
+                                                        }
+                                                    }).collect_view()}
+                                                </tbody>
+                                            </table>
                                         })
                                     }}
                                 </div>

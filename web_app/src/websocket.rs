@@ -490,6 +490,8 @@ pub struct InstructionDto {
     pub r: Option<f64>,
     pub speed: Option<f64>,
     pub term_type: Option<String>,
+    pub uframe: Option<i32>,
+    pub utool: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1159,7 +1161,10 @@ impl WebSocketManager {
                             set_robot_connected.set(false);
                             set_connected_robot_name.set(None);
                             set_active_connection_id.set(None);
-                            set_has_control.set(false);
+                            // NOTE: Do NOT clear has_control here - the user should maintain
+                            // control of the server even when the robot disconnects.
+                            // This allows them to connect to a different robot without
+                            // having to re-acquire control.
                             // Clear robot data
                             set_position.set(None);
                             set_status.set(None);

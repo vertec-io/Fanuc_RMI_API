@@ -475,6 +475,8 @@ pub struct InstructionDto {
     pub r: Option<f64>,
     pub speed: Option<f64>,
     pub term_type: Option<String>,
+    pub uframe: Option<i32>,
+    pub utool: Option<i32>,
 }
 
 /// Robot settings DTO.

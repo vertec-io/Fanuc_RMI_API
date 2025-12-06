@@ -105,5 +105,7 @@ pub struct ProgramLine {
     pub r: f64,
     pub speed: f64,
     pub term_type: String,
+    pub uframe: Option<i32>,
+    pub utool: Option<i32>,
 }
 

@@ -70,6 +70,8 @@ pub fn ProgramVisualDisplay() -> impl IntoView {
                         r: i.r.unwrap_or(0.0),
                         speed: i.speed.unwrap_or(100.0),
                         term_type: i.term_type.clone().unwrap_or_else(|| "CNT".to_string()),
+                        uframe: i.uframe,
+                        utool: i.utool,
                     }
                 }).collect();
 

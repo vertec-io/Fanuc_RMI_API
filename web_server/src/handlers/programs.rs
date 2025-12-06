@@ -48,6 +48,8 @@ pub async fn get_program(db: Arc<Mutex<Database>>, id: i64) -> ServerResponse {
                     r: i.r,
                     speed: i.speed,
                     term_type: i.term_type.clone(),
+                    uframe: i.uframe,
+                    utool: i.utool,
                 }
             }).collect();
             ServerResponse::Program {

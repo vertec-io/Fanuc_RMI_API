@@ -112,6 +112,9 @@ struct FrameToolData {
     r: f64,
 }
 
+/// Error code for invalid sequence ID (from FANUC RMI documentation)
+const ERROR_INVALID_SEQUENCE_ID: u32 = 2556957;
+
 // Simulated robot state - now using RwLock for concurrent read access
 #[derive(Clone, Debug)]
 struct RobotState {
@@ -121,6 +124,7 @@ struct RobotState {
     kinematics: CRXKinematics,
     mode: SimulatorMode,
     last_sequence_id: u32, // Track the last completed sequence ID
+    expected_next_sequence_id: u32, // Track the expected next sequence ID (for validation)
     // Frame/Tool state
     active_uframe: u8,
     active_utool: u8,
@@ -171,6 +175,7 @@ impl RobotState {
             kinematics,
             mode,
             last_sequence_id: 0,
+            expected_next_sequence_id: 1, // Start expecting sequence ID 1
             // Initialize Frame/Tool state
             active_uframe: 0,
             active_utool: 0,
@@ -517,6 +522,13 @@ async fn handle_secondary_client(
                     let mut response_json = match request_json["Command"].as_str() {
                         Some("FRC_Initialize") => {
                             println!("📋 FRC_Initialize");
+                            // Reset sequence tracking on initialize
+                            {
+                                let mut state = robot_state.lock().await;
+                                state.last_sequence_id = 0;
+                                state.expected_next_sequence_id = 1;
+                                eprintln!("🔄 Sequence counter reset: expected_next=1");
+                            }
                             json!({
                                 "Command": "FRC_Initialize",
                                 "ErrorID": 0,
@@ -525,7 +537,8 @@ async fn handle_secondary_client(
                         }
                         Some("FRC_GetStatus") => {
                             let state = robot_state.lock().await;
-                            let next_seq = state.last_sequence_id + 1;
+                            // Use expected_next_sequence_id for NextSequenceID
+                            let next_seq = state.expected_next_sequence_id;
                             let override_val = executor_control.get_speed_override();
                             let paused = if executor_control.is_paused() { 1 } else { 0 };
                             json!({
@@ -785,6 +798,34 @@ async fn handle_secondary_client(
                     // Extract SequenceID from instruction requests (if present)
                     if let Some(seq_id) = request_json.get("SequenceID").and_then(|v| v.as_u64()) {
                         seq = seq_id as u32;
+                    }
+
+                    // Validate sequence ID for motion instructions
+                    let is_motion_instruction = matches!(
+                        request_json["Instruction"].as_str(),
+                        Some("FRC_LinearMotion") | Some("FRC_LinearRelative") | Some("FRC_JointMotion")
+                    );
+
+                    if is_motion_instruction {
+                        let mut state = robot_state.lock().await;
+                        let expected = state.expected_next_sequence_id;
+
+                        if seq != expected {
+                            eprintln!("❌ Sequence ID mismatch: received {} but expected {}", seq, expected);
+                            let instruction_name = request_json["Instruction"].as_str().unwrap_or("Unknown");
+                            let error_response = json!({
+                                "Instruction": instruction_name,
+                                "ErrorID": ERROR_INVALID_SEQUENCE_ID,
+                                "SequenceID": seq,
+                            });
+                            let response = serde_json::to_string(&error_response)? + "\r\n";
+                            socket.write_all(response.as_bytes()).await?;
+                            continue; // Skip processing this instruction
+                        }
+
+                        // Increment expected sequence ID for next instruction
+                        state.expected_next_sequence_id = seq + 1;
+                        eprintln!("✓ Sequence ID {} validated, next expected: {}", seq, state.expected_next_sequence_id);
                     }
 
                     // Handle motion instructions asynchronously
