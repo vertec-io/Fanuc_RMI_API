@@ -1,251 +1,442 @@
-//! Command Composer Modal - wizard for creating motion commands.
+//! Command Composer Modal - single-page composer for creating motion commands.
+//!
+//! Redesigned from wizard to single-page layout per specification.
+//! Supports LinearAbsolute, LinearRelative, JointAbsolute, JointRelative instruction types.
 
 use leptos::prelude::*;
-use leptos::either::Either;
+use fanuc_rmi::dto::*;
 use crate::components::layout::workspace::context::{WorkspaceContext, RecentCommand};
+use crate::websocket::WebSocketManager;
 
-/// Command Composer Modal - wizard for creating motion commands
+/// Instruction types available in the composer
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum InstructionType {
+    LinearAbsolute,
+    LinearRelative,
+    JointAbsolute,
+    JointRelative,
+}
+
+impl InstructionType {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::LinearAbsolute => "Linear Absolute",
+            Self::LinearRelative => "Linear Relative",
+            Self::JointAbsolute => "Joint Absolute",
+            Self::JointRelative => "Joint Relative",
+        }
+    }
+
+    fn is_cartesian(&self) -> bool {
+        matches!(self, Self::LinearAbsolute | Self::LinearRelative)
+    }
+
+    fn is_absolute(&self) -> bool {
+        matches!(self, Self::LinearAbsolute | Self::JointAbsolute)
+    }
+}
+
+/// Command Composer Modal - single-page layout for creating motion commands
 #[component]
 pub fn CommandComposerModal() -> impl IntoView {
     let ctx = use_context::<WorkspaceContext>().expect("WorkspaceContext not found");
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
 
-    // Check if we're editing an existing command
-    let editing_cmd = ctx.selected_command_id.get().and_then(|id| {
-        ctx.recent_commands.get().into_iter().find(|c| c.id == id)
+    // Instruction type selection
+    let (instr_type, set_instr_type) = signal(InstructionType::LinearRelative);
+
+    // Get current robot position/angles for defaults
+    let current_pos = ws.position;
+    let current_orient = ws.orientation;
+    let current_joints = ws.joint_angles;
+    let active_config = ws.active_configuration;
+
+    // Position inputs (Cartesian: X,Y,Z,W,P,R or Joint: J1-J6)
+    let (x, set_x) = signal(0.0f64);
+    let (y, set_y) = signal(0.0f64);
+    let (z, set_z) = signal(0.0f64);
+    let (w, set_w) = signal(0.0f64);
+    let (p, set_p) = signal(0.0f64);
+    let (r, set_r) = signal(0.0f64);
+
+    // Joint angles (for joint moves)
+    let (j1, set_j1) = signal(0.0f64);
+    let (j2, set_j2) = signal(0.0f64);
+    let (j3, set_j3) = signal(0.0f64);
+    let (j4, set_j4) = signal(0.0f64);
+    let (j5, set_j5) = signal(0.0f64);
+    let (j6, set_j6) = signal(0.0f64);
+
+    // Motion parameters - get defaults from robot connection
+    // Default to robot's cartesian jog speed, or 100 if no robot connected
+    let default_cartesian_speed = ws.get_active_connection()
+        .map(|c| c.default_cartesian_jog_speed)
+        .unwrap_or(100.0);
+    let (speed, set_speed) = signal(default_cartesian_speed);
+    let (term_type, set_term_type) = signal("FINE".to_string());
+
+    // Update position and speed defaults when instruction type changes
+    Effect::new(move || {
+        let itype = instr_type.get();
+
+        // Update speed default based on instruction type
+        // Cartesian moves use cartesian jog speed, joint moves use joint jog speed
+        if let Some(conn) = ws.get_active_connection() {
+            if itype.is_cartesian() {
+                set_speed.set(conn.default_cartesian_jog_speed);
+            } else {
+                set_speed.set(conn.default_joint_jog_speed);
+            }
+        }
+
+        if itype.is_absolute() {
+            // Absolute moves: default to current position
+            if itype.is_cartesian() {
+                if let Some((px, py, pz)) = current_pos.get() {
+                    set_x.set(px);
+                    set_y.set(py);
+                    set_z.set(pz);
+                }
+                if let Some((pw, pp, pr)) = current_orient.get() {
+                    set_w.set(pw);
+                    set_p.set(pp);
+                    set_r.set(pr);
+                }
+            } else {
+                // Joint absolute
+                if let Some(angles) = current_joints.get() {
+                    set_j1.set(angles[0] as f64);
+                    set_j2.set(angles[1] as f64);
+                    set_j3.set(angles[2] as f64);
+                    set_j4.set(angles[3] as f64);
+                    set_j5.set(angles[4] as f64);
+                    set_j6.set(angles[5] as f64);
+                }
+            }
+        } else {
+            // Relative moves: default to zeros
+            set_x.set(0.0);
+            set_y.set(0.0);
+            set_z.set(0.0);
+            set_w.set(0.0);
+            set_p.set(0.0);
+            set_r.set(0.0);
+            set_j1.set(0.0);
+            set_j2.set(0.0);
+            set_j3.set(0.0);
+            set_j4.set(0.0);
+            set_j5.set(0.0);
+            set_j6.set(0.0);
+        }
     });
 
-    // Initialize values from selected command or use defaults
-    let (step, set_step) = signal(1usize);
-    let (cmd_type, set_cmd_type) = signal(
-        editing_cmd.as_ref().map(|c| c.command_type.clone()).unwrap_or_else(|| "linear_rel".to_string())
-    );
+    // Send command to robot
+    let send_command = move || {
+        let itype = instr_type.get_untracked();
+        let spd = speed.get_untracked();
+        let term = if term_type.get_untracked() == "FINE" {
+            fanuc_rmi::TermType::FINE
+        } else {
+            fanuc_rmi::TermType::CNT
+        };
 
-    // Position inputs - initialize from selected command if editing
-    let (x, set_x) = signal(editing_cmd.as_ref().map(|c| c.x).unwrap_or(0.0));
-    let (y, set_y) = signal(editing_cmd.as_ref().map(|c| c.y).unwrap_or(0.0));
-    let (z, set_z) = signal(editing_cmd.as_ref().map(|c| c.z).unwrap_or(0.0));
-    let (w, set_w) = signal(editing_cmd.as_ref().map(|c| c.w).unwrap_or(0.0));
-    let (p, set_p) = signal(editing_cmd.as_ref().map(|c| c.p).unwrap_or(0.0));
-    let (r, set_r) = signal(editing_cmd.as_ref().map(|c| c.r).unwrap_or(0.0));
+        // Build configuration from active config
+        let config = active_config.get_untracked();
+        let configuration = Configuration {
+            u_frame_number: config.as_ref().map(|c| c.u_frame_number as i8).unwrap_or(0),
+            u_tool_number: config.as_ref().map(|c| c.u_tool_number as i8).unwrap_or(1),
+            front: config.as_ref().map(|c| c.front as i8).unwrap_or(1),
+            up: config.as_ref().map(|c| c.up as i8).unwrap_or(1),
+            left: config.as_ref().map(|c| c.left as i8).unwrap_or(0),
+            flip: config.as_ref().map(|c| c.flip as i8).unwrap_or(0),
+            turn4: config.as_ref().map(|c| c.turn4 as i8).unwrap_or(0),
+            turn5: config.as_ref().map(|c| c.turn5 as i8).unwrap_or(0),
+            turn6: config.as_ref().map(|c| c.turn6 as i8).unwrap_or(0),
+        };
 
-    // Config inputs - initialize from selected command if editing
-    let (speed, set_speed) = signal(editing_cmd.as_ref().map(|c| c.speed).unwrap_or(50.0));
-    let (term_type, set_term_type) = signal(
-        editing_cmd.as_ref().map(|c| c.term_type.clone()).unwrap_or_else(|| "CNT".to_string())
-    );
-    let (uframe, set_uframe) = signal(editing_cmd.as_ref().map(|c| c.uframe).unwrap_or(0));
-    let (utool, set_utool) = signal(editing_cmd.as_ref().map(|c| c.utool).unwrap_or(0));
+        let packet = match itype {
+            InstructionType::LinearAbsolute => {
+                SendPacket::Instruction(Instruction::FrcLinearMotion(FrcLinearMotion {
+                    sequence_id: 0,
+                    configuration: configuration.clone(),
+                    position: Position {
+                        x: x.get_untracked(),
+                        y: y.get_untracked(),
+                        z: z.get_untracked(),
+                        w: w.get_untracked(),
+                        p: p.get_untracked(),
+                        r: r.get_untracked(),
+                        ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                    },
+                    speed_type: fanuc_rmi::SpeedType::MMSec,
+                    speed: spd,
+                    term_type: term,
+                    term_value: 1,
+                }))
+            }
+            InstructionType::LinearRelative => {
+                SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative {
+                    sequence_id: 0,
+                    configuration: configuration.clone(),
+                    position: Position {
+                        x: x.get_untracked(),
+                        y: y.get_untracked(),
+                        z: z.get_untracked(),
+                        w: w.get_untracked(),
+                        p: p.get_untracked(),
+                        r: r.get_untracked(),
+                        ext1: 0.0, ext2: 0.0, ext3: 0.0,
+                    },
+                    speed_type: fanuc_rmi::SpeedType::MMSec,
+                    speed: spd,
+                    term_type: term,
+                    term_value: 1,
+                }))
+            }
+            InstructionType::JointAbsolute => {
+                SendPacket::Instruction(Instruction::FrcJointMotionJRep(FrcJointMotionJRep {
+                    sequence_id: 0,
+                    joint_angles: JointAngles {
+                        j1: j1.get_untracked() as f32,
+                        j2: j2.get_untracked() as f32,
+                        j3: j3.get_untracked() as f32,
+                        j4: j4.get_untracked() as f32,
+                        j5: j5.get_untracked() as f32,
+                        j6: j6.get_untracked() as f32,
+                        j7: 0.0, j8: 0.0, j9: 0.0,
+                    },
+                    speed_type: fanuc_rmi::SpeedType::Time, // Time-based for joint motion
+                    speed: spd,
+                    term_type: term,
+                    term_value: 1,
+                }))
+            }
+            InstructionType::JointRelative => {
+                SendPacket::Instruction(Instruction::FrcJointRelativeJRep(FrcJointRelativeJRep {
+                    sequence_id: 0,
+                    joint_angles: JointAngles {
+                        j1: j1.get_untracked() as f32,
+                        j2: j2.get_untracked() as f32,
+                        j3: j3.get_untracked() as f32,
+                        j4: j4.get_untracked() as f32,
+                        j5: j5.get_untracked() as f32,
+                        j6: j6.get_untracked() as f32,
+                        j7: 0.0, j8: 0.0, j9: 0.0,
+                    },
+                    speed_type: fanuc_rmi::SpeedType::Time,
+                    speed: spd,
+                    term_type: term,
+                    term_value: 1,
+                }))
+            }
+        };
 
-    // Track if we're editing (for display purposes)
-    let is_editing = editing_cmd.is_some();
+        ws.send_command(packet);
+
+        // Add to recent commands
+        let new_id = js_sys::Date::now() as usize;
+        let cmd = RecentCommand {
+            id: new_id,
+            name: format!("{} ({:.1}, {:.1}, {:.1})",
+                instr_type.get_untracked().label(),
+                if instr_type.get_untracked().is_cartesian() { x.get_untracked() } else { j1.get_untracked() },
+                if instr_type.get_untracked().is_cartesian() { y.get_untracked() } else { j2.get_untracked() },
+                if instr_type.get_untracked().is_cartesian() { z.get_untracked() } else { j3.get_untracked() }
+            ),
+            command_type: instr_type.get_untracked().label().to_string(),
+            description: format!("{} {}", speed.get_untracked(), term_type.get_untracked()),
+            x: x.get_untracked(),
+            y: y.get_untracked(),
+            z: z.get_untracked(),
+            w: w.get_untracked(),
+            p: p.get_untracked(),
+            r: r.get_untracked(),
+            speed: speed.get_untracked(),
+            term_type: term_type.get_untracked(),
+            uframe: active_config.get_untracked().map(|c| c.u_frame_number as u8).unwrap_or(0),
+            utool: active_config.get_untracked().map(|c| c.u_tool_number as u8).unwrap_or(1),
+        };
+        ctx.recent_commands.update(|cmds| {
+            cmds.insert(0, cmd);
+            while cmds.len() > 15 {
+                cmds.pop();
+            }
+        });
+        ctx.selected_command_id.set(Some(new_id));
+        ctx.show_composer.set(false);
+    };
+    let send_command = StoredValue::new(send_command);
 
     view! {
         <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-            <div class="bg-[#111111] border border-[#ffffff10] rounded-lg w-[500px] max-h-[80vh] flex flex-col">
+            <div class="bg-[#111111] border border-[#ffffff10] rounded-lg w-[480px] flex flex-col">
                 // Header
-                <ComposerHeader is_editing=is_editing ctx=ctx/>
+                <div class="flex items-center justify-between p-3 border-b border-[#ffffff08]">
+                    <h2 class="text-sm font-semibold text-white flex items-center">
+                        <svg class="w-4 h-4 mr-2 text-[#00d9ff]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                        </svg>
+                        "Compose Instruction"
+                    </h2>
+                    <button
+                        class="text-[#666666] hover:text-white"
+                        on:click=move |_| ctx.show_composer.set(false)
+                    >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
 
-                // Step indicator
-                <StepIndicator step=step/>
+                // Content
+                <div class="p-3 space-y-3">
+                    // Instruction Type dropdown
+                    <div>
+                        <label class="block text-[10px] text-[#888888] mb-1">"Instruction Type"</label>
+                        <select
+                            class="w-full bg-[#0a0a0a] border border-[#ffffff08] rounded px-2 py-1.5 text-[11px] text-white focus:border-[#00d9ff] focus:outline-none"
+                            on:change=move |ev| {
+                                let val = event_target_value(&ev);
+                                set_instr_type.set(match val.as_str() {
+                                    "LinearAbsolute" => InstructionType::LinearAbsolute,
+                                    "LinearRelative" => InstructionType::LinearRelative,
+                                    "JointAbsolute" => InstructionType::JointAbsolute,
+                                    "JointRelative" => InstructionType::JointRelative,
+                                    _ => InstructionType::LinearRelative,
+                                });
+                            }
+                        >
+                            <option value="LinearRelative" selected=move || instr_type.get() == InstructionType::LinearRelative>"Linear Relative"</option>
+                            <option value="LinearAbsolute" selected=move || instr_type.get() == InstructionType::LinearAbsolute>"Linear Absolute"</option>
+                            <option value="JointAbsolute" selected=move || instr_type.get() == InstructionType::JointAbsolute>"Joint Absolute"</option>
+                            <option value="JointRelative" selected=move || instr_type.get() == InstructionType::JointRelative>"Joint Relative"</option>
+                        </select>
+                    </div>
 
-                // Content - Step 1: Command Type
-                <div class="flex-1 overflow-y-auto p-3">
-                    {move || match step.get() {
-                        1 => Either::Left(Either::Left(view! {
-                            <Step1TypeSelection cmd_type=cmd_type set_cmd_type=set_cmd_type/>
-                        })),
-                        2 => Either::Left(Either::Right(view! {
-                            <Step2Parameters
-                                x=x set_x=set_x y=y set_y=set_y z=z set_z=set_z
-                                w=w set_w=set_w p=p set_p=set_p r=r set_r=set_r
-                                speed=speed set_speed=set_speed
-                                term_type=term_type set_term_type=set_term_type
-                                uframe=uframe set_uframe=set_uframe
-                                utool=utool set_utool=set_utool
-                            />
-                        })),
-                        _ => Either::Right(view! {
-                            <Step3Preview
-                                cmd_type=cmd_type x=x y=y z=z w=w p=p r=r
-                                speed=speed term_type=term_type uframe=uframe utool=utool
-                            />
-                        }),
-                    }}
+                    // Position section
+                    <div class="bg-[#0a0a0a] border border-[#ffffff08] rounded p-2">
+                        <label class="block text-[10px] text-[#888888] mb-1.5">"Position"</label>
+                        {move || if instr_type.get().is_cartesian() {
+                            // Cartesian position (X,Y,Z,W,P,R)
+                            view! {
+                                <div class="grid grid-cols-6 gap-1">
+                                    <NumberInput label="X" value=x set_value=set_x step=0.1 unit="mm"/>
+                                    <NumberInput label="Y" value=y set_value=set_y step=0.1 unit="mm"/>
+                                    <NumberInput label="Z" value=z set_value=set_z step=0.1 unit="mm"/>
+                                    <NumberInput label="W" value=w set_value=set_w step=0.1 unit="°"/>
+                                    <NumberInput label="P" value=p set_value=set_p step=0.1 unit="°"/>
+                                    <NumberInput label="R" value=r set_value=set_r step=0.1 unit="°"/>
+                                </div>
+                            }.into_any()
+                        } else {
+                            // Joint angles (J1-J6)
+                            view! {
+                                <div class="grid grid-cols-6 gap-1">
+                                    <NumberInput label="J1" value=j1 set_value=set_j1 step=0.1 unit="°"/>
+                                    <NumberInput label="J2" value=j2 set_value=set_j2 step=0.1 unit="°"/>
+                                    <NumberInput label="J3" value=j3 set_value=set_j3 step=0.1 unit="°"/>
+                                    <NumberInput label="J4" value=j4 set_value=set_j4 step=0.1 unit="°"/>
+                                    <NumberInput label="J5" value=j5 set_value=set_j5 step=0.1 unit="°"/>
+                                    <NumberInput label="J6" value=j6 set_value=set_j6 step=0.1 unit="°"/>
+                                </div>
+                            }.into_any()
+                        }}
+                    </div>
+
+                    // Motion Parameters
+                    <div class="bg-[#0a0a0a] border border-[#ffffff08] rounded p-2">
+                        <label class="block text-[10px] text-[#888888] mb-1.5">"Motion Parameters"</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-[8px] text-[#555555] mb-0.5">"Speed"</label>
+                                <div class="flex items-center gap-1">
+                                    <input
+                                        type="number"
+                                        step="1"
+                                        class="flex-1 bg-[#111111] border border-[#ffffff08] rounded px-2 py-1 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                        prop:value=move || format!("{:.0}", speed.get())
+                                        on:input=move |ev| {
+                                            if let Ok(v) = event_target_value(&ev).parse() {
+                                                set_speed.set(v);
+                                            }
+                                        }
+                                    />
+                                    <span class="text-[8px] text-[#555555]">
+                                        {move || if instr_type.get().is_cartesian() { "mm/s" } else { "%" }}
+                                    </span>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-[8px] text-[#555555] mb-0.5">"Termination"</label>
+                                <select
+                                    class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                    on:change=move |ev| set_term_type.set(event_target_value(&ev))
+                                >
+                                    <option value="FINE" selected=move || term_type.get() == "FINE">"FINE"</option>
+                                    <option value="CNT" selected=move || term_type.get() == "CNT">"CNT"</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    // Configuration (read-only, only for Cartesian moves)
+                    <Show when=move || instr_type.get().is_cartesian()>
+                        <div class="bg-[#0a0a0a] border border-[#ffffff08] rounded p-2">
+                            <label class="block text-[10px] text-[#888888] mb-1.5">"Configuration (from active)"</label>
+                            {move || {
+                                let config = active_config.get();
+                                view! {
+                                    <div class="flex items-center gap-3 text-[10px]">
+                                        <span class="text-[#666666]">"UFrame:"</span>
+                                        <span class="text-white">{config.as_ref().map(|c| c.u_frame_number).unwrap_or(0)}</span>
+                                        <span class="text-[#666666]">"UTool:"</span>
+                                        <span class="text-white">{config.as_ref().map(|c| c.u_tool_number).unwrap_or(1)}</span>
+                                        <span class="text-[#333333]">"|"</span>
+                                        <span class="text-[#888888]">
+                                            {config.as_ref().map(|c| {
+                                                format!("{} {} {} {}",
+                                                    if c.front != 0 { "Front" } else { "Back" },
+                                                    if c.up != 0 { "Up" } else { "Down" },
+                                                    if c.left != 0 { "Left" } else { "Right" },
+                                                    if c.flip != 0 { "Flip" } else { "NoFlip" }
+                                                )
+                                            }).unwrap_or_else(|| "---".to_string())}
+                                        </span>
+                                    </div>
+                                }
+                            }}
+                        </div>
+                    </Show>
                 </div>
 
                 // Footer
-                <ComposerFooter
-                    step=step set_step=set_step ctx=ctx
-                    cmd_type=cmd_type x=x y=y z=z w=w p=p r=r
-                    speed=speed term_type=term_type uframe=uframe utool=utool
-                />
-            </div>
-        </div>
-    }
-}
-
-/// Composer modal header
-#[component]
-fn ComposerHeader(is_editing: bool, ctx: WorkspaceContext) -> impl IntoView {
-    view! {
-        <div class="flex items-center justify-between p-3 border-b border-[#ffffff08]">
-            <h2 class="text-sm font-semibold text-white flex items-center">
-                <svg class="w-4 h-4 mr-2 text-[#00d9ff]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                </svg>
-                {if is_editing { "Edit Command (creates copy)" } else { "Command Composer" }}
-            </h2>
-            <button
-                class="text-[#666666] hover:text-white"
-                on:click=move |_| ctx.show_composer.set(false)
-            >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                </svg>
-            </button>
-        </div>
-    }
-}
-
-/// Step indicator component
-#[component]
-fn StepIndicator(step: ReadSignal<usize>) -> impl IntoView {
-    view! {
-        <div class="flex items-center gap-2 px-3 py-2 border-b border-[#ffffff08]">
-            {[1, 2, 3].into_iter().map(|s| {
-                let is_active = move || step.get() == s;
-                let is_complete = move || step.get() > s;
-                let label = match s {
-                    1 => "Type",
-                    2 => "Parameters",
-                    _ => "Preview",
-                };
-                view! {
-                    <div class="flex items-center gap-1.5">
-                        <div class={move || format!(
-                            "w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-medium {}",
-                            if is_active() { "bg-[#00d9ff] text-black" }
-                            else if is_complete() { "bg-[#22c55e] text-black" }
-                            else { "bg-[#333333] text-[#666666]" }
-                        )}>
-                            {s}
-                        </div>
-                        <span class={move || format!(
-                            "text-[10px] {}",
-                            if is_active() { "text-[#00d9ff]" } else { "text-[#666666]" }
-                        )}>
-                            {label}
-                        </span>
-                        {(s < 3).then(|| view! {
-                            <div class="w-8 h-px bg-[#333333]"></div>
-                        })}
-                    </div>
-                }
-            }).collect_view()}
-        </div>
-    }
-}
-
-/// Step 1: Command type selection
-#[component]
-fn Step1TypeSelection(
-    cmd_type: ReadSignal<String>,
-    set_cmd_type: WriteSignal<String>,
-) -> impl IntoView {
-    view! {
-        <div class="space-y-2">
-            <label class="block text-[10px] text-[#888888] mb-1">"Command Type"</label>
-            <div class="grid grid-cols-2 gap-1">
-                {["linear_rel", "linear_abs", "joint", "wait"].into_iter().map(|t| {
-                    let label = match t {
-                        "linear_rel" => "Linear (Relative)",
-                        "linear_abs" => "Linear (Absolute)",
-                        "joint" => "Joint Motion",
-                        _ => "Wait Time",
-                    };
-                    let is_selected = move || cmd_type.get() == t;
-                    view! {
-                        <button
-                            class={move || format!(
-                                "p-2 rounded border text-[10px] text-left {}",
-                                if is_selected() {
-                                    "bg-[#00d9ff20] border-[#00d9ff] text-[#00d9ff]"
-                                } else {
-                                    "bg-[#0a0a0a] border-[#ffffff08] text-[#888888] hover:border-[#ffffff20]"
-                                }
-                            )}
-                            on:click=move |_| set_cmd_type.set(t.to_string())
-                        >
-                            {label}
-                        </button>
-                    }
-                }).collect_view()}
-            </div>
-        </div>
-    }
-}
-
-/// Step 2: Parameters input
-#[component]
-fn Step2Parameters(
-    x: ReadSignal<f64>, set_x: WriteSignal<f64>,
-    y: ReadSignal<f64>, set_y: WriteSignal<f64>,
-    z: ReadSignal<f64>, set_z: WriteSignal<f64>,
-    w: ReadSignal<f64>, set_w: WriteSignal<f64>,
-    p: ReadSignal<f64>, set_p: WriteSignal<f64>,
-    r: ReadSignal<f64>, set_r: WriteSignal<f64>,
-    speed: ReadSignal<f64>, set_speed: WriteSignal<f64>,
-    term_type: ReadSignal<String>, set_term_type: WriteSignal<String>,
-    uframe: ReadSignal<u8>, set_uframe: WriteSignal<u8>,
-    utool: ReadSignal<u8>, set_utool: WriteSignal<u8>,
-) -> impl IntoView {
-    view! {
-        <div class="space-y-3">
-            // Position inputs
-            <div>
-                <label class="block text-[10px] text-[#888888] mb-1">"Position (mm / degrees)"</label>
-                <div class="grid grid-cols-3 gap-1">
-                    <NumberInput label="X" value=x set_value=set_x step=0.1/>
-                    <NumberInput label="Y" value=y set_value=set_y step=0.1/>
-                    <NumberInput label="Z" value=z set_value=set_z step=0.1/>
-                </div>
-                <div class="grid grid-cols-3 gap-1 mt-1">
-                    <NumberInput label="W" value=w set_value=set_w step=0.1/>
-                    <NumberInput label="P" value=p set_value=set_p step=0.1/>
-                    <NumberInput label="R" value=r set_value=set_r step=0.1/>
-                </div>
-            </div>
-
-            // Motion config
-            <div>
-                <label class="block text-[10px] text-[#888888] mb-1">"Motion Config"</label>
-                <div class="grid grid-cols-4 gap-1">
-                    <NumberInput label="Speed" value=speed set_value=set_speed step=1.0/>
-                    <div>
-                        <label class="block text-[8px] text-[#555555] mb-0.5">"Term"</label>
-                        <select
-                            class="w-full bg-[#0a0a0a] border border-[#ffffff08] rounded px-2 py-1 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                            on:change=move |ev| set_term_type.set(event_target_value(&ev))
-                        >
-                            <option value="CNT" selected=move || term_type.get() == "CNT">"CNT"</option>
-                            <option value="FINE" selected=move || term_type.get() == "FINE">"FINE"</option>
-                        </select>
-                    </div>
-                    <U8Input label="UFrame" value=uframe set_value=set_uframe min=0 max=9/>
-                    <U8Input label="UTool" value=utool set_value=set_utool min=0 max=9/>
+                <div class="flex items-center justify-end gap-2 p-3 border-t border-[#ffffff08]">
+                    <button
+                        class="bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] hover:text-white text-[10px] px-3 py-1.5 rounded"
+                        on:click=move |_| ctx.show_composer.set(false)
+                    >
+                        "Cancel"
+                    </button>
+                    <button
+                        class="bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] text-[10px] px-3 py-1.5 rounded hover:bg-[#22c55e30]"
+                        on:click=move |_| send_command.with_value(|f| f())
+                    >
+                        "Send to Robot"
+                    </button>
                 </div>
             </div>
         </div>
     }
 }
 
-/// Number input helper component
+/// Number input helper component with unit display
 #[component]
 fn NumberInput(
     label: &'static str,
     value: ReadSignal<f64>,
     set_value: WriteSignal<f64>,
     step: f64,
+    #[prop(default = "")] unit: &'static str,
 ) -> impl IntoView {
     view! {
         <div>
@@ -253,176 +444,17 @@ fn NumberInput(
             <input
                 type="number"
                 step=step
-                class="w-full bg-[#0a0a0a] border border-[#ffffff08] rounded px-2 py-1 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                prop:value=move || value.get()
+                class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1.5 py-1 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none text-center"
+                prop:value=move || format!("{:.1}", value.get())
                 on:input=move |ev| {
                     if let Ok(v) = event_target_value(&ev).parse() {
                         set_value.set(v);
                     }
                 }
             />
-        </div>
-    }
-}
-
-/// U8 input helper component
-#[component]
-fn U8Input(
-    label: &'static str,
-    value: ReadSignal<u8>,
-    set_value: WriteSignal<u8>,
-    min: u8,
-    max: u8,
-) -> impl IntoView {
-    view! {
-        <div>
-            <label class="block text-[8px] text-[#555555] mb-0.5">{label}</label>
-            <input
-                type="number"
-                min=min
-                max=max
-                class="w-full bg-[#0a0a0a] border border-[#ffffff08] rounded px-2 py-1 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                prop:value=move || value.get()
-                on:input=move |ev| {
-                    if let Ok(v) = event_target_value(&ev).parse() {
-                        set_value.set(v);
-                    }
-                }
-            />
-        </div>
-    }
-}
-
-/// Step 3: Preview
-#[component]
-fn Step3Preview(
-    cmd_type: ReadSignal<String>,
-    x: ReadSignal<f64>,
-    y: ReadSignal<f64>,
-    z: ReadSignal<f64>,
-    w: ReadSignal<f64>,
-    p: ReadSignal<f64>,
-    r: ReadSignal<f64>,
-    speed: ReadSignal<f64>,
-    term_type: ReadSignal<String>,
-    uframe: ReadSignal<u8>,
-    utool: ReadSignal<u8>,
-) -> impl IntoView {
-    view! {
-        <div class="space-y-2">
-            <label class="block text-[10px] text-[#888888] mb-1">"Command Preview"</label>
-            <div class="bg-[#0a0a0a] border border-[#ffffff08] rounded p-2 font-mono text-[10px] text-[#00d9ff]">
-                {move || format!(
-                    "{}(X:{:.2}, Y:{:.2}, Z:{:.2}, W:{:.1}, P:{:.1}, R:{:.1}) @ {}mm/s {}",
-                    if cmd_type.get() == "linear_rel" { "L_REL" } else if cmd_type.get() == "linear_abs" { "L_ABS" } else { "JOINT" },
-                    x.get(), y.get(), z.get(), w.get(), p.get(), r.get(),
-                    speed.get(), term_type.get()
-                )}
-            </div>
-            <p class="text-[9px] text-[#555555]">
-                {move || format!("Using UFrame {} and UTool {}", uframe.get(), utool.get())}
-            </p>
-        </div>
-    }
-}
-
-/// Composer footer with navigation and apply buttons
-#[component]
-fn ComposerFooter(
-    step: ReadSignal<usize>,
-    set_step: WriteSignal<usize>,
-    ctx: WorkspaceContext,
-    cmd_type: ReadSignal<String>,
-    x: ReadSignal<f64>,
-    y: ReadSignal<f64>,
-    z: ReadSignal<f64>,
-    w: ReadSignal<f64>,
-    p: ReadSignal<f64>,
-    r: ReadSignal<f64>,
-    speed: ReadSignal<f64>,
-    term_type: ReadSignal<String>,
-    uframe: ReadSignal<u8>,
-    utool: ReadSignal<u8>,
-) -> impl IntoView {
-    view! {
-        <div class="flex items-center justify-between p-3 border-t border-[#ffffff08]">
-            <button
-                class={move || format!(
-                    "text-[10px] px-3 py-1.5 rounded {}",
-                    if step.get() > 1 {
-                        "bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] hover:text-white"
-                    } else {
-                        "invisible"
-                    }
-                )}
-                on:click=move |_| set_step.update(|s| *s = (*s).saturating_sub(1).max(1))
-            >
-                "← Back"
-            </button>
-            <div class="flex gap-1">
-                <button
-                    class="bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] hover:text-white text-[10px] px-3 py-1.5 rounded"
-                    on:click=move |_| ctx.show_composer.set(false)
-                >
-                    "Cancel"
-                </button>
-                {move || if step.get() < 3 {
-                    Either::Left(view! {
-                        <button
-                            class="bg-[#00d9ff20] border border-[#00d9ff40] text-[#00d9ff] text-[10px] px-3 py-1.5 rounded hover:bg-[#00d9ff30]"
-                            on:click=move |_| set_step.update(|s| *s += 1)
-                        >
-                            "Next →"
-                        </button>
-                    })
-                } else {
-                    Either::Right(view! {
-                        <button
-                            class="bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] text-[10px] px-3 py-1.5 rounded hover:bg-[#22c55e30]"
-                            on:click=move |_| {
-                                // Generate a unique ID based on timestamp
-                                let new_id = js_sys::Date::now() as usize;
-
-                                // Create a RecentCommand and add to recent commands list
-                                let cmd = RecentCommand {
-                                    id: new_id,
-                                    name: format!("{} ({:.1}, {:.1}, {:.1})",
-                                        if cmd_type.get() == "linear_rel" { "L_REL" }
-                                        else if cmd_type.get() == "linear_abs" { "L_ABS" }
-                                        else { "JOINT" },
-                                        x.get(), y.get(), z.get()
-                                    ),
-                                    command_type: cmd_type.get(),
-                                    description: format!("{}mm/s {}", speed.get(), term_type.get()),
-                                    x: x.get(),
-                                    y: y.get(),
-                                    z: z.get(),
-                                    w: w.get(),
-                                    p: p.get(),
-                                    r: r.get(),
-                                    speed: speed.get(),
-                                    term_type: term_type.get(),
-                                    uframe: uframe.get(),
-                                    utool: utool.get(),
-                                };
-                                ctx.recent_commands.update(|cmds| {
-                                    // Insert at the beginning (most recent first)
-                                    cmds.insert(0, cmd);
-                                    // Keep only last 15 commands
-                                    while cmds.len() > 15 {
-                                        cmds.pop();
-                                    }
-                                });
-                                // Auto-select the newly created command
-                                ctx.selected_command_id.set(Some(new_id));
-                                ctx.show_composer.set(false);
-                            }
-                        >
-                            "✓ Apply"
-                        </button>
-                    })
-                }}
-            </div>
+            {(!unit.is_empty()).then(|| view! {
+                <div class="text-[7px] text-[#444444] text-center mt-0.5">{unit}</div>
+            })}
         </div>
     }
 }

@@ -360,7 +360,11 @@ pub fn SaveAsProgramModal(
     }
 }
 
-/// CSV Upload Modal - Upload CSV to an existing program
+/// CSV Upload Modal - Upload CSV to an existing program.
+///
+/// CSV contains generic waypoints (X, Y, Z, optional W, P, R, speed, term_type).
+/// Robot-specific configuration is NOT required at upload time - it is applied
+/// when the program is loaded for execution.
 #[component]
 pub fn CSVUploadModal(
     program_id: i64,
@@ -375,8 +379,39 @@ pub fn CSVUploadModal(
     let (parse_error, set_parse_error) = signal::<Option<String>>(None);
     let (is_uploading, set_is_uploading) = signal(false);
     let (line_count, set_line_count) = signal(0usize);
+    let (is_drag_over, set_is_drag_over) = signal(false);
 
     let on_close_clone = on_close.clone();
+
+    // Helper function to process a file
+    let process_file = move |file: web_sys::File| {
+        let name = file.name();
+        set_file_name.set(Some(name.clone()));
+
+        let reader = FileReader::new().unwrap();
+        let reader_clone = reader.clone();
+        let onload = Closure::wrap(Box::new(move || {
+            if let Ok(result) = reader_clone.result() {
+                if let Some(text) = result.as_string() {
+                    let all_lines: Vec<&str> = text.lines().collect();
+                    let data_lines = all_lines.len().saturating_sub(1);
+                    set_line_count.set(data_lines);
+
+                    let preview: Vec<String> = text.lines()
+                        .skip(1)
+                        .take(8)
+                        .map(|s| s.to_string())
+                        .collect();
+                    set_preview_lines.set(preview);
+                    set_csv_content.set(Some(text));
+                    set_parse_error.set(None);
+                }
+            }
+        }) as Box<dyn Fn()>);
+        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+        onload.forget();
+        let _ = reader.read_as_text(&file);
+    };
 
     view! {
         <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -404,8 +439,41 @@ pub fn CSVUploadModal(
 
                 // Content
                 <div class="flex-1 overflow-y-auto p-3 space-y-3">
-                    // File upload area
-                    <label class="block border-2 border-dashed border-[#ffffff20] rounded-lg p-4 text-center hover:border-[#00d9ff40] transition-colors cursor-pointer">
+                    // File upload area with drag and drop support
+                    <label
+                        class=move || format!(
+                            "block border-2 border-dashed rounded-lg p-4 text-center transition-colors cursor-pointer {}",
+                            if is_drag_over.get() {
+                                "border-[#00d9ff] bg-[#00d9ff10]"
+                            } else {
+                                "border-[#ffffff20] hover:border-[#00d9ff40]"
+                            }
+                        )
+                        on:dragover=move |ev: web_sys::DragEvent| {
+                            ev.prevent_default();
+                            set_is_drag_over.set(true);
+                        }
+                        on:dragleave=move |_| {
+                            set_is_drag_over.set(false);
+                        }
+                        on:drop=move |ev: web_sys::DragEvent| {
+                            ev.prevent_default();
+                            set_is_drag_over.set(false);
+                            if let Some(data_transfer) = ev.data_transfer() {
+                                if let Some(files) = data_transfer.files() {
+                                    if let Some(file) = files.get(0) {
+                                        // Check if it's a CSV file
+                                        let name = file.name();
+                                        if name.to_lowercase().ends_with(".csv") {
+                                            process_file(file);
+                                        } else {
+                                            set_parse_error.set(Some("Please drop a CSV file".to_string()));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    >
                         <svg class="w-6 h-6 mx-auto mb-2 text-[#555555]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                         </svg>
@@ -420,32 +488,7 @@ pub fn CSVUploadModal(
                                 let input: HtmlInputElement = target.dyn_into().unwrap();
                                 if let Some(files) = input.files() {
                                     if let Some(file) = files.get(0) {
-                                        let name = file.name();
-                                        set_file_name.set(Some(name.clone()));
-
-                                        let reader = FileReader::new().unwrap();
-                                        let reader_clone = reader.clone();
-                                        let onload = Closure::wrap(Box::new(move || {
-                                            if let Ok(result) = reader_clone.result() {
-                                                if let Some(text) = result.as_string() {
-                                                    let all_lines: Vec<&str> = text.lines().collect();
-                                                    let data_lines = all_lines.len().saturating_sub(1);
-                                                    set_line_count.set(data_lines);
-
-                                                    let preview: Vec<String> = text.lines()
-                                                        .skip(1)
-                                                        .take(8)
-                                                        .map(|s| s.to_string())
-                                                        .collect();
-                                                    set_preview_lines.set(preview);
-                                                    set_csv_content.set(Some(text));
-                                                    set_parse_error.set(None);
-                                                }
-                                            }
-                                        }) as Box<dyn Fn()>);
-                                        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
-                                        onload.forget();
-                                        let _ = reader.read_as_text(&file);
+                                        process_file(file);
                                     }
                                 }
                             }
@@ -532,6 +575,7 @@ pub fn CSVUploadModal(
                         on:click={
                             let on_uploaded = on_uploaded.clone();
                             move |_| {
+                                // Upload CSV without robot connection - config applied at execution time
                                 if let Some(content) = csv_content.get() {
                                     set_is_uploading.set(true);
                                     ws.upload_csv(program_id, content, None);
@@ -540,7 +584,13 @@ pub fn CSVUploadModal(
                             }
                         }
                     >
-                        {move || if is_uploading.get() { "Uploading..." } else { "Upload CSV" }}
+                        {move || {
+                            if is_uploading.get() {
+                                "Uploading..."
+                            } else {
+                                "Upload CSV"
+                            }
+                        }}
                     </button>
                 </div>
             </div>

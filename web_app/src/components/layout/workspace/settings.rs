@@ -150,10 +150,6 @@ fn RobotBrowser(
                             let conn_name_for_delete = conn.name.clone();
                             let conn_ip = conn.ip_address.clone();
                             let conn_port = conn.port;
-                            let has_defaults = conn.default_speed.is_some()
-                                || conn.default_term_type.is_some()
-                                || conn.default_uframe.is_some()
-                                || conn.default_utool.is_some();
 
                             view! {
                                 <div
@@ -169,13 +165,8 @@ fn RobotBrowser(
                                 >
                                     <div class="flex items-center justify-between">
                                         <div class="flex-1 min-w-0">
-                                            <div class="text-[9px] text-white font-medium truncate flex items-center gap-1">
+                                            <div class="text-[9px] text-white font-medium truncate">
                                                 {conn_name.clone()}
-                                                {if has_defaults {
-                                                    view! { <span class="text-[7px] text-[#00d9ff]" title="Has custom defaults">"⚙"</span> }.into_any()
-                                                } else {
-                                                    view! { <span></span> }.into_any()
-                                                }}
                                             </div>
                                             <div class="text-[8px] text-[#666666] font-mono">{format!("{}:{}", conn_ip, conn_port)}</div>
                                         </div>
@@ -307,21 +298,22 @@ where
     let (edit_desc, set_edit_desc) = signal(String::new());
     let (edit_ip, set_edit_ip) = signal(String::new());
     let (edit_port, set_edit_port) = signal(String::new());
-    let (edit_speed, set_edit_speed) = signal::<Option<f64>>(None);
-    let (edit_term, set_edit_term) = signal::<Option<String>>(None);
-    let (edit_uframe, set_edit_uframe) = signal::<Option<i32>>(None);
-    let (edit_utool, set_edit_utool) = signal::<Option<i32>>(None);
-    let (edit_w, set_edit_w) = signal::<Option<f64>>(None);
-    let (edit_p, set_edit_p) = signal::<Option<f64>>(None);
-    let (edit_r, set_edit_r) = signal::<Option<f64>>(None);
-    // Robot arm configuration defaults
-    let (edit_front, set_edit_front) = signal::<Option<i32>>(None);
-    let (edit_up, set_edit_up) = signal::<Option<i32>>(None);
-    let (edit_left, set_edit_left) = signal::<Option<i32>>(None);
-    let (edit_flip, set_edit_flip) = signal::<Option<i32>>(None);
-    let (edit_turn4, set_edit_turn4) = signal::<Option<i32>>(None);
-    let (edit_turn5, set_edit_turn5) = signal::<Option<i32>>(None);
-    let (edit_turn6, set_edit_turn6) = signal::<Option<i32>>(None);
+    // Per-robot defaults (all required - no global fallback)
+    let (edit_speed, set_edit_speed) = signal::<f64>(50.0);
+    let (edit_term, set_edit_term) = signal::<String>("CNT".to_string());
+    let (edit_uframe, set_edit_uframe) = signal::<i32>(0);
+    let (edit_utool, set_edit_utool) = signal::<i32>(1);
+    let (edit_w, set_edit_w) = signal::<f64>(0.0);
+    let (edit_p, set_edit_p) = signal::<f64>(0.0);
+    let (edit_r, set_edit_r) = signal::<f64>(0.0);
+    // Robot arm configuration defaults (all required)
+    let (edit_front, set_edit_front) = signal::<i32>(1);
+    let (edit_up, set_edit_up) = signal::<i32>(1);
+    let (edit_left, set_edit_left) = signal::<i32>(0);
+    let (edit_flip, set_edit_flip) = signal::<i32>(0);
+    let (edit_turn4, set_edit_turn4) = signal::<i32>(0);
+    let (edit_turn5, set_edit_turn5) = signal::<i32>(0);
+    let (edit_turn6, set_edit_turn6) = signal::<i32>(0);
     let (has_changes, set_has_changes) = signal(false);
     let (save_status, set_save_status) = signal::<Option<String>>(None);
 
@@ -332,6 +324,7 @@ where
             set_edit_desc.set(robot.description.clone().unwrap_or_default());
             set_edit_ip.set(robot.ip_address.clone());
             set_edit_port.set(robot.port.to_string());
+            // All defaults are now required (no Option)
             set_edit_speed.set(robot.default_speed);
             set_edit_term.set(robot.default_term_type.clone());
             set_edit_uframe.set(robot.default_uframe);
@@ -484,11 +477,12 @@ where
                                         <input
                                             type="number"
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="50"
-                                            prop:value=move || edit_speed.get().map(|v| v.to_string()).unwrap_or_default()
+                                            prop:value=move || edit_speed.get().to_string()
                                             on:input=move |ev| {
-                                                set_edit_speed.set(event_target_value(&ev).parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<f64>() {
+                                                    set_edit_speed.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         />
                                     </div>
@@ -497,14 +491,12 @@ where
                                         <select
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
                                             on:change=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_edit_term.set(if val.is_empty() { None } else { Some(val) });
+                                                set_edit_term.set(event_target_value(&ev));
                                                 set_has_changes.set(true);
                                             }
                                         >
-                                            <option value="" selected=move || edit_term.get().is_none()>"Default"</option>
-                                            <option value="CNT" selected=move || edit_term.get().as_deref() == Some("CNT")>"CNT"</option>
-                                            <option value="FINE" selected=move || edit_term.get().as_deref() == Some("FINE")>"FINE"</option>
+                                            <option value="CNT" selected=move || edit_term.get() == "CNT">"CNT"</option>
+                                            <option value="FINE" selected=move || edit_term.get() == "FINE">"FINE"</option>
                                         </select>
                                     </div>
                                     <div>
@@ -513,11 +505,12 @@ where
                                             type="number"
                                             min="0" max="9"
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || edit_uframe.get().map(|v| v.to_string()).unwrap_or_default()
+                                            prop:value=move || edit_uframe.get().to_string()
                                             on:input=move |ev| {
-                                                set_edit_uframe.set(event_target_value(&ev).parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<i32>() {
+                                                    set_edit_uframe.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         />
                                     </div>
@@ -527,11 +520,12 @@ where
                                             type="number"
                                             min="0" max="9"
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || edit_utool.get().map(|v| v.to_string()).unwrap_or_default()
+                                            prop:value=move || edit_utool.get().to_string()
                                             on:input=move |ev| {
-                                                set_edit_utool.set(event_target_value(&ev).parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<i32>() {
+                                                    set_edit_utool.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         />
                                     </div>
@@ -548,11 +542,12 @@ where
                                             type="number"
                                             step="0.1"
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || edit_w.get().map(|v| v.to_string()).unwrap_or_default()
+                                            prop:value=move || edit_w.get().to_string()
                                             on:input=move |ev| {
-                                                set_edit_w.set(event_target_value(&ev).parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<f64>() {
+                                                    set_edit_w.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         />
                                     </div>
@@ -562,11 +557,12 @@ where
                                             type="number"
                                             step="0.1"
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || edit_p.get().map(|v| v.to_string()).unwrap_or_default()
+                                            prop:value=move || edit_p.get().to_string()
                                             on:input=move |ev| {
-                                                set_edit_p.set(event_target_value(&ev).parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<f64>() {
+                                                    set_edit_p.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         />
                                     </div>
@@ -576,11 +572,12 @@ where
                                             type="number"
                                             step="0.1"
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || edit_r.get().map(|v| v.to_string()).unwrap_or_default()
+                                            prop:value=move || edit_r.get().to_string()
                                             on:input=move |ev| {
-                                                set_edit_r.set(event_target_value(&ev).parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<f64>() {
+                                                    set_edit_r.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         />
                                     </div>
@@ -596,14 +593,14 @@ where
                                         <select
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
                                             on:change=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_edit_front.set(val.parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<i32>() {
+                                                    set_edit_front.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         >
-                                            <option value="" selected=move || edit_front.get().is_none()>"Default"</option>
-                                            <option value="1" selected=move || edit_front.get() == Some(1)>"Front"</option>
-                                            <option value="0" selected=move || edit_front.get() == Some(0)>"Back"</option>
+                                            <option value="1" selected=move || edit_front.get() == 1>"Front"</option>
+                                            <option value="0" selected=move || edit_front.get() == 0>"Back"</option>
                                         </select>
                                     </div>
                                     <div>
@@ -611,14 +608,14 @@ where
                                         <select
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
                                             on:change=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_edit_up.set(val.parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<i32>() {
+                                                    set_edit_up.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         >
-                                            <option value="" selected=move || edit_up.get().is_none()>"Default"</option>
-                                            <option value="1" selected=move || edit_up.get() == Some(1)>"Up"</option>
-                                            <option value="0" selected=move || edit_up.get() == Some(0)>"Down"</option>
+                                            <option value="1" selected=move || edit_up.get() == 1>"Up"</option>
+                                            <option value="0" selected=move || edit_up.get() == 0>"Down"</option>
                                         </select>
                                     </div>
                                     <div>
@@ -626,14 +623,14 @@ where
                                         <select
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
                                             on:change=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_edit_left.set(val.parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<i32>() {
+                                                    set_edit_left.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         >
-                                            <option value="" selected=move || edit_left.get().is_none()>"Default"</option>
-                                            <option value="1" selected=move || edit_left.get() == Some(1)>"Left"</option>
-                                            <option value="0" selected=move || edit_left.get() == Some(0)>"Right"</option>
+                                            <option value="1" selected=move || edit_left.get() == 1>"Left"</option>
+                                            <option value="0" selected=move || edit_left.get() == 0>"Right"</option>
                                         </select>
                                     </div>
                                     <div>
@@ -641,14 +638,14 @@ where
                                         <select
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
                                             on:change=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_edit_flip.set(val.parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<i32>() {
+                                                    set_edit_flip.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         >
-                                            <option value="" selected=move || edit_flip.get().is_none()>"Default"</option>
-                                            <option value="1" selected=move || edit_flip.get() == Some(1)>"Flip"</option>
-                                            <option value="0" selected=move || edit_flip.get() == Some(0)>"NoFlip"</option>
+                                            <option value="1" selected=move || edit_flip.get() == 1>"Flip"</option>
+                                            <option value="0" selected=move || edit_flip.get() == 0>"NoFlip"</option>
                                         </select>
                                     </div>
                                 </div>
@@ -659,11 +656,12 @@ where
                                             type="number"
                                             min="0" max="1"
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || edit_turn4.get().map(|v| v.to_string()).unwrap_or_default()
+                                            prop:value=move || edit_turn4.get().to_string()
                                             on:input=move |ev| {
-                                                set_edit_turn4.set(event_target_value(&ev).parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<i32>() {
+                                                    set_edit_turn4.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         />
                                     </div>
@@ -673,11 +671,12 @@ where
                                             type="number"
                                             min="0" max="1"
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || edit_turn5.get().map(|v| v.to_string()).unwrap_or_default()
+                                            prop:value=move || edit_turn5.get().to_string()
                                             on:input=move |ev| {
-                                                set_edit_turn5.set(event_target_value(&ev).parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<i32>() {
+                                                    set_edit_turn5.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         />
                                     </div>
@@ -687,11 +686,12 @@ where
                                             type="number"
                                             min="0" max="1"
                                             class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                            placeholder="0"
-                                            prop:value=move || edit_turn6.get().map(|v| v.to_string()).unwrap_or_default()
+                                            prop:value=move || edit_turn6.get().to_string()
                                             on:input=move |ev| {
-                                                set_edit_turn6.set(event_target_value(&ev).parse().ok());
-                                                set_has_changes.set(true);
+                                                if let Ok(v) = event_target_value(&ev).parse::<i32>() {
+                                                    set_edit_turn6.set(v);
+                                                    set_has_changes.set(true);
+                                                }
                                             }
                                         />
                                     </div>

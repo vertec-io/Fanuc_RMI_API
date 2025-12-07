@@ -33,6 +33,10 @@ pub async fn list_robot_connections(db: Arc<Mutex<Database>>) -> ServerResponse 
                 default_turn4: c.default_turn4,
                 default_turn5: c.default_turn5,
                 default_turn6: c.default_turn6,
+                default_cartesian_jog_speed: c.default_cartesian_jog_speed,
+                default_cartesian_jog_step: c.default_cartesian_jog_step,
+                default_joint_jog_speed: c.default_joint_jog_speed,
+                default_joint_jog_step: c.default_joint_jog_step,
             }).collect();
             ServerResponse::RobotConnections { connections }
         }
@@ -66,6 +70,10 @@ pub async fn get_robot_connection(db: Arc<Mutex<Database>>, id: i64) -> ServerRe
                     default_turn4: c.default_turn4,
                     default_turn5: c.default_turn5,
                     default_turn6: c.default_turn6,
+                    default_cartesian_jog_speed: c.default_cartesian_jog_speed,
+                    default_cartesian_jog_step: c.default_cartesian_jog_step,
+                    default_joint_jog_speed: c.default_joint_jog_speed,
+                    default_joint_jog_step: c.default_joint_jog_step,
                 }
             }
         }
@@ -112,24 +120,25 @@ pub async fn update_robot_connection(
 }
 
 /// Update robot connection defaults (per-robot settings).
+/// All parameters are required (non-optional) - each robot has explicit settings.
 #[allow(clippy::too_many_arguments)]
 pub async fn update_robot_connection_defaults(
     db: Arc<Mutex<Database>>,
     id: i64,
-    default_speed: Option<f64>,
-    default_term_type: Option<&str>,
-    default_uframe: Option<i32>,
-    default_utool: Option<i32>,
-    default_w: Option<f64>,
-    default_p: Option<f64>,
-    default_r: Option<f64>,
-    default_front: Option<i32>,
-    default_up: Option<i32>,
-    default_left: Option<i32>,
-    default_flip: Option<i32>,
-    default_turn4: Option<i32>,
-    default_turn5: Option<i32>,
-    default_turn6: Option<i32>,
+    default_speed: f64,
+    default_term_type: &str,
+    default_uframe: i32,
+    default_utool: i32,
+    default_w: f64,
+    default_p: f64,
+    default_r: f64,
+    default_front: i32,
+    default_up: i32,
+    default_left: i32,
+    default_flip: i32,
+    default_turn4: i32,
+    default_turn5: i32,
+    default_turn6: i32,
 ) -> ServerResponse {
     let db = db.lock().await;
     match db.update_robot_connection_defaults(
@@ -157,6 +166,25 @@ pub async fn update_robot_connection_defaults(
     }
 }
 
+/// Update robot connection jog defaults.
+pub async fn update_robot_jog_defaults(
+    db: Arc<Mutex<Database>>,
+    id: i64,
+    cartesian_jog_speed: f64,
+    cartesian_jog_step: f64,
+    joint_jog_speed: f64,
+    joint_jog_step: f64,
+) -> ServerResponse {
+    let db = db.lock().await;
+    match db.update_robot_connection_jog_defaults(id, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step) {
+        Ok(_) => {
+            info!("Updated robot jog defaults for id={}", id);
+            ServerResponse::Success { message: "Jog defaults updated".to_string() }
+        }
+        Err(e) => ServerResponse::Error { message: format!("Failed to update jog defaults: {}", e) }
+    }
+}
+
 /// Delete a saved robot connection.
 pub async fn delete_robot_connection(db: Arc<Mutex<Database>>, id: i64) -> ServerResponse {
     let db = db.lock().await;
@@ -168,4 +196,3 @@ pub async fn delete_robot_connection(db: Arc<Mutex<Database>>, id: i64) -> Serve
         Err(e) => ServerResponse::Error { message: format!("Failed to delete connection: {}", e) }
     }
 }
-

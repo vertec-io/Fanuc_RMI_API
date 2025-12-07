@@ -22,6 +22,22 @@ pub enum ClientRequest {
     #[serde(rename = "delete_program")]
     DeleteProgram { id: i64 },
 
+    /// Update program settings (start/end positions, move speed).
+    #[serde(rename = "update_program_settings")]
+    UpdateProgramSettings {
+        program_id: i64,
+        start_x: Option<f64>,
+        start_y: Option<f64>,
+        start_z: Option<f64>,
+        end_x: Option<f64>,
+        end_y: Option<f64>,
+        end_z: Option<f64>,
+        move_speed: Option<f64>,
+    },
+
+    /// Upload CSV content to a program.
+    /// CSV contains generic waypoints (X, Y, Z, speed, etc.) without robot-specific configuration.
+    /// Robot configuration is applied at execution time, not at upload time.
     #[serde(rename = "upload_csv")]
     UploadCsv {
         program_id: i64,
@@ -123,28 +139,92 @@ pub enum ClientRequest {
         port: u32,
     },
 
+    /// Update robot connection defaults - all fields are required (no global fallback).
     #[serde(rename = "update_robot_connection_defaults")]
     UpdateRobotConnectionDefaults {
         id: i64,
-        default_speed: Option<f64>,
-        default_term_type: Option<String>,
-        default_uframe: Option<i32>,
-        default_utool: Option<i32>,
-        default_w: Option<f64>,
-        default_p: Option<f64>,
-        default_r: Option<f64>,
+        default_speed: f64,
+        default_term_type: String,
+        default_uframe: i32,
+        default_utool: i32,
+        default_w: f64,
+        default_p: f64,
+        default_r: f64,
         // Robot arm configuration defaults
-        default_front: Option<i32>,
-        default_up: Option<i32>,
-        default_left: Option<i32>,
-        default_flip: Option<i32>,
-        default_turn4: Option<i32>,
-        default_turn5: Option<i32>,
-        default_turn6: Option<i32>,
+        default_front: i32,
+        default_up: i32,
+        default_left: i32,
+        default_flip: i32,
+        default_turn4: i32,
+        default_turn5: i32,
+        default_turn6: i32,
+    },
+
+    /// Update robot connection jog defaults.
+    #[serde(rename = "update_robot_jog_defaults")]
+    UpdateRobotJogDefaults {
+        id: i64,
+        cartesian_jog_speed: f64,
+        cartesian_jog_step: f64,
+        joint_jog_speed: f64,
+        joint_jog_step: f64,
     },
 
     #[serde(rename = "delete_robot_connection")]
     DeleteRobotConnection { id: i64 },
+
+    // Robot Configurations (Named configurations per robot)
+    #[serde(rename = "list_robot_configurations")]
+    ListRobotConfigurations { robot_connection_id: i64 },
+
+    #[serde(rename = "get_robot_configuration")]
+    GetRobotConfiguration { id: i64 },
+
+    #[serde(rename = "create_robot_configuration")]
+    CreateRobotConfiguration {
+        robot_connection_id: i64,
+        name: String,
+        is_default: bool,
+        u_frame_number: i32,
+        u_tool_number: i32,
+        front: i32,
+        up: i32,
+        left: i32,
+        flip: i32,
+        turn4: i32,
+        turn5: i32,
+        turn6: i32,
+    },
+
+    #[serde(rename = "update_robot_configuration")]
+    UpdateRobotConfiguration {
+        id: i64,
+        name: String,
+        is_default: bool,
+        u_frame_number: i32,
+        u_tool_number: i32,
+        front: i32,
+        up: i32,
+        left: i32,
+        flip: i32,
+        turn4: i32,
+        turn5: i32,
+        turn6: i32,
+    },
+
+    #[serde(rename = "delete_robot_configuration")]
+    DeleteRobotConfiguration { id: i64 },
+
+    #[serde(rename = "set_default_robot_configuration")]
+    SetDefaultRobotConfiguration { id: i64 },
+
+    /// Get the current active configuration state (runtime, not persisted)
+    #[serde(rename = "get_active_configuration")]
+    GetActiveConfiguration,
+
+    /// Load a saved configuration as the active configuration
+    #[serde(rename = "load_configuration")]
+    LoadConfiguration { configuration_id: i64 },
 
     // Frame/Tool Management
     #[serde(rename = "get_active_frame_tool")]
@@ -301,6 +381,12 @@ pub enum ServerResponse {
         connected: bool,
         robot_addr: String,
         robot_port: u32,
+        /// Name of the saved connection if connected to a saved robot
+        connection_name: Option<String>,
+        /// ID of the saved connection if connected to a saved robot
+        connection_id: Option<i64>,
+        /// Whether the TP program is initialized and ready for motion commands
+        tp_program_initialized: bool,
     },
 
     /// Response when connecting to a saved robot connection.
@@ -359,6 +445,41 @@ pub enum ServerResponse {
 
     #[serde(rename = "robot_connection")]
     RobotConnection { connection: RobotConnectionDto },
+
+    // Robot Configuration responses
+    #[serde(rename = "robot_configurations")]
+    RobotConfigurations { configurations: Vec<RobotConfigurationDto> },
+
+    #[serde(rename = "robot_configuration")]
+    RobotConfigurationResponse { configuration: RobotConfigurationDto },
+
+    #[serde(rename = "active_configuration")]
+    ActiveConfigurationResponse {
+        /// ID of the saved configuration this was loaded from (None = custom/unsaved)
+        loaded_from_id: Option<i64>,
+        /// Name of the loaded configuration
+        loaded_from_name: Option<String>,
+        /// Whether the active config has been modified from the loaded state
+        modified: bool,
+        /// Current UFrame number
+        u_frame_number: i32,
+        /// Current UTool number
+        u_tool_number: i32,
+        /// Arm configuration - Front(1)/Back(0)
+        front: i32,
+        /// Arm configuration - Up(1)/Down(0)
+        up: i32,
+        /// Arm configuration - Left(1)/Right(0)
+        left: i32,
+        /// Wrist configuration - Flip(1)/NoFlip(0)
+        flip: i32,
+        /// J4 turn number
+        turn4: i32,
+        /// J5 turn number
+        turn5: i32,
+        /// J6 turn number
+        turn6: i32,
+    },
 
     // Frame/Tool responses
     #[serde(rename = "active_frame_tool")]
@@ -458,9 +579,19 @@ pub struct ProgramDetail {
     pub name: String,
     pub description: Option<String>,
     pub instructions: Vec<InstructionDto>,
+    // Start position (where robot moves before toolpath)
     pub start_x: Option<f64>,
     pub start_y: Option<f64>,
     pub start_z: Option<f64>,
+    // End position (where robot moves after toolpath)
+    pub end_x: Option<f64>,
+    pub end_y: Option<f64>,
+    pub end_z: Option<f64>,
+    // Speed for moving to start/end positions
+    pub move_speed: Option<f64>,
+    // Timestamps
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// Instruction DTO for client.
@@ -492,6 +623,7 @@ pub struct RobotSettingsDto {
 }
 
 /// Robot connection DTO (for saved connections).
+/// All defaults are required (non-optional) - each robot has its own explicit settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RobotConnectionDto {
     pub id: i64,
@@ -499,22 +631,45 @@ pub struct RobotConnectionDto {
     pub description: Option<String>,
     pub ip_address: String,
     pub port: u32,
-    // Per-robot defaults (optional, falls back to global settings if None)
-    pub default_speed: Option<f64>,
-    pub default_term_type: Option<String>,
-    pub default_uframe: Option<i32>,
-    pub default_utool: Option<i32>,
-    pub default_w: Option<f64>,
-    pub default_p: Option<f64>,
-    pub default_r: Option<f64>,
-    // Robot arm configuration defaults
-    pub default_front: Option<i32>,
-    pub default_up: Option<i32>,
-    pub default_left: Option<i32>,
-    pub default_flip: Option<i32>,
-    pub default_turn4: Option<i32>,
-    pub default_turn5: Option<i32>,
-    pub default_turn6: Option<i32>,
+    // Per-robot defaults (required - no global fallback)
+    pub default_speed: f64,
+    pub default_term_type: String,
+    pub default_uframe: i32,
+    pub default_utool: i32,
+    pub default_w: f64,
+    pub default_p: f64,
+    pub default_r: f64,
+    // Robot arm configuration defaults (required)
+    pub default_front: i32,
+    pub default_up: i32,
+    pub default_left: i32,
+    pub default_flip: i32,
+    pub default_turn4: i32,
+    pub default_turn5: i32,
+    pub default_turn6: i32,
+    // Jog defaults
+    pub default_cartesian_jog_speed: f64,
+    pub default_cartesian_jog_step: f64,
+    pub default_joint_jog_speed: f64,
+    pub default_joint_jog_step: f64,
+}
+
+/// Robot configuration DTO (named configurations per robot).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RobotConfigurationDto {
+    pub id: i64,
+    pub robot_connection_id: i64,
+    pub name: String,
+    pub is_default: bool,
+    pub u_frame_number: i32,
+    pub u_tool_number: i32,
+    pub front: i32,
+    pub up: i32,
+    pub left: i32,
+    pub flip: i32,
+    pub turn4: i32,
+    pub turn5: i32,
+    pub turn6: i32,
 }
 
 /// I/O display configuration DTO.

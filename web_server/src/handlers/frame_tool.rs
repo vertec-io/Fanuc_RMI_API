@@ -39,8 +39,8 @@ pub async fn get_active_frame_tool(
 
     // Return server-side state (synchronized with robot on connection and changes)
     ServerResponse::ActiveFrameTool {
-        uframe: conn.active_uframe,
-        utool: conn.active_utool,
+        uframe: conn.active_uframe(),
+        utool: conn.active_utool(),
     }
 }
 
@@ -102,13 +102,32 @@ pub async fn set_active_frame_tool(
             }
 
             // Update server-side state
-            conn.active_uframe = uframe;
-            conn.active_utool = utool;
+            conn.active_configuration.u_frame_number = uframe as i32;
+            conn.active_configuration.u_tool_number = utool as i32;
+            conn.active_configuration.modified = true;
 
             // Broadcast to all clients
             let broadcast_response = ServerResponse::ActiveFrameTool { uframe, utool };
             if let Some(ref client_manager) = client_manager {
                 client_manager.broadcast_all(&broadcast_response).await;
+
+                // Also broadcast the full active configuration with modified flag
+                let config = &conn.active_configuration;
+                let config_response = ServerResponse::ActiveConfigurationResponse {
+                    loaded_from_id: config.loaded_from_id,
+                    loaded_from_name: config.loaded_from_name.clone(),
+                    modified: config.modified,
+                    u_frame_number: config.u_frame_number,
+                    u_tool_number: config.u_tool_number,
+                    front: config.front,
+                    up: config.up,
+                    left: config.left,
+                    flip: config.flip,
+                    turn4: config.turn4,
+                    turn5: config.turn5,
+                    turn6: config.turn6,
+                };
+                client_manager.broadcast_all(&config_response).await;
             }
 
             broadcast_response

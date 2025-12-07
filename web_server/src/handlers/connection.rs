@@ -19,16 +19,28 @@ pub async fn get_connection_status(
 ) -> ServerResponse {
     if let Some(conn) = robot_connection {
         let conn = conn.read().await;
+        // Get connection name and ID from saved_connection if available
+        let (connection_name, connection_id) = if let Some(ref saved) = conn.saved_connection {
+            (Some(saved.name.clone()), Some(saved.id))
+        } else {
+            (None, None)
+        };
         ServerResponse::ConnectionStatus {
             connected: conn.connected,
             robot_addr: conn.robot_addr.clone(),
             robot_port: conn.robot_port,
+            connection_name,
+            connection_id,
+            tp_program_initialized: conn.tp_program_initialized,
         }
     } else {
         ServerResponse::ConnectionStatus {
             connected: false,
             robot_addr: "unknown".to_string(),
             robot_port: 0,
+            connection_name: None,
+            connection_id: None,
+            tp_program_initialized: false,
         }
     }
 }
@@ -74,6 +86,7 @@ pub async fn disconnect_robot(
         let mut conn = conn.write().await;
         conn.disconnect();
         conn.saved_connection = None; // Clear saved connection on disconnect
+        conn.active_configuration = crate::ActiveConfiguration::default(); // Reset active config
         info!("Disconnected from robot");
         ServerResponse::Success { message: "Disconnected from robot".to_string() }
     } else {
@@ -85,28 +98,33 @@ pub async fn disconnect_robot(
 /// Returns the effective settings (per-robot defaults or global fallback).
 ///
 /// After successful connection:
-/// 1. Sends FrcSetUFrameUTool to robot to set the default frame/tool
-/// 2. Stores active_uframe/active_utool in server state
-/// 3. Broadcasts ActiveFrameTool to all clients
+/// 1. Loads the default configuration (if one exists) or uses robot defaults
+/// 2. Sends FrcSetUFrameUTool to robot to set the frame/tool
+/// 3. Stores active configuration in server state
+/// 4. Broadcasts ActiveFrameTool to all clients
 pub async fn connect_to_saved_robot(
     db: Arc<Mutex<Database>>,
     robot_connection: Option<Arc<RwLock<RobotConnection>>>,
     client_manager: Option<Arc<ClientManager>>,
     connection_id: i64,
 ) -> ServerResponse {
-    // First, look up the saved connection
-    let (saved_conn, global_settings) = {
+    // Look up the saved connection and default configuration
+    let (saved_conn, default_config) = {
         let db = db.lock().await;
         let conn = match db.get_robot_connection(connection_id) {
             Ok(Some(c)) => c,
             Ok(None) => return ServerResponse::Error { message: "Connection not found".to_string() },
             Err(e) => return ServerResponse::Error { message: format!("Database error: {}", e) },
         };
-        let settings = match db.get_robot_settings() {
-            Ok(s) => s,
-            Err(e) => return ServerResponse::Error { message: format!("Failed to get settings: {}", e) },
+        // Try to get the default configuration for this robot
+        let config = match db.get_default_robot_configuration(connection_id) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to get default configuration: {}", e);
+                None
+            }
         };
-        (conn, settings)
+        (conn, config)
     };
 
     // Connect to the robot
@@ -123,19 +141,22 @@ pub async fn connect_to_saved_robot(
             info!("Successfully connected to saved robot '{}' at {}:{}",
                 saved_conn.name, saved_conn.ip_address, saved_conn.port);
 
-            // Calculate effective settings (per-robot or global fallback)
-            let effective_speed = saved_conn.default_speed.unwrap_or(global_settings.default_speed);
-            let effective_term_type = saved_conn.default_term_type.clone()
-                .unwrap_or(global_settings.default_term_type.clone());
-            let effective_uframe = saved_conn.default_uframe.unwrap_or(global_settings.default_uframe) as u8;
-            let effective_utool = saved_conn.default_utool.unwrap_or(global_settings.default_utool) as u8;
-            let effective_w = saved_conn.default_w.unwrap_or(global_settings.default_w);
-            let effective_p = saved_conn.default_p.unwrap_or(global_settings.default_p);
-            let effective_r = saved_conn.default_r.unwrap_or(global_settings.default_r);
+            // Initialize active configuration from default config or robot defaults
+            conn_guard.active_configuration = if let Some(ref config) = default_config {
+                info!("Loading default configuration '{}' for robot", config.name);
+                crate::ActiveConfiguration::from_saved(config)
+            } else {
+                info!("No default configuration found, using robot defaults");
+                crate::ActiveConfiguration::from_robot_defaults(&saved_conn)
+            };
 
-            // Send FrcSetUFrameUTool to set the robot to default frame/tool
+            // Get the frame/tool from active configuration
+            let uframe = conn_guard.active_configuration.u_frame_number as u8;
+            let utool = conn_guard.active_configuration.u_tool_number as u8;
+
+            // Send FrcSetUFrameUTool to set the robot to the configured frame/tool
             if let Some(ref driver) = conn_guard.driver {
-                let cmd = FrcSetUFrameUTool::new(None, effective_utool, effective_uframe);
+                let cmd = FrcSetUFrameUTool::new(None, utool, uframe);
                 let packet = SendPacket::Command(Command::FrcSetUFrameUTool(cmd));
 
                 let mut response_rx = driver.response_tx.subscribe();
@@ -155,7 +176,7 @@ pub async fn connect_to_saved_robot(
                             if resp.error_id != 0 {
                                 warn!("FrcSetUFrameUTool failed with error: {}", resp.error_id);
                             } else {
-                                info!("Set robot to default UFrame={}, UTool={}", effective_uframe, effective_utool);
+                                info!("Set robot to UFrame={}, UTool={}", uframe, utool);
                             }
                         }
                         Ok(None) => warn!("No response to FrcSetUFrameUTool"),
@@ -164,17 +185,31 @@ pub async fn connect_to_saved_robot(
                 }
             }
 
-            // Store active frame/tool in server state
-            conn_guard.active_uframe = effective_uframe;
-            conn_guard.active_utool = effective_utool;
-
-            // Broadcast ActiveFrameTool to all clients
+            // Broadcast ActiveFrameTool and ActiveConfiguration to all clients
             if let Some(ref client_manager) = client_manager {
                 let frame_tool_response = ServerResponse::ActiveFrameTool {
-                    uframe: effective_uframe,
-                    utool: effective_utool,
+                    uframe,
+                    utool,
                 };
                 client_manager.broadcast_all(&frame_tool_response).await;
+
+                // Also broadcast the full active configuration
+                let config = &conn_guard.active_configuration;
+                let config_response = ServerResponse::ActiveConfigurationResponse {
+                    loaded_from_id: config.loaded_from_id,
+                    loaded_from_name: config.loaded_from_name.clone(),
+                    modified: config.modified,
+                    u_frame_number: config.u_frame_number,
+                    u_tool_number: config.u_tool_number,
+                    front: config.front,
+                    up: config.up,
+                    left: config.left,
+                    flip: config.flip,
+                    turn4: config.turn4,
+                    turn5: config.turn5,
+                    turn6: config.turn6,
+                };
+                client_manager.broadcast_all(&config_response).await;
             }
 
             // Store the saved connection for configuration defaults
@@ -182,16 +217,16 @@ pub async fn connect_to_saved_robot(
 
             ServerResponse::RobotConnected {
                 connection_id: saved_conn.id,
-                connection_name: saved_conn.name,
-                robot_addr: saved_conn.ip_address,
+                connection_name: saved_conn.name.clone(),
+                robot_addr: saved_conn.ip_address.clone(),
                 robot_port: saved_conn.port,
-                effective_speed,
-                effective_term_type,
-                effective_uframe: effective_uframe as i32,
-                effective_utool: effective_utool as i32,
-                effective_w,
-                effective_p,
-                effective_r,
+                effective_speed: saved_conn.default_speed,
+                effective_term_type: saved_conn.default_term_type,
+                effective_uframe: conn_guard.active_configuration.u_frame_number,
+                effective_utool: conn_guard.active_configuration.u_tool_number,
+                effective_w: saved_conn.default_w,
+                effective_p: saved_conn.default_p,
+                effective_r: saved_conn.default_r,
             }
         }
         Err(e) => {

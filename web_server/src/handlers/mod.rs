@@ -1,6 +1,7 @@
 //! API request handlers for WebSocket messages.
 //!
 //! This module contains handlers organized by functionality:
+//! - `configurations`: Robot configuration management (named configs per robot)
 //! - `connection`: Robot connection management (connect/disconnect/status)
 //! - `control`: Control locking (request/release control)
 //! - `execution`: Program execution (start/pause/resume/stop)
@@ -12,6 +13,7 @@
 //! - `io_config`: I/O display configuration management
 //! - `robot_control`: Robot control commands (abort/reset/initialize)
 
+pub mod configurations;
 pub mod connection;
 pub mod control;
 pub mod execution;
@@ -87,6 +89,13 @@ pub async fn handle_request(
         ClientRequest::UploadCsv { program_id, csv_content, start_position } => {
             programs::upload_csv(db, program_id, &csv_content, start_position).await
         }
+        ClientRequest::UpdateProgramSettings {
+            program_id, start_x, start_y, start_z, end_x, end_y, end_z, move_speed
+        } => {
+            programs::update_program_settings(
+                db, program_id, start_x, start_y, start_z, end_x, end_y, end_z, move_speed
+            ).await
+        }
 
         // Settings management
         ClientRequest::GetSettings => settings::get_settings(db).await,
@@ -138,7 +147,7 @@ pub async fn handle_request(
             if let Err(e) = require_control(&client_manager, client_id).await {
                 return e;
             }
-            execution::stop_program(driver, executor, client_manager).await
+            execution::stop_program(driver, executor, robot_connection, client_manager).await
         }
         ClientRequest::GetExecutionState => execution::get_execution_state(executor).await,
 
@@ -147,7 +156,7 @@ pub async fn handle_request(
             if let Err(e) = require_control(&client_manager, client_id).await {
                 return e;
             }
-            robot_control::robot_abort(driver, executor, client_manager).await
+            robot_control::robot_abort(driver, executor, robot_connection, client_manager).await
         }
         ClientRequest::RobotReset => {
             if let Err(e) = require_control(&client_manager, client_id).await {
@@ -159,7 +168,7 @@ pub async fn handle_request(
             if let Err(e) = require_control(&client_manager, client_id).await {
                 return e;
             }
-            robot_control::robot_initialize(driver, group_mask.unwrap_or(1)).await
+            robot_control::robot_initialize(driver, robot_connection, client_manager, group_mask.unwrap_or(1)).await
         }
 
         // Robot connection management
@@ -208,7 +217,7 @@ pub async fn handle_request(
             default_turn4, default_turn5, default_turn6,
         } => {
             robot_connections::update_robot_connection_defaults(
-                db, id, default_speed, default_term_type.as_deref(), default_uframe, default_utool,
+                db, id, default_speed, &default_term_type, default_uframe, default_utool,
                 default_w, default_p, default_r,
                 default_front, default_up, default_left, default_flip,
                 default_turn4, default_turn5, default_turn6,
@@ -216,6 +225,9 @@ pub async fn handle_request(
         }
         ClientRequest::DeleteRobotConnection { id } => {
             robot_connections::delete_robot_connection(db, id).await
+        }
+        ClientRequest::UpdateRobotJogDefaults { id, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step } => {
+            robot_connections::update_robot_jog_defaults(db, id, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step).await
         }
 
         // Frame/Tool management
@@ -321,6 +333,86 @@ pub async fn handle_request(
                 is_visible,
                 display_order,
             ).await
+        }
+
+        // Robot Configurations
+        ClientRequest::ListRobotConfigurations { robot_connection_id } => {
+            configurations::list_robot_configurations(db, robot_connection_id).await
+        }
+        ClientRequest::GetRobotConfiguration { id } => {
+            configurations::get_robot_configuration(db, id).await
+        }
+        ClientRequest::CreateRobotConfiguration {
+            robot_connection_id,
+            name,
+            is_default,
+            u_frame_number,
+            u_tool_number,
+            front,
+            up,
+            left,
+            flip,
+            turn4,
+            turn5,
+            turn6,
+        } => {
+            configurations::create_robot_configuration(
+                db,
+                robot_connection_id,
+                name,
+                is_default,
+                u_frame_number,
+                u_tool_number,
+                front,
+                up,
+                left,
+                flip,
+                turn4,
+                turn5,
+                turn6,
+            ).await
+        }
+        ClientRequest::UpdateRobotConfiguration {
+            id,
+            name,
+            is_default,
+            u_frame_number,
+            u_tool_number,
+            front,
+            up,
+            left,
+            flip,
+            turn4,
+            turn5,
+            turn6,
+        } => {
+            configurations::update_robot_configuration(
+                db,
+                id,
+                name,
+                is_default,
+                u_frame_number,
+                u_tool_number,
+                front,
+                up,
+                left,
+                flip,
+                turn4,
+                turn5,
+                turn6,
+            ).await
+        }
+        ClientRequest::DeleteRobotConfiguration { id } => {
+            configurations::delete_robot_configuration(db, id).await
+        }
+        ClientRequest::SetDefaultRobotConfiguration { id } => {
+            configurations::set_default_robot_configuration(db, id).await
+        }
+        ClientRequest::GetActiveConfiguration => {
+            configurations::get_active_configuration(robot_connection).await
+        }
+        ClientRequest::LoadConfiguration { configuration_id } => {
+            configurations::load_configuration(db, robot_connection, client_manager, configuration_id).await
         }
     }
 }

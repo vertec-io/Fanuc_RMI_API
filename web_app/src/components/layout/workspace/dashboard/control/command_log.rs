@@ -1,16 +1,16 @@
 //! Command log panel showing console output.
+//!
+//! Displays all console messages in chronological order with sent/received indicators.
 
 use leptos::prelude::*;
 use leptos::either::Either;
-use crate::components::layout::workspace::context::{WorkspaceContext, CommandStatus};
-use crate::websocket::WebSocketManager;
+use crate::websocket::{WebSocketManager, MessageDirection, MessageType};
 
-/// Command Log panel - console-style output
+/// Command Log panel - console-style output with chronological ordering
 #[component]
 pub fn CommandLogPanel() -> impl IntoView {
-    let ctx = use_context::<WorkspaceContext>().expect("WorkspaceContext not found");
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
-    let log = ctx.command_log;
+    let console_messages = ws.console_messages;
 
     view! {
         <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] flex flex-col overflow-hidden">
@@ -24,7 +24,7 @@ pub fn CommandLogPanel() -> impl IntoView {
                 <button
                     class="text-[8px] text-[#666666] hover:text-[#ff4444]"
                     on:click=move |_| {
-                        log.set(Vec::new());
+                        ws.clear_console_messages();
                         ws.clear_motion_log();
                         ws.clear_error_log();
                     }
@@ -35,63 +35,49 @@ pub fn CommandLogPanel() -> impl IntoView {
             </div>
             <div class="flex-1 overflow-y-auto p-2 font-mono text-[9px]">
                 {move || {
-                    let entries = log.get();
-                    let motions = ws.motion_log.get();
-                    let errors = ws.error_log.get();
+                    let messages = console_messages.get();
 
-                    if entries.is_empty() && motions.is_empty() && errors.is_empty() {
+                    if messages.is_empty() {
                         Either::Left(view! {
                             <div class="text-[#555555] text-center py-4">
                                 "Console output will appear here..."
                             </div>
                         })
                     } else {
-                        // Show command log entries
-                        let cmd_views = entries.into_iter().map(|entry| {
-                            let status_class = match &entry.status {
-                                CommandStatus::Pending => "text-[#f59e0b]",
-                                CommandStatus::Success => "text-[#22c55e]",
-                                CommandStatus::Error(_) => "text-[#ff4444]",
+                        // Messages are already sorted by timestamp_ms
+                        let msg_views = messages.into_iter().map(|msg| {
+                            // Direction indicator and color
+                            let (dir_icon, dir_class) = match msg.direction {
+                                MessageDirection::Sent => ("→", "text-[#00d9ff]"),
+                                MessageDirection::Received => ("←", "text-[#22c55e]"),
+                                MessageDirection::System => ("•", "text-[#f59e0b]"),
                             };
-                            let status_icon = match &entry.status {
-                                CommandStatus::Pending => "⏳",
-                                CommandStatus::Success => "✓",
-                                CommandStatus::Error(_) => "✗",
+
+                            // Message type color
+                            let content_class = match msg.msg_type {
+                                MessageType::Command => "text-[#00d9ff]",
+                                MessageType::Response => "text-[#22c55e]",
+                                MessageType::Error => "text-[#ff4444]",
+                                MessageType::Status => "text-[#888888]",
+                                MessageType::Config => "text-[#f59e0b]",
                             };
+
+                            // Sequence ID display
+                            let seq_display = msg.sequence_id.map(|id| format!(" seq={}", id)).unwrap_or_default();
+
                             view! {
-                                <div class="py-0.5 border-b border-[#ffffff05]">
-                                    <span class="text-[#555555] mr-1">{entry.timestamp}</span>
-                                    <span class={status_class}>{status_icon}</span>
-                                    <span class="text-[#cccccc] ml-1">{entry.command}</span>
+                                <div class="py-0.5 border-b border-[#ffffff05] flex items-start">
+                                    <span class="text-[#555555] mr-1 shrink-0">{format!("[{}]", msg.timestamp)}</span>
+                                    <span class={format!("{} mr-1 shrink-0", dir_class)}>{dir_icon}</span>
+                                    <span class={content_class}>
+                                        {msg.content}
+                                        <span class="text-[#666666]">{seq_display}</span>
+                                    </span>
                                 </div>
                             }
                         }).collect_view();
 
-                        // Show motion log entries (last 20)
-                        let motion_views = motions.into_iter().rev().take(20).collect::<Vec<_>>().into_iter().rev().map(|msg| {
-                            view! {
-                                <div class="text-[9px] py-0.5 text-[#00d9ff] border-b border-[#ffffff05]">
-                                    <span class="text-[#22c55e] mr-1">"✓"</span>
-                                    {msg}
-                                </div>
-                            }
-                        }).collect_view();
-
-                        // Show error entries
-                        let error_views = errors.into_iter().map(|msg| {
-                            view! {
-                                <div class="text-[9px] py-0.5 text-[#ff4444] border-b border-[#ffffff05]">
-                                    <span class="mr-1">"✗"</span>
-                                    {msg}
-                                </div>
-                            }
-                        }).collect_view();
-
-                        Either::Right(view! {
-                            {cmd_views}
-                            {motion_views}
-                            {error_views}
-                        })
+                        Either::Right(msg_views)
                     }
                 }}
             </div>

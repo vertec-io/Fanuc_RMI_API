@@ -293,7 +293,7 @@ impl FanucDriver {
         let _request_id = self.send_abort()?;
 
         // Wait up to 5 seconds for response
-        tokio::time::timeout(Duration::from_secs(5), async {
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
             while let Ok(response) = response_rx.recv().await {
                 if let ResponsePacket::CommandResponse(CommandResponse::FrcAbort(abort_response)) = response {
                     return Ok(abort_response);
@@ -302,7 +302,26 @@ impl FanucDriver {
             Err("Response channel closed".to_string())
         })
         .await
-        .map_err(|_| "Timeout waiting for abort response".to_string())?
+        .map_err(|_| "Timeout waiting for abort response".to_string())?;
+
+        // After abort completes, clear the in-flight counter
+        // The robot clears its motion queue on abort but doesn't send responses
+        // for aborted instructions, so we need to reset our tracking.
+        self.clear_in_flight()?;
+
+        result
+    }
+
+    /// Clear the driver's in-flight instruction counter.
+    ///
+    /// This should be called after an abort to reset the driver's tracking,
+    /// since the robot clears its motion queue on abort but doesn't send
+    /// responses for aborted instructions.
+    pub fn clear_in_flight(&self) -> Result<(), String> {
+        let packet = SendPacket::DriverCommand(DriverCommand::ClearInFlight);
+        // Use High priority to process this command quickly
+        self.send_packet(packet, PacketPriority::High)?;
+        Ok(())
     }
 
     /// Send a reset command to the FANUC controller
@@ -787,8 +806,21 @@ impl FanucDriver {
                     _ => {}
                 }
 
-                if let SendPacket::DriverCommand(_) = new_packet.packet {
-                    println!("GOT A PAUSED COMMAND: {:?}", new_packet.packet);
+                // Handle driver commands (these don't get sent to robot)
+                if let SendPacket::DriverCommand(cmd) = &new_packet.packet {
+                    match cmd {
+                        DriverCommand::ClearInFlight => {
+                            // Reset the in-flight counter. This is needed after abort
+                            // because the robot clears its queue but doesn't send responses
+                            // for aborted instructions.
+                            let old_in_flight = in_flight;
+                            in_flight = 0;
+                            println!("ClearInFlight: reset in_flight counter from {} to 0", old_in_flight);
+                        }
+                        _ => {
+                            println!("GOT A DRIVER COMMAND: {:?}", cmd);
+                        }
+                    }
                     continue;
                 }
 

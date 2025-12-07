@@ -14,13 +14,14 @@ pub fn create_motion_packet(cmd: &RecentCommand, ws: &WebSocketManager) -> Optio
     // If no robot is connected, we can't create a valid motion packet
     let active_conn = ws.get_active_connection()?;
 
-    let front = active_conn.default_front.unwrap_or(1) as i8;
-    let up = active_conn.default_up.unwrap_or(1) as i8;
-    let left = active_conn.default_left.unwrap_or(0) as i8;
-    let flip = active_conn.default_flip.unwrap_or(0) as i8;
-    let turn4 = active_conn.default_turn4.unwrap_or(0) as i8;
-    let turn5 = active_conn.default_turn5.unwrap_or(0) as i8;
-    let turn6 = active_conn.default_turn6.unwrap_or(0) as i8;
+    // Use per-robot configuration defaults (all required now)
+    let front = active_conn.default_front as i8;
+    let up = active_conn.default_up as i8;
+    let left = active_conn.default_left as i8;
+    let flip = active_conn.default_flip as i8;
+    let turn4 = active_conn.default_turn4 as i8;
+    let turn5 = active_conn.default_turn5 as i8;
+    let turn6 = active_conn.default_turn6 as i8;
 
     let config = Configuration {
         u_tool_number: cmd.utool as i8,
@@ -96,6 +97,11 @@ pub fn CommandInputSection() -> impl IntoView {
     let recent_commands = ctx.recent_commands;
     let selected_cmd_id = ctx.selected_command_id;
 
+    // Disable controls when a program is actively running (not paused)
+    let program_running = ws.program_running;
+    let program_paused = ws.program_paused;
+    let controls_disabled = move || program_running.get() && !program_paused.get();
+
     view! {
         <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-2 shrink-0">
             <div class="flex items-center justify-between mb-1.5">
@@ -142,22 +148,36 @@ pub fn CommandInputSection() -> impl IntoView {
                     }).collect_view()}
                 </select>
                 <button
-                    class="bg-[#00d9ff20] border border-[#00d9ff40] text-[#00d9ff] text-[9px] px-3 py-1 rounded hover:bg-[#00d9ff30]"
-                    on:click=move |_| ctx.show_composer.set(true)
+                    class=move || if controls_disabled() {
+                        "bg-[#111111] border border-[#ffffff08] text-[#555555] text-[9px] px-3 py-1 rounded cursor-not-allowed"
+                    } else {
+                        "bg-[#00d9ff20] border border-[#00d9ff40] text-[#00d9ff] text-[9px] px-3 py-1 rounded hover:bg-[#00d9ff30]"
+                    }
+                    disabled=controls_disabled
+                    on:click=move |_| {
+                        if !controls_disabled() {
+                            ctx.show_composer.set(true);
+                        }
+                    }
+                    title=move || if controls_disabled() { "Disabled: Program running" } else { "Create new command" }
                 >
                     "+ Compose"
                 </button>
                 <button
                     class={move || format!(
                         "text-[9px] px-3 py-1 rounded transition-colors {}",
-                        if selected_cmd_id.get().is_none() {
+                        if controls_disabled() || selected_cmd_id.get().is_none() {
                             "bg-[#111111] border border-[#ffffff08] text-[#555555] cursor-not-allowed"
                         } else {
                             "bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] hover:bg-[#22c55e30]"
                         }
                     )}
-                    disabled=move || selected_cmd_id.get().is_none()
+                    disabled=move || controls_disabled() || selected_cmd_id.get().is_none()
                     on:click=move |_| {
+                        if controls_disabled() {
+                            ws.set_message("Cannot run command: Program is running".to_string());
+                            return;
+                        }
                         if let Some(idx) = selected_cmd_id.get() {
                             let cmds = recent_commands.get();
                             if let Some(cmd) = cmds.iter().find(|c| c.id == idx) {
@@ -178,6 +198,7 @@ pub fn CommandInputSection() -> impl IntoView {
                             }
                         }
                     }
+                    title=move || if controls_disabled() { "Disabled: Program running" } else { "Run selected command" }
                 >
                     "▶ Run"
                 </button>

@@ -22,13 +22,46 @@ pub use settings::SettingsView;
 use leptos::prelude::*;
 use leptos_router::components::{ParentRoute, Redirect, Route, Routes};
 use leptos_router::path;
+use crate::websocket::WebSocketManager;
+use crate::components::layout::LayoutContext;
 
 /// Main workspace with routed content.
 #[component]
 pub fn MainWorkspace() -> impl IntoView {
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
+    let layout_ctx = use_context::<LayoutContext>().expect("LayoutContext not found");
+
     // Create and provide workspace context
     let workspace_ctx = WorkspaceContext::new();
     provide_context(workspace_ctx);
+
+    // Clear recent commands and load jog defaults when switching robots
+    // Track the previous connection ID to detect changes
+    let prev_connection_id = StoredValue::new(ws.active_connection_id.get_untracked());
+    Effect::new(move |_| {
+        let current_id = ws.active_connection_id.get();
+        let prev_id = prev_connection_id.get_value();
+
+        // Only clear if the connection ID actually changed (not on initial load)
+        if current_id != prev_id {
+            log::info!("Robot connection changed from {:?} to {:?}, clearing recent commands", prev_id, current_id);
+            workspace_ctx.recent_commands.set(Vec::new());
+            workspace_ctx.selected_command_id.set(None);
+            workspace_ctx.command_log.set(Vec::new());
+            prev_connection_id.set_value(current_id);
+
+            // Load robot-specific jog defaults when a robot connects
+            if let Some(conn) = ws.get_active_connection() {
+                log::info!("Loading jog defaults for robot: cart_speed={}, cart_step={}, joint_speed={}, joint_step={}",
+                    conn.default_cartesian_jog_speed, conn.default_cartesian_jog_step,
+                    conn.default_joint_jog_speed, conn.default_joint_jog_step);
+                layout_ctx.jog_speed.set(conn.default_cartesian_jog_speed);
+                layout_ctx.jog_step.set(conn.default_cartesian_jog_step);
+                layout_ctx.joint_jog_speed.set(conn.default_joint_jog_speed);
+                layout_ctx.joint_jog_step.set(conn.default_joint_jog_step);
+            }
+        }
+    });
 
     view! {
         <main class="flex-1 flex flex-col overflow-hidden bg-[#080808]">

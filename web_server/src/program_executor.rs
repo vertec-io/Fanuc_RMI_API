@@ -118,14 +118,14 @@ impl ProgramExecutor {
             term_type: program.default_term_type.clone(),
             uframe: program.default_uframe,
             utool: program.default_utool,
-            // Use robot connection defaults for configuration if available
-            front: robot_defaults.and_then(|r| r.default_front),
-            up: robot_defaults.and_then(|r| r.default_up),
-            left: robot_defaults.and_then(|r| r.default_left),
-            flip: robot_defaults.and_then(|r| r.default_flip),
-            turn4: robot_defaults.and_then(|r| r.default_turn4),
-            turn5: robot_defaults.and_then(|r| r.default_turn5),
-            turn6: robot_defaults.and_then(|r| r.default_turn6),
+            // Use robot connection defaults for configuration (all required now)
+            front: robot_defaults.map(|r| r.default_front),
+            up: robot_defaults.map(|r| r.default_up),
+            left: robot_defaults.map(|r| r.default_left),
+            flip: robot_defaults.map(|r| r.default_flip),
+            turn4: robot_defaults.map(|r| r.default_turn4),
+            turn5: robot_defaults.map(|r| r.default_turn5),
+            turn6: robot_defaults.map(|r| r.default_turn6),
         };
 
         // Build pending queue with all instructions

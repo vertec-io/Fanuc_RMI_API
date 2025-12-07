@@ -25,9 +25,16 @@ pub struct Program {
     pub default_term_type: String,
     pub default_uframe: Option<i32>,
     pub default_utool: Option<i32>,
+    // Start position (where robot moves before toolpath)
     pub start_x: Option<f64>,
     pub start_y: Option<f64>,
     pub start_z: Option<f64>,
+    // End position (where robot moves after toolpath)
+    pub end_x: Option<f64>,
+    pub end_y: Option<f64>,
+    pub end_z: Option<f64>,
+    // Speed for moving to start/end positions
+    pub move_speed: Option<f64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -70,6 +77,7 @@ pub struct RobotSettings {
 }
 
 /// A saved robot connection configuration.
+/// All defaults are required (non-optional) - each robot has its own explicit settings.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct RobotConnection {
@@ -78,22 +86,51 @@ pub struct RobotConnection {
     pub description: Option<String>,
     pub ip_address: String,
     pub port: u32,
-    // Per-robot defaults
-    pub default_speed: Option<f64>,
-    pub default_term_type: Option<String>,
-    pub default_uframe: Option<i32>,
-    pub default_utool: Option<i32>,
-    pub default_w: Option<f64>,
-    pub default_p: Option<f64>,
-    pub default_r: Option<f64>,
-    // Robot arm configuration defaults
-    pub default_front: Option<i32>,
-    pub default_up: Option<i32>,
-    pub default_left: Option<i32>,
-    pub default_flip: Option<i32>,
-    pub default_turn4: Option<i32>,
-    pub default_turn5: Option<i32>,
-    pub default_turn6: Option<i32>,
+    // Per-robot defaults (required - no global fallback)
+    pub default_speed: f64,
+    pub default_term_type: String,
+    pub default_uframe: i32,
+    pub default_utool: i32,
+    pub default_w: f64,
+    pub default_p: f64,
+    pub default_r: f64,
+    // Robot arm configuration defaults (required)
+    pub default_front: i32,
+    pub default_up: i32,
+    pub default_left: i32,
+    pub default_flip: i32,
+    pub default_turn4: i32,
+    pub default_turn5: i32,
+    pub default_turn6: i32,
+    // Jog defaults
+    pub default_cartesian_jog_speed: f64,
+    pub default_cartesian_jog_step: f64,
+    pub default_joint_jog_speed: f64,
+    pub default_joint_jog_step: f64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A named robot configuration (UFrame, UTool, arm posture).
+/// Multiple configurations can be saved per robot, with one marked as default.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct RobotConfiguration {
+    pub id: i64,
+    pub robot_connection_id: i64,
+    pub name: String,
+    pub is_default: bool,
+    // Frame and tool
+    pub u_frame_number: i32,
+    pub u_tool_number: i32,
+    // Arm configuration
+    pub front: i32,
+    pub up: i32,
+    pub left: i32,
+    pub flip: i32,
+    pub turn4: i32,
+    pub turn5: i32,
+    pub turn6: i32,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -160,6 +197,11 @@ impl Database {
             ("default_turn4", "INTEGER"),
             ("default_turn5", "INTEGER"),
             ("default_turn6", "INTEGER"),
+            // Jog defaults
+            ("default_cartesian_jog_speed", "REAL"),
+            ("default_cartesian_jog_step", "REAL"),
+            ("default_joint_jog_speed", "REAL"),
+            ("default_joint_jog_step", "REAL"),
         ];
 
         for (column_name, column_type) in columns_to_add {
@@ -185,6 +227,58 @@ impl Database {
             }
         }
 
+        // Migration: Create robot_configurations table if it doesn't exist
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS robot_configurations (
+                id INTEGER PRIMARY KEY,
+                robot_connection_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                u_frame_number INTEGER NOT NULL DEFAULT 0,
+                u_tool_number INTEGER NOT NULL DEFAULT 0,
+                front INTEGER NOT NULL DEFAULT 0,
+                up INTEGER NOT NULL DEFAULT 0,
+                left INTEGER NOT NULL DEFAULT 0,
+                flip INTEGER NOT NULL DEFAULT 0,
+                turn4 INTEGER NOT NULL DEFAULT 0,
+                turn5 INTEGER NOT NULL DEFAULT 0,
+                turn6 INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (robot_connection_id) REFERENCES robot_connections(id) ON DELETE CASCADE,
+                UNIQUE(robot_connection_id, name)
+            );"
+        )?;
+
+        // Migration: Add new columns to programs table if they don't exist
+        let program_columns_to_add = [
+            ("end_x", "REAL"),
+            ("end_y", "REAL"),
+            ("end_z", "REAL"),
+            ("move_speed", "REAL DEFAULT 100.0"),
+        ];
+
+        for (column_name, column_type) in program_columns_to_add {
+            let column_exists = self
+                .conn
+                .prepare(&format!(
+                    "SELECT {} FROM programs LIMIT 1",
+                    column_name
+                ))
+                .is_ok();
+
+            if !column_exists {
+                self.conn.execute(
+                    &format!(
+                        "ALTER TABLE programs ADD COLUMN {} {}",
+                        column_name, column_type
+                    ),
+                    [],
+                )?;
+                tracing::info!("Migration: Added column {} to programs", column_name);
+            }
+        }
+
         Ok(())
     }
 
@@ -205,6 +299,10 @@ impl Database {
                 start_x REAL,
                 start_y REAL,
                 start_z REAL,
+                end_x REAL,
+                end_y REAL,
+                end_z REAL,
+                move_speed REAL DEFAULT 100.0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -299,9 +397,11 @@ impl Database {
              DROP TABLE IF EXISTS robot_settings;
              DROP TABLE IF EXISTS io_display_config;
              DROP TABLE IF EXISTS server_settings;
+             DROP TABLE IF EXISTS robot_configurations;
              DROP TABLE IF EXISTS robot_connections;"
         )?;
-        self.initialize_schema()
+        self.initialize_schema()?;
+        self.run_migrations()
     }
 
     // ========== Program CRUD Operations ==========
@@ -320,7 +420,8 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, default_w, default_p, default_r,
                     default_speed, default_term_type, default_uframe, default_utool,
-                    start_x, start_y, start_z, created_at, updated_at
+                    start_x, start_y, start_z, end_x, end_y, end_z,
+                    COALESCE(move_speed, 100.0), created_at, updated_at
              FROM programs WHERE id = ?1"
         )?;
 
@@ -340,8 +441,12 @@ impl Database {
                 start_x: row.get(10)?,
                 start_y: row.get(11)?,
                 start_z: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
+                end_x: row.get(13)?,
+                end_y: row.get(14)?,
+                end_z: row.get(15)?,
+                move_speed: row.get(16)?,
+                created_at: row.get(17)?,
+                updated_at: row.get(18)?,
             }))
         } else {
             Ok(None)
@@ -353,7 +458,8 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, default_w, default_p, default_r,
                     default_speed, default_term_type, default_uframe, default_utool,
-                    start_x, start_y, start_z, created_at, updated_at
+                    start_x, start_y, start_z, end_x, end_y, end_z,
+                    COALESCE(move_speed, 100.0), created_at, updated_at
              FROM programs ORDER BY name"
         )?;
 
@@ -372,8 +478,12 @@ impl Database {
                 start_x: row.get(10)?,
                 start_y: row.get(11)?,
                 start_z: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
+                end_x: row.get(13)?,
+                end_y: row.get(14)?,
+                end_z: row.get(15)?,
+                move_speed: row.get(16)?,
+                created_at: row.get(17)?,
+                updated_at: row.get(18)?,
             })
         })?;
 
@@ -381,20 +491,24 @@ impl Database {
     }
 
     /// Update program metadata.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_program(&self, id: i64, name: &str, description: Option<&str>,
                           default_w: f64, default_p: f64, default_r: f64,
                           default_speed: Option<f64>, default_term_type: &str,
                           default_uframe: Option<i32>, default_utool: Option<i32>,
-                          start_x: Option<f64>, start_y: Option<f64>, start_z: Option<f64>) -> Result<()> {
+                          start_x: Option<f64>, start_y: Option<f64>, start_z: Option<f64>,
+                          end_x: Option<f64>, end_y: Option<f64>, end_z: Option<f64>,
+                          move_speed: Option<f64>) -> Result<()> {
         self.conn.execute(
             "UPDATE programs SET
                 name = ?1, description = ?2, default_w = ?3, default_p = ?4, default_r = ?5,
                 default_speed = ?6, default_term_type = ?7, default_uframe = ?8, default_utool = ?9,
-                start_x = ?10, start_y = ?11, start_z = ?12, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?13",
+                start_x = ?10, start_y = ?11, start_z = ?12, end_x = ?13, end_y = ?14, end_z = ?15,
+                move_speed = ?16, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?17",
             params![name, description, default_w, default_p, default_r,
                     default_speed, default_term_type, default_uframe, default_utool,
-                    start_x, start_y, start_z, id],
+                    start_x, start_y, start_z, end_x, end_y, end_z, move_speed, id],
         )?;
         Ok(())
     }
@@ -520,13 +634,28 @@ impl Database {
     }
 
     /// Get a robot connection by ID.
+    /// Uses COALESCE to provide sensible defaults for NULL values in existing data.
     pub fn get_robot_connection(&self, id: i64) -> Result<Option<RobotConnection>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, ip_address, port,
-                    default_speed, default_term_type, default_uframe, default_utool,
-                    default_w, default_p, default_r,
-                    default_front, default_up, default_left, default_flip,
-                    default_turn4, default_turn5, default_turn6,
+                    COALESCE(default_speed, 100.0),
+                    COALESCE(default_term_type, 'CNT'),
+                    COALESCE(default_uframe, 0),
+                    COALESCE(default_utool, 0),
+                    COALESCE(default_w, 0.0),
+                    COALESCE(default_p, 0.0),
+                    COALESCE(default_r, 0.0),
+                    COALESCE(default_front, 1),
+                    COALESCE(default_up, 1),
+                    COALESCE(default_left, 0),
+                    COALESCE(default_flip, 0),
+                    COALESCE(default_turn4, 0),
+                    COALESCE(default_turn5, 0),
+                    COALESCE(default_turn6, 0),
+                    COALESCE(default_cartesian_jog_speed, 50.0),
+                    COALESCE(default_cartesian_jog_step, 10.0),
+                    COALESCE(default_joint_jog_speed, 10.0),
+                    COALESCE(default_joint_jog_step, 1.0),
                     created_at, updated_at
              FROM robot_connections WHERE id = ?1"
         )?;
@@ -553,8 +682,12 @@ impl Database {
                 default_turn4: row.get(16)?,
                 default_turn5: row.get(17)?,
                 default_turn6: row.get(18)?,
-                created_at: row.get(19)?,
-                updated_at: row.get(20)?,
+                default_cartesian_jog_speed: row.get(19)?,
+                default_cartesian_jog_step: row.get(20)?,
+                default_joint_jog_speed: row.get(21)?,
+                default_joint_jog_step: row.get(22)?,
+                created_at: row.get(23)?,
+                updated_at: row.get(24)?,
             }))
         } else {
             Ok(None)
@@ -562,13 +695,28 @@ impl Database {
     }
 
     /// List all robot connections.
+    /// Uses COALESCE to provide sensible defaults for NULL values in existing data.
     pub fn list_robot_connections(&self) -> Result<Vec<RobotConnection>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, ip_address, port,
-                    default_speed, default_term_type, default_uframe, default_utool,
-                    default_w, default_p, default_r,
-                    default_front, default_up, default_left, default_flip,
-                    default_turn4, default_turn5, default_turn6,
+                    COALESCE(default_speed, 100.0),
+                    COALESCE(default_term_type, 'CNT'),
+                    COALESCE(default_uframe, 0),
+                    COALESCE(default_utool, 0),
+                    COALESCE(default_w, 0.0),
+                    COALESCE(default_p, 0.0),
+                    COALESCE(default_r, 0.0),
+                    COALESCE(default_front, 1),
+                    COALESCE(default_up, 1),
+                    COALESCE(default_left, 0),
+                    COALESCE(default_flip, 0),
+                    COALESCE(default_turn4, 0),
+                    COALESCE(default_turn5, 0),
+                    COALESCE(default_turn6, 0),
+                    COALESCE(default_cartesian_jog_speed, 50.0),
+                    COALESCE(default_cartesian_jog_step, 10.0),
+                    COALESCE(default_joint_jog_speed, 10.0),
+                    COALESCE(default_joint_jog_step, 1.0),
                     created_at, updated_at
              FROM robot_connections ORDER BY name"
         )?;
@@ -594,8 +742,12 @@ impl Database {
                 default_turn4: row.get(16)?,
                 default_turn5: row.get(17)?,
                 default_turn6: row.get(18)?,
-                created_at: row.get(19)?,
-                updated_at: row.get(20)?,
+                default_cartesian_jog_speed: row.get(19)?,
+                default_cartesian_jog_step: row.get(20)?,
+                default_joint_jog_speed: row.get(21)?,
+                default_joint_jog_step: row.get(22)?,
+                created_at: row.get(23)?,
+                updated_at: row.get(24)?,
             })
         })?;
 
@@ -614,24 +766,25 @@ impl Database {
     }
 
     /// Update robot connection defaults.
+    /// All parameters are required (non-optional) - each robot has explicit settings.
     #[allow(clippy::too_many_arguments)]
     pub fn update_robot_connection_defaults(
         &self,
         id: i64,
-        default_speed: Option<f64>,
-        default_term_type: Option<&str>,
-        default_uframe: Option<i32>,
-        default_utool: Option<i32>,
-        default_w: Option<f64>,
-        default_p: Option<f64>,
-        default_r: Option<f64>,
-        default_front: Option<i32>,
-        default_up: Option<i32>,
-        default_left: Option<i32>,
-        default_flip: Option<i32>,
-        default_turn4: Option<i32>,
-        default_turn5: Option<i32>,
-        default_turn6: Option<i32>,
+        default_speed: f64,
+        default_term_type: &str,
+        default_uframe: i32,
+        default_utool: i32,
+        default_w: f64,
+        default_p: f64,
+        default_r: f64,
+        default_front: i32,
+        default_up: i32,
+        default_left: i32,
+        default_flip: i32,
+        default_turn4: i32,
+        default_turn5: i32,
+        default_turn6: i32,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE robot_connections SET
@@ -648,6 +801,28 @@ impl Database {
                 default_turn4, default_turn5, default_turn6,
                 id
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Update robot connection jog defaults.
+    pub fn update_robot_connection_jog_defaults(
+        &self,
+        id: i64,
+        cartesian_jog_speed: f64,
+        cartesian_jog_step: f64,
+        joint_jog_speed: f64,
+        joint_jog_step: f64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE robot_connections SET
+                default_cartesian_jog_speed = ?1,
+                default_cartesian_jog_step = ?2,
+                default_joint_jog_speed = ?3,
+                default_joint_jog_step = ?4,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?5",
+            params![cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, id],
         )?;
         Ok(())
     }
@@ -746,6 +921,219 @@ impl Database {
         })?;
 
         rows.collect()
+    }
+
+    // ========== Robot Configuration Operations ==========
+
+    /// Create a new robot configuration.
+    /// If is_default is true, clears is_default on all other configs for this robot.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_robot_configuration(
+        &self,
+        robot_connection_id: i64,
+        name: &str,
+        is_default: bool,
+        u_frame_number: i32,
+        u_tool_number: i32,
+        front: i32,
+        up: i32,
+        left: i32,
+        flip: i32,
+        turn4: i32,
+        turn5: i32,
+        turn6: i32,
+    ) -> Result<i64> {
+        // If this is the default, clear other defaults first
+        if is_default {
+            self.conn.execute(
+                "UPDATE robot_configurations SET is_default = 0 WHERE robot_connection_id = ?1",
+                params![robot_connection_id],
+            )?;
+        }
+
+        self.conn.execute(
+            "INSERT INTO robot_configurations (
+                robot_connection_id, name, is_default, u_frame_number, u_tool_number,
+                front, up, left, flip, turn4, turn5, turn6
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                robot_connection_id, name, is_default as i32,
+                u_frame_number, u_tool_number,
+                front, up, left, flip, turn4, turn5, turn6
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Get a robot configuration by ID.
+    pub fn get_robot_configuration(&self, id: i64) -> Result<Option<RobotConfiguration>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, robot_connection_id, name, is_default, u_frame_number, u_tool_number,
+                    front, up, left, flip, turn4, turn5, turn6, created_at, updated_at
+             FROM robot_configurations WHERE id = ?1"
+        )?;
+
+        let mut rows = stmt.query(params![id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(RobotConfiguration {
+                id: row.get(0)?,
+                robot_connection_id: row.get(1)?,
+                name: row.get(2)?,
+                is_default: row.get::<_, i32>(3)? != 0,
+                u_frame_number: row.get(4)?,
+                u_tool_number: row.get(5)?,
+                front: row.get(6)?,
+                up: row.get(7)?,
+                left: row.get(8)?,
+                flip: row.get(9)?,
+                turn4: row.get(10)?,
+                turn5: row.get(11)?,
+                turn6: row.get(12)?,
+                created_at: row.get(13)?,
+                updated_at: row.get(14)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// List all configurations for a robot.
+    pub fn list_robot_configurations(&self, robot_connection_id: i64) -> Result<Vec<RobotConfiguration>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, robot_connection_id, name, is_default, u_frame_number, u_tool_number,
+                    front, up, left, flip, turn4, turn5, turn6, created_at, updated_at
+             FROM robot_configurations WHERE robot_connection_id = ?1 ORDER BY is_default DESC, name"
+        )?;
+
+        let rows = stmt.query_map(params![robot_connection_id], |row| {
+            Ok(RobotConfiguration {
+                id: row.get(0)?,
+                robot_connection_id: row.get(1)?,
+                name: row.get(2)?,
+                is_default: row.get::<_, i32>(3)? != 0,
+                u_frame_number: row.get(4)?,
+                u_tool_number: row.get(5)?,
+                front: row.get(6)?,
+                up: row.get(7)?,
+                left: row.get(8)?,
+                flip: row.get(9)?,
+                turn4: row.get(10)?,
+                turn5: row.get(11)?,
+                turn6: row.get(12)?,
+                created_at: row.get(13)?,
+                updated_at: row.get(14)?,
+            })
+        })?;
+
+        rows.collect()
+    }
+
+    /// Get the default configuration for a robot.
+    pub fn get_default_robot_configuration(&self, robot_connection_id: i64) -> Result<Option<RobotConfiguration>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, robot_connection_id, name, is_default, u_frame_number, u_tool_number,
+                    front, up, left, flip, turn4, turn5, turn6, created_at, updated_at
+             FROM robot_configurations WHERE robot_connection_id = ?1 AND is_default = 1"
+        )?;
+
+        let mut rows = stmt.query(params![robot_connection_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(RobotConfiguration {
+                id: row.get(0)?,
+                robot_connection_id: row.get(1)?,
+                name: row.get(2)?,
+                is_default: row.get::<_, i32>(3)? != 0,
+                u_frame_number: row.get(4)?,
+                u_tool_number: row.get(5)?,
+                front: row.get(6)?,
+                up: row.get(7)?,
+                left: row.get(8)?,
+                flip: row.get(9)?,
+                turn4: row.get(10)?,
+                turn5: row.get(11)?,
+                turn6: row.get(12)?,
+                created_at: row.get(13)?,
+                updated_at: row.get(14)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Update a robot configuration.
+    /// If is_default is true, clears is_default on all other configs for this robot.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_robot_configuration(
+        &self,
+        id: i64,
+        name: &str,
+        is_default: bool,
+        u_frame_number: i32,
+        u_tool_number: i32,
+        front: i32,
+        up: i32,
+        left: i32,
+        flip: i32,
+        turn4: i32,
+        turn5: i32,
+        turn6: i32,
+    ) -> Result<()> {
+        // If setting as default, clear other defaults first
+        if is_default {
+            // Get the robot_connection_id for this config
+            let robot_connection_id: i64 = self.conn.query_row(
+                "SELECT robot_connection_id FROM robot_configurations WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )?;
+            self.conn.execute(
+                "UPDATE robot_configurations SET is_default = 0 WHERE robot_connection_id = ?1",
+                params![robot_connection_id],
+            )?;
+        }
+
+        self.conn.execute(
+            "UPDATE robot_configurations SET
+                name = ?1, is_default = ?2, u_frame_number = ?3, u_tool_number = ?4,
+                front = ?5, up = ?6, left = ?7, flip = ?8,
+                turn4 = ?9, turn5 = ?10, turn6 = ?11, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?12",
+            params![
+                name, is_default as i32, u_frame_number, u_tool_number,
+                front, up, left, flip, turn4, turn5, turn6, id
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a robot configuration.
+    pub fn delete_robot_configuration(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM robot_configurations WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Set a configuration as the default for its robot.
+    pub fn set_default_robot_configuration(&self, id: i64) -> Result<()> {
+        // Get the robot_connection_id for this config
+        let robot_connection_id: i64 = self.conn.query_row(
+            "SELECT robot_connection_id FROM robot_configurations WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+
+        // Clear all defaults for this robot
+        self.conn.execute(
+            "UPDATE robot_configurations SET is_default = 0 WHERE robot_connection_id = ?1",
+            params![robot_connection_id],
+        )?;
+
+        // Set this config as default
+        self.conn.execute(
+            "UPDATE robot_configurations SET is_default = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+            params![id],
+        )?;
+
+        Ok(())
     }
 }
 

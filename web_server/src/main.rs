@@ -24,6 +24,93 @@ use tokio::sync::{broadcast, RwLock};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{info, warn, error};
 
+/// Active configuration state (runtime, not persisted).
+/// Tracks which configuration is loaded and whether it has been modified.
+#[derive(Debug, Clone)]
+pub struct ActiveConfiguration {
+    /// ID of the saved configuration this was loaded from (None = custom/unsaved)
+    pub loaded_from_id: Option<i64>,
+    /// Name of the loaded configuration
+    pub loaded_from_name: Option<String>,
+    /// Whether the active config has been modified from the loaded state
+    pub modified: bool,
+    /// Current UFrame number
+    pub u_frame_number: i32,
+    /// Current UTool number
+    pub u_tool_number: i32,
+    /// Arm configuration - Front(1)/Back(0)
+    pub front: i32,
+    /// Arm configuration - Up(1)/Down(0)
+    pub up: i32,
+    /// Arm configuration - Left(1)/Right(0)
+    pub left: i32,
+    /// Wrist configuration - Flip(1)/NoFlip(0)
+    pub flip: i32,
+    /// J4 turn number
+    pub turn4: i32,
+    /// J5 turn number
+    pub turn5: i32,
+    /// J6 turn number
+    pub turn6: i32,
+}
+
+impl Default for ActiveConfiguration {
+    fn default() -> Self {
+        Self {
+            loaded_from_id: None,
+            loaded_from_name: None,
+            modified: false,
+            u_frame_number: 0,
+            u_tool_number: 1,
+            front: 1,  // Front
+            up: 1,     // Up
+            left: 0,   // Right
+            flip: 0,   // NoFlip
+            turn4: 0,
+            turn5: 0,
+            turn6: 0,
+        }
+    }
+}
+
+impl ActiveConfiguration {
+    /// Create from a saved RobotConfiguration
+    pub fn from_saved(config: &database::RobotConfiguration) -> Self {
+        Self {
+            loaded_from_id: Some(config.id),
+            loaded_from_name: Some(config.name.clone()),
+            modified: false,
+            u_frame_number: config.u_frame_number,
+            u_tool_number: config.u_tool_number,
+            front: config.front,
+            up: config.up,
+            left: config.left,
+            flip: config.flip,
+            turn4: config.turn4,
+            turn5: config.turn5,
+            turn6: config.turn6,
+        }
+    }
+
+    /// Create from robot connection defaults (when no saved config exists)
+    pub fn from_robot_defaults(conn: &database::RobotConnection) -> Self {
+        Self {
+            loaded_from_id: None,
+            loaded_from_name: Some("Robot Defaults".to_string()),
+            modified: false,
+            u_frame_number: conn.default_uframe,
+            u_tool_number: conn.default_utool,
+            front: conn.default_front,
+            up: conn.default_up,
+            left: conn.default_left,
+            flip: conn.default_flip,
+            turn4: conn.default_turn4,
+            turn5: conn.default_turn5,
+            turn6: conn.default_turn6,
+        }
+    }
+}
+
 /// Shared robot connection state
 pub struct RobotConnection {
     pub driver: Option<Arc<FanucDriver>>,
@@ -32,10 +119,14 @@ pub struct RobotConnection {
     pub robot_port: u32,
     /// Saved robot connection configuration from database (for defaults)
     pub saved_connection: Option<database::RobotConnection>,
-    /// Currently active UFrame number on the robot
-    pub active_uframe: u8,
-    /// Currently active UTool number on the robot
-    pub active_utool: u8,
+    /// Active configuration state (runtime, not persisted)
+    pub active_configuration: ActiveConfiguration,
+    /// Whether the TP program is initialized (FRC_Initialize was successful)
+    /// This must be true to send motion commands. It becomes false after:
+    /// - FRC_Abort is called
+    /// - Robot disconnects
+    /// - Stop program is called
+    pub tp_program_initialized: bool,
 }
 
 impl RobotConnection {
@@ -46,9 +137,19 @@ impl RobotConnection {
             robot_addr,
             robot_port,
             saved_connection: None,
-            active_uframe: 0,
-            active_utool: 1,
+            active_configuration: ActiveConfiguration::default(),
+            tp_program_initialized: false,
         }
+    }
+
+    /// Get the currently active UFrame number
+    pub fn active_uframe(&self) -> u8 {
+        self.active_configuration.u_frame_number as u8
+    }
+
+    /// Get the currently active UTool number
+    pub fn active_utool(&self) -> u8 {
+        self.active_configuration.u_tool_number as u8
     }
 
     pub async fn connect(&mut self) -> Result<(), String> {
@@ -64,7 +165,7 @@ impl RobotConnection {
             addr: self.robot_addr.clone(),
             port: self.robot_port,
             max_messages: 30,
-            log_level: LogLevel::Error,
+            log_level: LogLevel::Debug,
         };
 
         info!("Connecting to robot at {}:{}", driver_config.addr, driver_config.port);
@@ -79,6 +180,7 @@ impl RobotConnection {
                         info!("✓ Robot initialization complete");
                         self.driver = Some(Arc::new(d));
                         self.connected = true;
+                        self.tp_program_initialized = true;
                         Ok(())
                     }
                     Err(e) => {
@@ -86,6 +188,7 @@ impl RobotConnection {
                         // Still connect, but warn that initialization failed
                         self.driver = Some(Arc::new(d));
                         self.connected = true;
+                        self.tp_program_initialized = false; // Not initialized - cannot send motions
                         Ok(())
                     }
                 }
@@ -107,6 +210,39 @@ impl RobotConnection {
         }
         self.driver = None;
         self.connected = false;
+        self.tp_program_initialized = false;
+    }
+
+    /// Re-initialize the TP program after an abort.
+    /// This should be called after FRC_Abort to allow motion commands again.
+    pub async fn reinitialize_tp(&mut self) -> Result<(), String> {
+        if !self.connected {
+            return Err("Not connected to robot".to_string());
+        }
+
+        let driver = self.driver.as_ref().ok_or("No driver available")?;
+
+        info!("Re-initializing TP program...");
+        match driver.initialize().await {
+            Ok(response) => {
+                if response.error_id == 0 {
+                    info!("✓ TP program re-initialized successfully");
+                    self.tp_program_initialized = true;
+                    Ok(())
+                } else {
+                    let msg = format!("Initialize failed with error: {}", response.error_id);
+                    warn!("{}", msg);
+                    self.tp_program_initialized = false;
+                    Err(msg)
+                }
+            }
+            Err(e) => {
+                let msg = format!("Failed to initialize: {}", e);
+                warn!("{}", msg);
+                self.tp_program_initialized = false;
+                Err(msg)
+            }
+        }
     }
 }
 

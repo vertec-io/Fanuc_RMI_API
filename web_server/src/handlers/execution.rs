@@ -6,10 +6,11 @@ use crate::api_types::ServerResponse;
 use crate::database::Database;
 use crate::program_executor::ProgramExecutor;
 use crate::session::{ClientManager, execution_state_to_response};
+use crate::RobotConnection;
 use fanuc_rmi::drivers::FanucDriver;
 use fanuc_rmi::packets::{PacketPriority, SendPacket, DriverCommand, SentInstructionInfo, ResponsePacket, Command};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{info, error, warn, debug};
 
 /// Pause program execution.
@@ -114,10 +115,12 @@ pub async fn resume_program(
 /// 1. Stops the executor (clears pending queue)
 /// 2. Sends FRC_Abort to the robot controller (aborts current motion)
 /// 3. Clears in-flight tracking
-/// 4. Broadcasts state change to all connected clients
+/// 4. Auto-reinitializes the TP program (allows immediate motion commands)
+/// 5. Broadcasts state change to all connected clients
 pub async fn stop_program(
     driver: Option<Arc<FanucDriver>>,
     executor: Option<Arc<Mutex<ProgramExecutor>>>,
+    robot_connection: Option<Arc<RwLock<RobotConnection>>>,
     client_manager: Option<Arc<ClientManager>>,
 ) -> ServerResponse {
     if let Some(driver) = driver {
@@ -144,6 +147,45 @@ pub async fn stop_program(
                 // Broadcast state change to all clients
                 if let (Some(client_manager), Some(state_response)) = (&client_manager, state_response) {
                     client_manager.broadcast_all(&state_response).await;
+                }
+
+                // Auto-reinitialize TP program after abort
+                if let Some(ref conn) = robot_connection {
+                    info!("Auto-reinitializing TP program after stop...");
+                    let mut conn = conn.write().await;
+                    match conn.reinitialize_tp().await {
+                        Ok(()) => {
+                            info!("TP program auto-reinitialized successfully after stop");
+                            // Broadcast updated connection status with tp_program_initialized = true
+                            if let Some(ref cm) = client_manager {
+                                let status = ServerResponse::ConnectionStatus {
+                                    connected: conn.connected,
+                                    robot_addr: conn.robot_addr.clone(),
+                                    robot_port: conn.robot_port,
+                                    connection_name: conn.saved_connection.as_ref().map(|s| s.name.clone()),
+                                    connection_id: conn.saved_connection.as_ref().map(|s| s.id),
+                                    tp_program_initialized: conn.tp_program_initialized,
+                                };
+                                cm.broadcast_all(&status).await;
+                            }
+                        }
+                        Err(e) => {
+                            // Re-initialization failed - leave tp_program_initialized as false
+                            info!("Auto-reinitialize failed after stop: {}. Manual initialization required.", e);
+                            // Broadcast updated connection status with tp_program_initialized = false
+                            if let Some(ref cm) = client_manager {
+                                let status = ServerResponse::ConnectionStatus {
+                                    connected: conn.connected,
+                                    robot_addr: conn.robot_addr.clone(),
+                                    robot_port: conn.robot_port,
+                                    connection_name: conn.saved_connection.as_ref().map(|s| s.name.clone()),
+                                    connection_id: conn.saved_connection.as_ref().map(|s| s.id),
+                                    tp_program_initialized: conn.tp_program_initialized,
+                                };
+                                cm.broadcast_all(&status).await;
+                            }
+                        }
+                    }
                 }
 
                 ServerResponse::Success { message: "Program stopped".to_string() }

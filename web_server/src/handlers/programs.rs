@@ -7,7 +7,7 @@ use crate::database::{Database, ProgramInstruction};
 use crate::program_parser::{parse_csv_string, ProgramDefaults};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 /// List all programs.
 pub async fn list_programs(db: Arc<Mutex<Database>>) -> ServerResponse {
@@ -61,6 +61,12 @@ pub async fn get_program(db: Arc<Mutex<Database>>, id: i64) -> ServerResponse {
                     start_x: program.start_x,
                     start_y: program.start_y,
                     start_z: program.start_z,
+                    end_x: program.end_x,
+                    end_y: program.end_y,
+                    end_z: program.end_z,
+                    move_speed: program.move_speed,
+                    created_at: program.created_at,
+                    updated_at: program.updated_at,
                 }
             }
         }
@@ -94,6 +100,10 @@ pub async fn delete_program(db: Arc<Mutex<Database>>, id: i64) -> ServerResponse
 }
 
 /// Upload CSV content to a program.
+///
+/// CSV contains generic waypoints (X, Y, Z, optional W, P, R, speed, term_type).
+/// Robot-specific configuration (UFrame, UTool, arm config) is NOT stored in the program -
+/// it is applied at execution time from the active robot configuration.
 pub async fn upload_csv(
     db: Arc<Mutex<Database>>,
     program_id: i64,
@@ -101,27 +111,22 @@ pub async fn upload_csv(
     start_position: Option<StartPosition>,
 ) -> ServerResponse {
     let db = db.lock().await;
-    
-    // Get robot settings for defaults
-    let settings = match db.get_robot_settings() {
-        Ok(s) => s,
-        Err(e) => return ServerResponse::Error { 
-            message: format!("Failed to get robot settings: {}", e) 
-        }
-    };
-    
+
+    // Use sensible defaults for CSV parsing
+    // Robot-specific config (uframe, utool, arm config) is NULL in stored instructions
+    // and will be applied from active configuration at execution time
     let defaults = ProgramDefaults {
-        w: settings.default_w,
-        p: settings.default_p,
-        r: settings.default_r,
+        w: 0.0,           // Default rotation if not specified in CSV
+        p: 0.0,
+        r: 0.0,
         ext1: 0.0,
         ext2: 0.0,
         ext3: 0.0,
-        speed: settings.default_speed,
-        term_type: settings.default_term_type.clone(),
-        uframe: Some(settings.default_uframe),
-        utool: Some(settings.default_utool),
-        // Configuration defaults are not used during CSV parsing, only during execution
+        speed: 100.0,     // Default speed if not specified in CSV
+        term_type: "FINE".to_string(),  // Safe default
+        uframe: None,     // NULL - use active configuration at execution time
+        utool: None,      // NULL - use active configuration at execution time
+        // Arm configuration is NEVER stored, always from active config at execution time
         front: None,
         up: None,
         left: None,
@@ -131,13 +136,20 @@ pub async fn upload_csv(
         turn6: None,
     };
 
-    // Parse CSV
-    let instructions = match parse_csv_string(csv_content, &defaults) {
-        Ok(instrs) => instrs,
+    // Parse CSV with full validation
+    let parse_result = match parse_csv_string(csv_content, &defaults) {
+        Ok(result) => result,
         Err(e) => return ServerResponse::Error {
-            message: format!("Failed to parse CSV: {:?}", e)
+            message: format!("Failed to parse CSV: {}", e)
         }
     };
+
+    let instructions = parse_result.instructions;
+
+    // Log any warnings
+    for warning in &parse_result.warnings {
+        warn!("CSV parse warning: {}", warning);
+    }
 
     // Clear existing instructions
     if let Err(e) = db.clear_instructions(program_id) {
@@ -173,31 +185,50 @@ pub async fn upload_csv(
         }
     }
 
-    // Update start position if provided (use first instruction as default if not)
+    // Auto-populate start position from first instruction if not provided
     let (start_x, start_y, start_z) = if let Some(start) = start_position {
         (Some(start.x), Some(start.y), Some(start.z))
     } else if let Some(first) = instructions.first() {
         (Some(first.x), Some(first.y), Some(first.z))
     } else {
-        (Some(0.0), Some(0.0), Some(0.0))
+        (None, None, None)
     };
 
-    // Update program with start position and defaults from robot settings
+    // Auto-populate end position from last instruction
+    let (end_x, end_y, end_z) = if let Some(last) = instructions.last() {
+        (Some(last.x), Some(last.y), Some(last.z))
+    } else {
+        (None, None, None)
+    };
+
+    // Get the current program to preserve move_speed if already set
+    let current_move_speed = db.get_program(program_id)
+        .ok()
+        .flatten()
+        .and_then(|p| p.move_speed)
+        .or(Some(100.0));
+
+    // Update program with positions
+    // Robot-specific config (uframe, utool) is NULL - applied at execution time
     if let Ok(Some(prog)) = db.get_program(program_id) {
         let _ = db.update_program(
             program_id,
             &prog.name,
             prog.description.as_deref(),
-            settings.default_w,
-            settings.default_p,
-            settings.default_r,
-            Some(settings.default_speed),
-            &settings.default_term_type,
-            Some(settings.default_uframe),
-            Some(settings.default_utool),
+            defaults.w,
+            defaults.p,
+            defaults.r,
+            Some(defaults.speed),
+            &defaults.term_type,
+            None,  // uframe - NULL, applied at execution time
+            None,  // utool - NULL, applied at execution time
             start_x,
             start_y,
             start_z,
+            end_x,
+            end_y,
+            end_z,
+            current_move_speed,
         );
     }
 
@@ -207,3 +238,55 @@ pub async fn upload_csv(
     }
 }
 
+/// Update program settings (start/end positions, move speed).
+#[allow(clippy::too_many_arguments)]
+pub async fn update_program_settings(
+    db: Arc<Mutex<Database>>,
+    program_id: i64,
+    start_x: Option<f64>,
+    start_y: Option<f64>,
+    start_z: Option<f64>,
+    end_x: Option<f64>,
+    end_y: Option<f64>,
+    end_z: Option<f64>,
+    move_speed: Option<f64>,
+) -> ServerResponse {
+    let db = db.lock().await;
+
+    // Get the current program to preserve other fields
+    let prog = match db.get_program(program_id) {
+        Ok(Some(p)) => p,
+        Ok(None) => return ServerResponse::Error { message: "Program not found".to_string() },
+        Err(e) => return ServerResponse::Error { message: format!("Failed to get program: {}", e) },
+    };
+
+    // Update program with new position settings
+    if let Err(e) = db.update_program(
+        program_id,
+        &prog.name,
+        prog.description.as_deref(),
+        prog.default_w,
+        prog.default_p,
+        prog.default_r,
+        prog.default_speed,
+        &prog.default_term_type,
+        prog.default_uframe,
+        prog.default_utool,
+        start_x,
+        start_y,
+        start_z,
+        end_x,
+        end_y,
+        end_z,
+        move_speed,
+    ) {
+        return ServerResponse::Error { message: format!("Failed to update program: {}", e) };
+    }
+
+    info!("Updated program {} settings: start=({:?},{:?},{:?}), end=({:?},{:?},{:?}), speed={:?}",
+          program_id, start_x, start_y, start_z, end_x, end_y, end_z, move_speed);
+
+    ServerResponse::Success {
+        message: "Program settings updated".to_string()
+    }
+}

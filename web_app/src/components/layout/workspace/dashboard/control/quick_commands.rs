@@ -1,15 +1,17 @@
 //! Quick Commands panel for robot control (Initialize, Reset, Abort, Continue).
 
 use leptos::prelude::*;
-use crate::components::layout::workspace::context::WorkspaceContext;
 use crate::websocket::WebSocketManager;
 use fanuc_rmi::dto::{SendPacket, Command, FrcSetOverRide};
 
 /// Quick Commands panel for robot control (Initialize, Reset, Abort, Continue).
+///
+/// NOTE: This panel does NOT directly modify execution state (program_running, program_paused, etc).
+/// All state updates come from server broadcasts (ExecutionStateChanged) to ensure UI
+/// always reflects actual server state, not optimistic assumptions.
 #[component]
 pub fn QuickCommandsPanel() -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
-    let ctx = use_context::<WorkspaceContext>().expect("WorkspaceContext not found");
 
     // Local signal for slider value (synced with robot status when available)
     let (speed_override, set_speed_override) = signal(100u32);
@@ -113,14 +115,17 @@ pub fn QuickCommandsPanel() -> impl IntoView {
                     "Reset"
                 </button>
                 // Abort button - uses API endpoint for proper error handling and state sync
+                // NOTE: Do NOT set local state here - wait for server ExecutionStateChanged broadcast
+                // to ensure UI always reflects actual server state
                 <button
                     class="bg-[#ff444420] border border-[#ff444440] text-[#ff4444] text-[9px] px-3 py-1.5 rounded hover:bg-[#ff444430] flex items-center gap-1"
                     on:click=move |_| {
                         ws.robot_abort();
-                        // Also stop any running program (server will broadcast state change)
-                        ctx.program_running.set(false);
-                        ctx.program_paused.set(false);
-                        ctx.executing_line.set(-1);
+                        // Server will broadcast ExecutionStateChanged which will update:
+                        // - program_running
+                        // - program_paused
+                        // - executing_line
+                        // This ensures UI reflects actual server state, not optimistic assumptions
                     }
                 >
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">

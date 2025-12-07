@@ -16,7 +16,7 @@ pub struct WorkspaceContext {
     pub expanded_frame: RwSignal<i32>,
     /// Expanded tool in accordion (-1 = none)
     pub expanded_tool: RwSignal<i32>,
-    /// Command log entries
+    /// Command log entries (legacy - kept for compatibility)
     pub command_log: RwSignal<Vec<CommandLogEntry>>,
     /// Recent commands that can be re-run
     pub recent_commands: RwSignal<Vec<RecentCommand>>,
@@ -60,6 +60,7 @@ impl WorkspaceContext {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct CommandLogEntry {
     pub timestamp: String,
     pub command: String,

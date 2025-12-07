@@ -25,6 +25,21 @@ pub enum ClientRequest {
     #[serde(rename = "delete_program")]
     DeleteProgram { id: i64 },
 
+    /// Update program settings (start/end positions, move speed).
+    #[serde(rename = "update_program_settings")]
+    UpdateProgramSettings {
+        program_id: i64,
+        start_x: Option<f64>,
+        start_y: Option<f64>,
+        start_z: Option<f64>,
+        end_x: Option<f64>,
+        end_y: Option<f64>,
+        end_z: Option<f64>,
+        move_speed: Option<f64>,
+    },
+
+    /// Upload CSV content to a program.
+    /// CSV contains generic waypoints. Robot-specific configuration is applied at execution time.
     #[serde(rename = "upload_csv")]
     UploadCsv {
         program_id: i64,
@@ -122,24 +137,35 @@ pub enum ClientRequest {
         port: u32,
     },
 
+    /// Update robot connection defaults - all fields are required (no global fallback).
     #[serde(rename = "update_robot_connection_defaults")]
     UpdateRobotConnectionDefaults {
         id: i64,
-        default_speed: Option<f64>,
-        default_term_type: Option<String>,
-        default_uframe: Option<i32>,
-        default_utool: Option<i32>,
-        default_w: Option<f64>,
-        default_p: Option<f64>,
-        default_r: Option<f64>,
+        default_speed: f64,
+        default_term_type: String,
+        default_uframe: i32,
+        default_utool: i32,
+        default_w: f64,
+        default_p: f64,
+        default_r: f64,
         // Robot arm configuration defaults
-        default_front: Option<i32>,
-        default_up: Option<i32>,
-        default_left: Option<i32>,
-        default_flip: Option<i32>,
-        default_turn4: Option<i32>,
-        default_turn5: Option<i32>,
-        default_turn6: Option<i32>,
+        default_front: i32,
+        default_up: i32,
+        default_left: i32,
+        default_flip: i32,
+        default_turn4: i32,
+        default_turn5: i32,
+        default_turn6: i32,
+    },
+
+    /// Update robot connection jog defaults.
+    #[serde(rename = "update_robot_jog_defaults")]
+    UpdateRobotJogDefaults {
+        id: i64,
+        cartesian_jog_speed: f64,
+        cartesian_jog_step: f64,
+        joint_jog_speed: f64,
+        joint_jog_step: f64,
     },
 
     #[serde(rename = "delete_robot_connection")]
@@ -230,6 +256,19 @@ pub enum ClientRequest {
     /// Get current control status
     #[serde(rename = "get_control_status")]
     GetControlStatus,
+
+    // Robot Configurations
+    /// List all configurations for a robot
+    #[serde(rename = "list_robot_configurations")]
+    ListRobotConfigurations { robot_connection_id: i64 },
+
+    /// Get the current active configuration
+    #[serde(rename = "get_active_configuration")]
+    GetActiveConfiguration,
+
+    /// Load a saved configuration as active
+    #[serde(rename = "load_configuration")]
+    LoadConfiguration { configuration_id: i64 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,6 +336,12 @@ pub enum ServerResponse {
         connected: bool,
         robot_addr: String,
         robot_port: u32,
+        /// Name of the saved connection if connected to a saved robot
+        connection_name: Option<String>,
+        /// ID of the saved connection if connected to a saved robot
+        connection_id: Option<i64>,
+        /// Whether the TP program is initialized and ready for motion commands
+        tp_program_initialized: bool,
     },
 
     /// Response when connecting to a saved robot connection.
@@ -431,8 +476,50 @@ pub enum ServerResponse {
         has_control: bool,
         holder_id: Option<String>,
     },
+
+    /// Active configuration response
+    #[serde(rename = "active_configuration")]
+    ActiveConfiguration {
+        loaded_from_id: Option<i64>,
+        loaded_from_name: Option<String>,
+        modified: bool,
+        u_frame_number: i32,
+        u_tool_number: i32,
+        front: i32,
+        up: i32,
+        left: i32,
+        flip: i32,
+        turn4: i32,
+        turn5: i32,
+        turn6: i32,
+    },
+
+    /// List of robot configurations
+    #[serde(rename = "robot_configuration_list")]
+    RobotConfigurationList {
+        configurations: Vec<RobotConfigurationDto>,
+    },
 }
 
+/// Robot configuration DTO (named configurations per robot).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RobotConfigurationDto {
+    pub id: i64,
+    pub robot_connection_id: i64,
+    pub name: String,
+    pub is_default: bool,
+    pub u_frame_number: i32,
+    pub u_tool_number: i32,
+    pub front: i32,
+    pub up: i32,
+    pub left: i32,
+    pub flip: i32,
+    pub turn4: i32,
+    pub turn5: i32,
+    pub turn6: i32,
+}
+
+/// Robot connection DTO - all defaults are required (no global fallback).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RobotConnectionDto {
     pub id: i64,
@@ -440,22 +527,27 @@ pub struct RobotConnectionDto {
     pub description: Option<String>,
     pub ip_address: String,
     pub port: u32,
-    // Per-robot defaults (optional, falls back to global settings if None)
-    pub default_speed: Option<f64>,
-    pub default_term_type: Option<String>,
-    pub default_uframe: Option<i32>,
-    pub default_utool: Option<i32>,
-    pub default_w: Option<f64>,
-    pub default_p: Option<f64>,
-    pub default_r: Option<f64>,
-    // Robot arm configuration defaults
-    pub default_front: Option<i32>,
-    pub default_up: Option<i32>,
-    pub default_left: Option<i32>,
-    pub default_flip: Option<i32>,
-    pub default_turn4: Option<i32>,
-    pub default_turn5: Option<i32>,
-    pub default_turn6: Option<i32>,
+    // Per-robot defaults (required - no global fallback)
+    pub default_speed: f64,
+    pub default_term_type: String,
+    pub default_uframe: i32,
+    pub default_utool: i32,
+    pub default_w: f64,
+    pub default_p: f64,
+    pub default_r: f64,
+    // Robot arm configuration defaults (required)
+    pub default_front: i32,
+    pub default_up: i32,
+    pub default_left: i32,
+    pub default_flip: i32,
+    pub default_turn4: i32,
+    pub default_turn5: i32,
+    pub default_turn6: i32,
+    // Jog defaults
+    pub default_cartesian_jog_speed: f64,
+    pub default_cartesian_jog_step: f64,
+    pub default_joint_jog_speed: f64,
+    pub default_joint_jog_step: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -474,9 +566,19 @@ pub struct ProgramDetail {
     pub name: String,
     pub description: Option<String>,
     pub instructions: Vec<InstructionDto>,
+    // Start position (where robot moves before toolpath)
     pub start_x: Option<f64>,
     pub start_y: Option<f64>,
     pub start_z: Option<f64>,
+    // End position (where robot moves after toolpath)
+    pub end_x: Option<f64>,
+    pub end_y: Option<f64>,
+    pub end_z: Option<f64>,
+    // Speed for moving to start/end positions
+    pub move_speed: Option<f64>,
+    // Timestamps
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -583,6 +685,10 @@ pub struct WebSocketManager {
     /// Name of the currently connected robot (from saved connection)
     pub connected_robot_name: ReadSignal<Option<String>>,
     set_connected_robot_name: WriteSignal<Option<String>>,
+    /// Whether the TP program is initialized and ready for motion commands.
+    /// This must be true to send motion commands. False after abort/disconnect.
+    pub tp_program_initialized: ReadSignal<bool>,
+    set_tp_program_initialized: WriteSignal<bool>,
     // Saved robot connections
     pub robot_connections: ReadSignal<Vec<RobotConnectionDto>>,
     set_robot_connections: WriteSignal<Vec<RobotConnectionDto>>,
@@ -625,8 +731,61 @@ pub struct WebSocketManager {
     /// Whether this client has control of the robot
     pub has_control: ReadSignal<bool>,
     set_has_control: WriteSignal<bool>,
+    // Active configuration state
+    /// Active configuration for the connected robot
+    pub active_configuration: ReadSignal<Option<ActiveConfigurationData>>,
+    set_active_configuration: WriteSignal<Option<ActiveConfigurationData>>,
+    /// List of saved robot configurations
+    pub robot_configurations: ReadSignal<Vec<RobotConfigurationDto>>,
+    set_robot_configurations: WriteSignal<Vec<RobotConfigurationDto>>,
+    /// Console messages for chronological display
+    pub console_messages: ReadSignal<Vec<ConsoleMessage>>,
+    set_console_messages: WriteSignal<Vec<ConsoleMessage>>,
     ws: StoredValue<Option<WebSocket>, LocalStorage>,
     ws_url: StoredValue<String>,
+}
+
+/// Unified console message with timestamp and direction
+#[derive(Clone, Debug)]
+pub struct ConsoleMessage {
+    /// Timestamp in HH:MM:SS.mmm format
+    pub timestamp: String,
+    /// Milliseconds since epoch for sorting
+    pub timestamp_ms: u64,
+    /// Message direction
+    pub direction: MessageDirection,
+    /// Message type
+    pub msg_type: MessageType,
+    /// Message content
+    pub content: String,
+    /// Optional sequence ID for matching requests/responses
+    pub sequence_id: Option<u32>,
+}
+
+/// Direction of the message
+#[derive(Clone, Debug, PartialEq)]
+pub enum MessageDirection {
+    /// Sent to robot (→)
+    Sent,
+    /// Received from robot (←)
+    Received,
+    /// System/status message (•)
+    System,
+}
+
+/// Type of console message
+#[derive(Clone, Debug, PartialEq)]
+pub enum MessageType {
+    /// Command sent to robot
+    Command,
+    /// Response from robot (success)
+    Response,
+    /// Error response
+    Error,
+    /// Status update
+    Status,
+    /// Configuration change
+    Config,
 }
 
 #[derive(Clone, Debug)]
@@ -648,6 +807,35 @@ pub struct ExecutionStatusData {
     #[allow(dead_code)]
     pub total_lines: Option<usize>,
     pub error: Option<String>,
+}
+
+/// Active configuration data for display in sidebar
+#[derive(Clone, Debug, Default)]
+pub struct ActiveConfigurationData {
+    /// ID of the saved configuration this was loaded from (None = custom/unsaved)
+    pub loaded_from_id: Option<i64>,
+    /// Name of the loaded configuration
+    pub loaded_from_name: Option<String>,
+    /// Whether the active config has been modified from the loaded state
+    pub modified: bool,
+    /// Current UFrame number
+    pub u_frame_number: i32,
+    /// Current UTool number
+    pub u_tool_number: i32,
+    /// Arm configuration - Front(1)/Back(0)
+    pub front: i32,
+    /// Arm configuration - Up(1)/Down(0)
+    pub up: i32,
+    /// Arm configuration - Left(1)/Right(0)
+    pub left: i32,
+    /// Wrist configuration - Flip(1)/NoFlip(0)
+    pub flip: i32,
+    /// J4 turn number
+    pub turn4: i32,
+    /// J5 turn number
+    pub turn5: i32,
+    /// J6 turn number
+    pub turn6: i32,
 }
 
 impl WebSocketManager {
@@ -676,6 +864,7 @@ impl WebSocketManager {
         let (robot_connected, set_robot_connected) = signal(false);
         let (robot_addr, set_robot_addr) = signal("127.0.0.1:16001".to_string());
         let (connected_robot_name, set_connected_robot_name) = signal::<Option<String>>(None);
+        let (tp_program_initialized, set_tp_program_initialized) = signal(false);
         // Saved robot connections
         let (robot_connections, set_robot_connections) = signal(Vec::new());
         // Currently active/selected connection
@@ -694,6 +883,11 @@ impl WebSocketManager {
         let (io_config, set_io_config) = signal::<HashMap<(String, i32), IoDisplayConfigDto>>(HashMap::new());
         // Control lock state
         let (has_control, set_has_control) = signal(false);
+        // Active configuration state
+        let (active_configuration, set_active_configuration) = signal::<Option<ActiveConfigurationData>>(None);
+        let (robot_configurations, set_robot_configurations) = signal::<Vec<RobotConfigurationDto>>(Vec::new());
+        // Console messages
+        let (console_messages, set_console_messages) = signal::<Vec<ConsoleMessage>>(Vec::new());
         let ws: StoredValue<Option<WebSocket>, LocalStorage> = StoredValue::new_local(None);
         let ws_url = StoredValue::new("ws://127.0.0.1:9000".to_string());
 
@@ -740,6 +934,8 @@ impl WebSocketManager {
             set_robot_addr,
             connected_robot_name,
             set_connected_robot_name,
+            tp_program_initialized,
+            set_tp_program_initialized,
             robot_connections,
             set_robot_connections,
             active_connection_id,
@@ -766,6 +962,12 @@ impl WebSocketManager {
             set_io_config,
             has_control,
             set_has_control,
+            active_configuration,
+            set_active_configuration,
+            robot_configurations,
+            set_robot_configurations,
+            console_messages,
+            set_console_messages,
             ws,
             ws_url,
         };
@@ -806,6 +1008,7 @@ impl WebSocketManager {
         let set_robot_connected = self.set_robot_connected;
         let set_robot_addr = self.set_robot_addr;
         let set_connected_robot_name = self.set_connected_robot_name;
+        let set_tp_program_initialized = self.set_tp_program_initialized;
         let set_robot_connections = self.set_robot_connections;
         let set_active_connection_id = self.set_active_connection_id;
         let set_active_frame_tool = self.set_active_frame_tool;
@@ -820,6 +1023,9 @@ impl WebSocketManager {
         let _set_gout_values = self.set_gout_values;
         let set_io_config = self.set_io_config;
         let set_has_control = self.set_has_control;
+        let set_active_configuration = self.set_active_configuration;
+        let set_robot_configurations = self.set_robot_configurations;
+        let set_console_messages = self.set_console_messages;
 
         // On open
         let onopen_callback = Closure::wrap(Box::new(move |_| {
@@ -840,6 +1046,20 @@ impl WebSocketManager {
                     match response {
                         ResponsePacket::InstructionResponse(resp) => {
                             let (seq_id, error_id) = get_response_ids(&resp);
+                            let resp_name = get_instruction_response_name(&resp);
+
+                            // Log to console
+                            add_console_msg(
+                                set_console_messages,
+                                MessageDirection::Received,
+                                if error_id != 0 { MessageType::Error } else { MessageType::Response },
+                                if error_id != 0 {
+                                    format!("{} error_id={}", resp_name, error_id)
+                                } else {
+                                    format!("{} completed", resp_name)
+                                },
+                                Some(seq_id),
+                            );
 
                             if error_id != 0 {
                                 set_error_log.update(|log| {
@@ -961,12 +1181,21 @@ impl WebSocketManager {
                             log::debug!("Executing: {}/{}", current_line, total_lines);
                             set_executing_line.set(Some(current_line));
                         }
-                        ServerResponse::ConnectionStatus { connected, robot_addr, robot_port } => {
-                            log::info!("Robot connection status: connected={}, addr={}:{}", connected, robot_addr, robot_port);
+                        ServerResponse::ConnectionStatus { connected, robot_addr, robot_port, connection_name, connection_id, tp_program_initialized } => {
+                            log::info!("Robot connection status: connected={}, addr={}:{}, name={:?}, tp_initialized={}", connected, robot_addr, robot_port, connection_name, tp_program_initialized);
                             set_robot_connected.set(connected);
                             set_robot_addr.set(format!("{}:{}", robot_addr, robot_port));
-                            // Clear connection name if disconnected
-                            if !connected {
+                            set_tp_program_initialized.set(tp_program_initialized);
+                            // Set connection name and ID from status (for page refresh)
+                            if connected {
+                                if let Some(name) = connection_name {
+                                    set_connected_robot_name.set(Some(name));
+                                }
+                                if let Some(id) = connection_id {
+                                    set_active_connection_id.set(Some(id));
+                                }
+                            } else {
+                                // Clear connection name if disconnected
                                 set_connected_robot_name.set(None);
                                 set_active_connection_id.set(None);
                             }
@@ -1224,6 +1453,40 @@ impl WebSocketManager {
                                 set_api_message.set(Some(format!("{} completed", command)));
                             }
                         }
+                        ServerResponse::ActiveConfiguration {
+                            loaded_from_id,
+                            loaded_from_name,
+                            modified,
+                            u_frame_number,
+                            u_tool_number,
+                            front,
+                            up,
+                            left,
+                            flip,
+                            turn4,
+                            turn5,
+                            turn6,
+                        } => {
+                            log::info!("Received active configuration: {:?}", loaded_from_name);
+                            set_active_configuration.set(Some(ActiveConfigurationData {
+                                loaded_from_id,
+                                loaded_from_name,
+                                modified,
+                                u_frame_number,
+                                u_tool_number,
+                                front,
+                                up,
+                                left,
+                                flip,
+                                turn4,
+                                turn5,
+                                turn6,
+                            }));
+                        }
+                        ServerResponse::RobotConfigurationList { configurations } => {
+                            log::info!("Received {} robot configurations", configurations.len());
+                            set_robot_configurations.set(configurations);
+                        }
                     }
                 } else {
                     log::error!("Failed to parse API response: {}", text_str);
@@ -1299,10 +1562,96 @@ impl WebSocketManager {
 
     /// Send a robot protocol command (binary/bincode)
     pub fn send_command(&self, packet: SendPacket) {
+        // Log the command to console (skip polling commands to avoid flooding)
+        let (name, seq_id) = Self::get_packet_info(&packet);
+        if !Self::is_polling_command(&name) {
+            self.log_command_sent(&name, seq_id);
+        }
+
         if let Some(ws) = self.ws.get_value() {
             if let Ok(binary) = bincode::serialize(&packet) {
                 let _ = ws.send_with_u8_array(&binary);
             }
+        }
+    }
+
+    /// Check if a command is a polling command (should not be logged)
+    fn is_polling_command(name: &str) -> bool {
+        matches!(
+            name,
+            "FRC_GetStatus"
+                | "FRC_ReadCartesianPosition"
+                | "FRC_ReadJointAngles"
+                | "FRC_ReadDIN"
+                | "FRC_ReadAIN"
+                | "FRC_ReadGIN"
+        )
+    }
+
+    /// Extract command name and sequence ID from a SendPacket
+    fn get_packet_info(packet: &SendPacket) -> (String, Option<u32>) {
+        match packet {
+            SendPacket::Communication(comm) => {
+                let name = match comm {
+                    Communication::FrcConnect => "FRC_Connect",
+                    Communication::FrcDisconnect => "FRC_Disconnect",
+                    Communication::FrcTerminate => "FRC_Terminate",
+                    Communication::FrcSystemFault => "FRC_SystemFault",
+                };
+                (name.to_string(), None)
+            }
+            SendPacket::Command(cmd) => {
+                let name = match cmd {
+                    Command::FrcInitialize(_) => "FRC_Initialize",
+                    Command::FrcAbort => "FRC_Abort",
+                    Command::FrcPause => "FRC_Pause",
+                    Command::FrcReadError(_) => "FRC_ReadError",
+                    Command::FrcContinue => "FRC_Continue",
+                    Command::FrcSetUFrameUTool(_) => "FRC_SetUFrameUTool",
+                    Command::FrcReadPositionRegister(_) => "FRC_ReadPositionRegister",
+                    Command::FrcWritePositionRegister(_) => "FRC_WritePositionRegister",
+                    Command::FrcGetUFrameUTool(_) => "FRC_GetUFrameUTool",
+                    Command::FrcGetStatus => "FRC_GetStatus",
+                    Command::FrcReadUFrameData(_) => "FRC_ReadUFrameData",
+                    Command::FrcReadUToolData(_) => "FRC_ReadUToolData",
+                    Command::FrcWriteUFrameData(_) => "FRC_WriteUFrameData",
+                    Command::FrcWriteUToolData(_) => "FRC_WriteUToolData",
+                    Command::FrcSetOverRide(_) => "FRC_SetOverRide",
+                    Command::FrcReset => "FRC_Reset",
+                    Command::FrcReadDIN(_) => "FRC_ReadDIN",
+                    Command::FrcWriteDOUT(_) => "FRC_WriteDOUT",
+                    Command::FrcReadAIN(_) => "FRC_ReadAIN",
+                    Command::FrcWriteAOUT(_) => "FRC_WriteAOUT",
+                    Command::FrcReadGIN(_) => "FRC_ReadGIN",
+                    Command::FrcWriteGOUT(_) => "FRC_WriteGOUT",
+                    Command::FrcReadCartesianPosition(_) => "FRC_ReadCartesianPosition",
+                    Command::FrcReadJointAngles(_) => "FRC_ReadJointAngles",
+                    Command::FrcReadTCPSpeed => "FRC_ReadTCPSpeed",
+                };
+                (name.to_string(), None)
+            }
+            SendPacket::Instruction(instr) => {
+                let (name, seq_id) = match instr {
+                    Instruction::FrcWaitDIN(i) => ("FRC_WaitDIN", i.sequence_id),
+                    Instruction::FrcSetUFrame(i) => ("FRC_SetUFrame", i.sequence_id),
+                    Instruction::FrcSetUTool(i) => ("FRC_SetUTool", i.sequence_id),
+                    Instruction::FrcWaitTime(i) => ("FRC_WaitTime", i.sequence_id),
+                    Instruction::FrcSetPayLoad(i) => ("FRC_SetPayLoad", i.sequence_id),
+                    Instruction::FrcCall(i) => ("FRC_Call", i.sequence_id),
+                    Instruction::FrcLinearMotion(i) => ("FRC_LinearMotion", i.sequence_id),
+                    Instruction::FrcLinearRelative(i) => ("FRC_LinearRelative", i.sequence_id),
+                    Instruction::FrcLinearRelativeJRep(i) => ("FRC_LinearRelativeJRep", i.sequence_id),
+                    Instruction::FrcJointMotion(i) => ("FRC_JointMotion", i.sequence_id),
+                    Instruction::FrcJointRelative(i) => ("FRC_JointRelative", i.sequence_id),
+                    Instruction::FrcCircularMotion(i) => ("FRC_CircularMotion", i.sequence_id),
+                    Instruction::FrcCircularRelative(i) => ("FRC_CircularRelative", i.sequence_id),
+                    Instruction::FrcJointMotionJRep(i) => ("FRC_JointMotionJRep", i.sequence_id),
+                    Instruction::FrcJointRelativeJRep(i) => ("FRC_JointRelativeJRep", i.sequence_id),
+                    Instruction::FrcLinearMotionJRep(i) => ("FRC_LinearMotionJRep", i.sequence_id),
+                };
+                (name.to_string(), Some(seq_id))
+            }
+            SendPacket::DriverCommand(_) => ("DriverCommand".to_string(), None),
         }
     }
 
@@ -1337,7 +1686,35 @@ impl WebSocketManager {
         self.send_api_request(ClientRequest::DeleteProgram { id });
     }
 
-    /// Upload CSV content to a program
+    /// Update program settings (start/end positions, move speed).
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_program_settings(
+        &self,
+        program_id: i64,
+        start_x: Option<f64>,
+        start_y: Option<f64>,
+        start_z: Option<f64>,
+        end_x: Option<f64>,
+        end_y: Option<f64>,
+        end_z: Option<f64>,
+        move_speed: Option<f64>,
+    ) {
+        self.send_api_request(ClientRequest::UpdateProgramSettings {
+            program_id,
+            start_x,
+            start_y,
+            start_z,
+            end_x,
+            end_y,
+            end_z,
+            move_speed,
+        });
+    }
+
+    /// Upload CSV content to a program.
+    ///
+    /// CSV contains generic waypoints. Robot-specific configuration is applied
+    /// at execution time, not at upload time.
     pub fn upload_csv(&self, program_id: i64, csv_content: String, start_position: Option<StartPosition>) {
         self.send_api_request(ClientRequest::UploadCsv {
             program_id,
@@ -1471,6 +1848,73 @@ impl WebSocketManager {
         self.set_error_log.set(Vec::new());
     }
 
+    /// Add a console message
+    pub fn add_console_message(&self, msg: ConsoleMessage) {
+        self.set_console_messages.update(|msgs| {
+            msgs.push(msg);
+            // Keep only last 100 messages
+            if msgs.len() > 100 {
+                msgs.remove(0);
+            }
+        });
+    }
+
+    /// Clear all console messages
+    pub fn clear_console_messages(&self) {
+        self.set_console_messages.set(Vec::new());
+    }
+
+    /// Helper to get current timestamp string and ms
+    fn get_timestamp() -> (String, u64) {
+        let now = js_sys::Date::new_0();
+        let hours = now.get_hours();
+        let minutes = now.get_minutes();
+        let seconds = now.get_seconds();
+        let millis = now.get_milliseconds();
+        let timestamp = format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis);
+        let timestamp_ms = now.get_time() as u64;
+        (timestamp, timestamp_ms)
+    }
+
+    /// Log a sent command to console
+    pub fn log_command_sent(&self, command_name: &str, sequence_id: Option<u32>) {
+        let (timestamp, timestamp_ms) = Self::get_timestamp();
+        self.add_console_message(ConsoleMessage {
+            timestamp,
+            timestamp_ms,
+            direction: MessageDirection::Sent,
+            msg_type: MessageType::Command,
+            content: command_name.to_string(),
+            sequence_id,
+        });
+    }
+
+    /// Log a received response to console
+    pub fn log_response_received(&self, response_name: &str, sequence_id: Option<u32>, is_error: bool) {
+        let (timestamp, timestamp_ms) = Self::get_timestamp();
+        self.add_console_message(ConsoleMessage {
+            timestamp,
+            timestamp_ms,
+            direction: MessageDirection::Received,
+            msg_type: if is_error { MessageType::Error } else { MessageType::Response },
+            content: response_name.to_string(),
+            sequence_id,
+        });
+    }
+
+    /// Log a system/status message to console
+    pub fn log_system_message(&self, message: &str) {
+        let (timestamp, timestamp_ms) = Self::get_timestamp();
+        self.add_console_message(ConsoleMessage {
+            timestamp,
+            timestamp_ms,
+            direction: MessageDirection::System,
+            msg_type: MessageType::Status,
+            content: message.to_string(),
+            sequence_id: None,
+        });
+    }
+
     /// Clear the API error
     pub fn clear_api_error(&self) {
         self.set_api_error.set(None);
@@ -1542,25 +1986,25 @@ impl WebSocketManager {
         });
     }
 
-    /// Update robot connection defaults (per-robot settings)
+    /// Update robot connection defaults (per-robot settings - all required, no global fallback)
     #[allow(clippy::too_many_arguments)]
     pub fn update_robot_connection_defaults(
         &self,
         id: i64,
-        default_speed: Option<f64>,
-        default_term_type: Option<String>,
-        default_uframe: Option<i32>,
-        default_utool: Option<i32>,
-        default_w: Option<f64>,
-        default_p: Option<f64>,
-        default_r: Option<f64>,
-        default_front: Option<i32>,
-        default_up: Option<i32>,
-        default_left: Option<i32>,
-        default_flip: Option<i32>,
-        default_turn4: Option<i32>,
-        default_turn5: Option<i32>,
-        default_turn6: Option<i32>,
+        default_speed: f64,
+        default_term_type: String,
+        default_uframe: i32,
+        default_utool: i32,
+        default_w: f64,
+        default_p: f64,
+        default_r: f64,
+        default_front: i32,
+        default_up: i32,
+        default_left: i32,
+        default_flip: i32,
+        default_turn4: i32,
+        default_turn5: i32,
+        default_turn6: i32,
     ) {
         self.send_api_request(ClientRequest::UpdateRobotConnectionDefaults {
             id,
@@ -1584,6 +2028,24 @@ impl WebSocketManager {
     /// Delete a saved robot connection
     pub fn delete_robot_connection(&self, id: i64) {
         self.send_api_request(ClientRequest::DeleteRobotConnection { id });
+    }
+
+    /// Update robot connection jog defaults
+    pub fn update_robot_jog_defaults(
+        &self,
+        id: i64,
+        cartesian_jog_speed: f64,
+        cartesian_jog_step: f64,
+        joint_jog_speed: f64,
+        joint_jog_step: f64,
+    ) {
+        self.send_api_request(ClientRequest::UpdateRobotJogDefaults {
+            id,
+            cartesian_jog_speed,
+            cartesian_jog_step,
+            joint_jog_speed,
+            joint_jog_step,
+        });
     }
 
     /// Set the active/selected connection ID
@@ -1755,15 +2217,93 @@ impl WebSocketManager {
         let connections = self.robot_connections.get_untracked();
         active_id.and_then(|id| connections.into_iter().find(|c| c.id == id))
     }
+
+    // ========== Robot Configurations ==========
+
+    /// List all configurations for a robot
+    pub fn list_robot_configurations(&self, robot_connection_id: i64) {
+        self.send_api_request(ClientRequest::ListRobotConfigurations { robot_connection_id });
+    }
+
+    /// Get the current active configuration
+    pub fn get_active_configuration(&self) {
+        self.send_api_request(ClientRequest::GetActiveConfiguration);
+    }
+
+    /// Load a saved configuration as active
+    pub fn load_configuration(&self, configuration_id: i64) {
+        self.send_api_request(ClientRequest::LoadConfiguration { configuration_id });
+    }
 }
 
 fn get_response_ids(resp: &InstructionResponse) -> (u32, u32) {
     match resp {
         InstructionResponse::FrcLinearRelative(r) => (r.sequence_id, r.error_id),
+        InstructionResponse::FrcLinearRelativeJRep(r) => (r.sequence_id, r.error_id),
         InstructionResponse::FrcJointMotion(r) => (r.sequence_id, r.error_id),
+        InstructionResponse::FrcJointRelative(r) => (r.sequence_id, r.error_id),
+        InstructionResponse::FrcJointRelativeJRep(r) => (r.sequence_id, r.error_id),
+        InstructionResponse::FrcLinearMotion(r) => (r.sequence_id, r.error_id),
+        InstructionResponse::FrcCircularMotion(r) => (r.sequence_id, r.error_id),
         InstructionResponse::FrcWaitTime(r) => (r.sequence_id, r.error_id),
+        InstructionResponse::FrcSetUFrame(r) => (r.sequence_id, r.error_id),
+        InstructionResponse::FrcSetUTool(r) => (r.sequence_id, r.error_id),
         _ => (0, 0),
     }
+}
+
+/// Get instruction response name for console logging
+fn get_instruction_response_name(resp: &InstructionResponse) -> &'static str {
+    match resp {
+        InstructionResponse::FrcWaitDIN(_) => "FRC_WaitDIN",
+        InstructionResponse::FrcSetUFrame(_) => "FRC_SetUFrame",
+        InstructionResponse::FrcSetUTool(_) => "FRC_SetUTool",
+        InstructionResponse::FrcWaitTime(_) => "FRC_WaitTime",
+        InstructionResponse::FrcSetPayLoad(_) => "FRC_SetPayLoad",
+        InstructionResponse::FrcCall(_) => "FRC_Call",
+        InstructionResponse::FrcLinearMotion(_) => "FRC_LinearMotion",
+        InstructionResponse::FrcLinearRelative(_) => "FRC_LinearRelative",
+        InstructionResponse::FrcLinearRelativeJRep(_) => "FRC_LinearRelativeJRep",
+        InstructionResponse::FrcJointMotion(_) => "FRC_JointMotion",
+        InstructionResponse::FrcJointRelative(_) => "FRC_JointRelative",
+        InstructionResponse::FrcCircularMotion(_) => "FRC_CircularMotion",
+        InstructionResponse::FrcCircularRelative(_) => "FRC_CircularRelative",
+        InstructionResponse::FrcJointMotionJRep(_) => "FRC_JointMotionJRep",
+        InstructionResponse::FrcJointRelativeJRep(_) => "FRC_JointRelativeJRep",
+        InstructionResponse::FrcLinearMotionJRep(_) => "FRC_LinearMotionJRep",
+    }
+}
+
+/// Add a console message to the signal
+fn add_console_msg(
+    set_console_messages: WriteSignal<Vec<ConsoleMessage>>,
+    direction: MessageDirection,
+    msg_type: MessageType,
+    content: String,
+    sequence_id: Option<u32>,
+) {
+    let now = js_sys::Date::new_0();
+    let hours = now.get_hours();
+    let minutes = now.get_minutes();
+    let seconds = now.get_seconds();
+    let millis = now.get_milliseconds();
+    let timestamp = format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis);
+    let timestamp_ms = now.get_time() as u64;
+
+    set_console_messages.update(|msgs| {
+        msgs.push(ConsoleMessage {
+            timestamp,
+            timestamp_ms,
+            direction,
+            msg_type,
+            content,
+            sequence_id,
+        });
+        // Keep only last 100 messages
+        if msgs.len() > 100 {
+            msgs.remove(0);
+        }
+    });
 }
 
 fn format_instruction_response(resp: &InstructionResponse, seq_id: u32) -> String {

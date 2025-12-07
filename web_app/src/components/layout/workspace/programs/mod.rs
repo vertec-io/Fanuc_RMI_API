@@ -12,8 +12,6 @@ pub use modals::*;
 
 use leptos::prelude::*;
 use leptos::either::Either;
-use leptos_router::hooks::use_navigate;
-use crate::components::layout::workspace::context::{WorkspaceContext, ProgramLine};
 use crate::components::layout::LayoutContext;
 use crate::websocket::WebSocketManager;
 
@@ -21,7 +19,6 @@ use crate::websocket::WebSocketManager;
 #[component]
 pub fn ProgramsView() -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
-    let ctx = use_context::<WorkspaceContext>().expect("WorkspaceContext not found");
     let layout_ctx = use_context::<LayoutContext>().expect("LayoutContext not found");
 
     let (show_new_program, set_show_new_program) = signal(false);
@@ -108,7 +105,6 @@ pub fn ProgramsView() -> impl IntoView {
                     set_show_csv_upload=set_show_csv_upload
                     set_show_open_modal=set_show_open_modal
                     set_show_new_program=set_show_new_program
-                    ctx=ctx
                 />
             </div>
 
@@ -428,10 +424,39 @@ fn ProgramDetails(
     set_show_csv_upload: WriteSignal<bool>,
     set_show_open_modal: WriteSignal<bool>,
     set_show_new_program: WriteSignal<bool>,
-    ctx: WorkspaceContext,
 ) -> impl IntoView {
-    let navigate = use_navigate();
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
+
+    // Editable position signals
+    let (start_x, set_start_x) = signal(String::new());
+    let (start_y, set_start_y) = signal(String::new());
+    let (start_z, set_start_z) = signal(String::new());
+    let (end_x, set_end_x) = signal(String::new());
+    let (end_y, set_end_y) = signal(String::new());
+    let (end_z, set_end_z) = signal(String::new());
+    let (move_speed, set_move_speed) = signal(String::new());
+    let (settings_modified, set_settings_modified) = signal(false);
+
+    // Track current program ID to detect changes
+    let (current_prog_id, set_current_prog_id) = signal::<Option<i64>>(None);
+
+    // Sync signals when program changes
+    Effect::new(move |_| {
+        if let Some(prog) = current_program.get() {
+            // Only reset signals when program ID changes
+            if current_prog_id.get() != Some(prog.id) {
+                set_current_prog_id.set(Some(prog.id));
+                set_start_x.set(prog.start_x.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_start_y.set(prog.start_y.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_start_z.set(prog.start_z.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_end_x.set(prog.end_x.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_end_y.set(prog.end_y.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_end_z.set(prog.end_z.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_move_speed.set(prog.move_speed.map(|v| format!("{:.0}", v)).unwrap_or_else(|| "100".to_string()));
+                set_settings_modified.set(false);
+            }
+        }
+    });
 
     view! {
         <div class="flex-1 bg-[#0a0a0a] rounded border border-[#ffffff08] flex flex-col overflow-hidden">
@@ -439,41 +464,23 @@ fn ProgramDetails(
                 if let Some(prog) = current_program.get() {
                     let prog_id = prog.id;
                     let prog_name = prog.name.clone();
-                    let prog_name_for_load = prog.name.clone();
                     let prog_desc = prog.description.clone().unwrap_or_default();
-                    let prog_created = "N/A".to_string();
                     let line_count = prog.instructions.len();
-                    let speed_str = prog.instructions.first()
-                        .and_then(|i| i.speed)
-                        .map(|s| format!("{} mm/s", s))
-                        .unwrap_or_else(|| "N/A".to_string());
-                    // Get frame/tool from first instruction or show N/A
-                    let frame_tool_str = prog.instructions.first()
-                        .map(|i| {
-                            let uframe = i.uframe.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string());
-                            let utool = i.utool.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string());
-                            format!("F{}/T{}", uframe, utool)
-                        })
-                        .unwrap_or_else(|| "N/A".to_string());
+
+                    // Format timestamps (show date only, or "N/A" if empty)
+                    let created_str = if prog.created_at.is_empty() {
+                        "N/A".to_string()
+                    } else {
+                        prog.created_at.chars().take(10).collect()
+                    };
+                    let updated_str = if prog.updated_at.is_empty() {
+                        "N/A".to_string()
+                    } else {
+                        prog.updated_at.chars().take(10).collect()
+                    };
 
                     // Clone instructions for the table display
                     let instructions_for_table = prog.instructions.clone();
-
-                    let program_lines_for_load: Vec<ProgramLine> = prog.instructions.iter()
-                        .map(|i| ProgramLine {
-                            line_number: i.line_number as usize,
-                            x: i.x,
-                            y: i.y,
-                            z: i.z,
-                            w: i.w.unwrap_or(0.0),
-                            p: i.p.unwrap_or(0.0),
-                            r: i.r.unwrap_or(0.0),
-                            speed: i.speed.unwrap_or(100.0),
-                            term_type: i.term_type.clone().unwrap_or_else(|| "CNT100".to_string()),
-                            uframe: i.uframe,
-                            utool: i.utool,
-                        })
-                        .collect();
 
                     Either::Left(view! {
                         <div class="h-full flex flex-col">
@@ -486,23 +493,6 @@ fn ProgramDetails(
                                     </div>
                                     <div class="flex gap-1">
                                         <button
-                                            class="bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] text-[9px] px-2 py-1 rounded hover:bg-[#22c55e30]"
-                                            on:click={
-                                                let lines = program_lines_for_load.clone();
-                                                let name = prog_name_for_load.clone();
-                                                let nav = navigate.clone();
-                                                move |_| {
-                                                    ctx.program_lines.set(lines.clone());
-                                                    ctx.loaded_program_name.set(Some(name.clone()));
-                                                    ctx.loaded_program_id.set(Some(prog_id));
-                                                    ctx.executing_line.set(-1);
-                                                    nav("/dashboard/control", Default::default());
-                                                }
-                                            }
-                                        >
-                                            "▶ Load to Dashboard"
-                                        </button>
-                                        <button
                                             class="bg-[#00d9ff20] border border-[#00d9ff40] text-[#00d9ff] text-[9px] px-2 py-1 rounded hover:bg-[#00d9ff30]"
                                             on:click=move |_| set_show_csv_upload.set(true)
                                         >
@@ -513,6 +503,7 @@ fn ProgramDetails(
                                             on:click=move |_| {
                                                 ws.delete_program(prog_id);
                                                 set_selected_program_id.set(None);
+                                                ws.clear_current_program();
                                                 ws.list_programs();
                                             }
                                         >
@@ -522,24 +513,168 @@ fn ProgramDetails(
                                 </div>
                             </div>
 
-                            // Metadata
-                            <div class="p-3 border-b border-[#ffffff08] grid grid-cols-4 gap-3">
+                            // Metadata - Row 1: Lines, Created, Updated
+                            <div class="px-3 pt-3 pb-2 grid grid-cols-3 gap-3">
                                 <div>
                                     <div class="text-[8px] text-[#555555] uppercase">"Lines"</div>
                                     <div class="text-[11px] text-white font-mono">{line_count}</div>
                                 </div>
                                 <div>
-                                    <div class="text-[8px] text-[#555555] uppercase">"Speed"</div>
-                                    <div class="text-[11px] text-white font-mono">{speed_str}</div>
-                                </div>
-                                <div>
-                                    <div class="text-[8px] text-[#555555] uppercase">"Frame/Tool"</div>
-                                    <div class="text-[11px] text-white font-mono">{frame_tool_str}</div>
-                                </div>
-                                <div>
                                     <div class="text-[8px] text-[#555555] uppercase">"Created"</div>
-                                    <div class="text-[11px] text-white font-mono">{prog_created}</div>
+                                    <div class="text-[11px] text-white font-mono">{created_str}</div>
                                 </div>
+                                <div>
+                                    <div class="text-[8px] text-[#555555] uppercase">"Updated"</div>
+                                    <div class="text-[11px] text-white font-mono">{updated_str}</div>
+                                </div>
+                            </div>
+
+                            // Motion Settings - Start Position
+                            <div class="px-3 pb-2">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <div class="text-[8px] text-[#555555] uppercase">"Start Position"</div>
+                                    <div class="text-[7px] text-[#444444]">"(approach before toolpath)"</div>
+                                </div>
+                                <div class="grid grid-cols-3 gap-2">
+                                    <div>
+                                        <label class="text-[7px] text-[#444444]">"X"</label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                            placeholder="X"
+                                            prop:value=move || start_x.get()
+                                            on:input=move |ev| {
+                                                set_start_x.set(event_target_value(&ev));
+                                                set_settings_modified.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="text-[7px] text-[#444444]">"Y"</label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                            placeholder="Y"
+                                            prop:value=move || start_y.get()
+                                            on:input=move |ev| {
+                                                set_start_y.set(event_target_value(&ev));
+                                                set_settings_modified.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="text-[7px] text-[#444444]">"Z"</label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                            placeholder="Z"
+                                            prop:value=move || start_z.get()
+                                            on:input=move |ev| {
+                                                set_start_z.set(event_target_value(&ev));
+                                                set_settings_modified.set(true);
+                                            }
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            // Motion Settings - End Position
+                            <div class="px-3 pb-2">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <div class="text-[8px] text-[#555555] uppercase">"End Position"</div>
+                                    <div class="text-[7px] text-[#444444]">"(retreat after toolpath)"</div>
+                                </div>
+                                <div class="grid grid-cols-3 gap-2">
+                                    <div>
+                                        <label class="text-[7px] text-[#444444]">"X"</label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                            placeholder="X"
+                                            prop:value=move || end_x.get()
+                                            on:input=move |ev| {
+                                                set_end_x.set(event_target_value(&ev));
+                                                set_settings_modified.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="text-[7px] text-[#444444]">"Y"</label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                            placeholder="Y"
+                                            prop:value=move || end_y.get()
+                                            on:input=move |ev| {
+                                                set_end_y.set(event_target_value(&ev));
+                                                set_settings_modified.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="text-[7px] text-[#444444]">"Z"</label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                            placeholder="Z"
+                                            prop:value=move || end_z.get()
+                                            on:input=move |ev| {
+                                                set_end_z.set(event_target_value(&ev));
+                                                set_settings_modified.set(true);
+                                            }
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            // Motion Settings - Move Speed + Save Button
+                            <div class="px-3 pb-3 border-b border-[#ffffff08] flex items-end gap-3">
+                                <div class="flex-1">
+                                    <div class="flex items-center gap-2 mb-1">
+                                        <div class="text-[8px] text-[#555555] uppercase">"Move Speed"</div>
+                                        <div class="text-[7px] text-[#444444]">"(mm/s for approach/retreat)"</div>
+                                    </div>
+                                    <input
+                                        type="number"
+                                        step="10"
+                                        min="1"
+                                        class="w-32 bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                        placeholder="100"
+                                        prop:value=move || move_speed.get()
+                                        on:input=move |ev| {
+                                            set_move_speed.set(event_target_value(&ev));
+                                            set_settings_modified.set(true);
+                                        }
+                                    />
+                                </div>
+                                <Show when=move || settings_modified.get()>
+                                    <button
+                                        class="bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] text-[9px] px-3 py-1 rounded hover:bg-[#22c55e30]"
+                                        on:click=move |_| {
+                                            ws.update_program_settings(
+                                                prog_id,
+                                                start_x.get().parse().ok(),
+                                                start_y.get().parse().ok(),
+                                                start_z.get().parse().ok(),
+                                                end_x.get().parse().ok(),
+                                                end_y.get().parse().ok(),
+                                                end_z.get().parse().ok(),
+                                                move_speed.get().parse().ok(),
+                                            );
+                                            set_settings_modified.set(false);
+                                            // Refresh program to get updated timestamps
+                                            ws.get_program(prog_id);
+                                        }
+                                    >
+                                        "Save Settings"
+                                    </button>
+                                </Show>
                             </div>
 
                             // Full program table
