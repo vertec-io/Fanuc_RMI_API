@@ -375,6 +375,70 @@ impl FanucDriver {
         .map_err(|_| "Timeout waiting for reset response".to_string())?
     }
 
+    /// Recover from a HOLD state caused by sequence ID errors
+    ///
+    /// Per FANUC documentation B-84184EN/02 Section 2.4:
+    /// "If RMI detects a non-consecutive sequence ID, RMI sends a RMIT-029 Invalid sequence ID
+    /// number error ID back to the sender. At this point, RMI goes into a HOLD state. While in
+    /// a HOLD state, RMI continues to execute the TP instructions that are already in the TP
+    /// program but will not accept new TP instructions until RMI receives the FRC_Reset command.
+    /// You can get the correct sequence ID by sending an FRC_GetStatus packet and getting
+    /// 'NextSequenceID' : nnnn where the nnnn is the next valid sequence ID."
+    ///
+    /// This method:
+    /// 1. Sends FRC_Reset to clear the HOLD state
+    /// 2. Sends FRC_GetStatus to get the correct NextSequenceID
+    /// 3. Syncs our sequence counter to match the robot's expected value
+    ///
+    /// # Returns
+    /// * `Ok(())` - Recovery successful
+    /// * `Err(String)` - Recovery failed
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use fanuc_rmi::drivers::FanucDriver;
+    /// # async fn example(driver: &FanucDriver) -> Result<(), String> {
+    /// // If you get error 2556957 (Invalid sequence ID number), call this:
+    /// driver.recover_from_hold_state().await?;
+    /// // Now you can retry your instruction
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn recover_from_hold_state(&self) -> Result<(), String> {
+        self.log_info("Recovering from HOLD state (sequence ID error)...").await;
+
+        // Step 1: Send FRC_Reset to clear the HOLD state
+        self.log_debug("Sending FRC_Reset...").await;
+        let reset_response = self.reset().await?;
+
+        if reset_response.error_id != 0 {
+            let msg = format!("FRC_Reset failed with error: {}", reset_response.error_id);
+            self.log_error(&msg).await;
+            return Err(msg);
+        }
+
+        // Step 2: Get the correct NextSequenceID from the robot
+        self.log_debug("Getting status to sync sequence ID...").await;
+        let status = self.get_status().await?;
+
+        if status.error_id != 0 {
+            let msg = format!("FRC_GetStatus failed with error: {}", status.error_id);
+            self.log_error(&msg).await;
+            return Err(msg);
+        }
+
+        // Step 3: Sync our sequence counter to match the robot
+        let next_seq = status.next_sequence_id;
+        self.sync_sequence_counter(next_seq);
+
+        self.log_info(&format!(
+            "Recovery complete. Sequence counter synced to: {}",
+            next_seq
+        )).await;
+
+        Ok(())
+    }
+
     /// Send an initialize command to the FANUC controller
     ///
     /// Returns the request ID for tracking this request.
@@ -415,7 +479,7 @@ impl FanucDriver {
         let _request_id = self.send_initialize()?;
 
         // Wait up to 5 seconds for response
-        tokio::time::timeout(Duration::from_secs(5), async {
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
             while let Ok(response) = response_rx.recv().await {
                 if let ResponsePacket::CommandResponse(CommandResponse::FrcInitialize(init_response)) = response {
                     return Ok(init_response);
@@ -424,7 +488,16 @@ impl FanucDriver {
             Err("Response channel closed".to_string())
         })
         .await
-        .map_err(|_| "Timeout waiting for initialize response".to_string())?
+        .map_err(|_| "Timeout waiting for initialize response".to_string())??;
+
+        // Per FANUC documentation B-84184EN/02 Section 2.4:
+        // "Start your SequenceID number from 1 after the FRC_Initialize packet."
+        // Reset sequence counter after successful initialization.
+        if result.error_id == 0 {
+            self.reset_sequence_counter();
+        }
+
+        Ok(result)
     }
 
     /// Send a get status command to the FANUC controller
@@ -558,8 +631,7 @@ impl FanucDriver {
     /// # Example
     ///
     /// ```no_run
-    /// # use fanuc_rmi::drivers::{FanucDriver, FanucDriverConfig};
-    /// # use fanuc_rmi::drivers::driver_config::LogLevel;
+    /// # use fanuc_rmi::drivers::{FanucDriver, FanucDriverConfig, LogLevel};
     /// # async fn example() -> Result<(), String> {
     /// let config = FanucDriverConfig {
     ///     addr: "192.168.1.100".to_string(),
@@ -568,7 +640,7 @@ impl FanucDriver {
     ///     log_level: LogLevel::Info,
     /// };
     ///
-    /// let driver = FanucDriver::connect(config).await?;
+    /// let driver = FanucDriver::connect(config).await.map_err(|e| e.to_string())?;
     ///
     /// // Smart initialization - checks status first
     /// driver.startup_sequence().await?;
@@ -642,12 +714,36 @@ impl FanucDriver {
             return Err(msg);
         }
 
+        // Note: initialize() already resets sequence counter to 1 on success
+        // per FANUC documentation B-84184EN/02 Section 2.4
         self.log_info(&format!(
-            "Initialization successful (group_mask: {})",
+            "Initialization successful (group_mask: {}, sequence counter reset to 1)",
             init_response.group_mask
         )).await;
 
         Ok(())
+    }
+
+    /// Reset the sequence counter to 1
+    ///
+    /// Per FANUC documentation B-84184EN/02 Section 2.4:
+    /// "Start your SequenceID number from 1 after the FRC_Initialize packet."
+    ///
+    /// This should be called after successful FRC_Initialize.
+    pub fn reset_sequence_counter(&self) {
+        if let Ok(mut seq_id) = self.next_available_sequence_number.lock() {
+            *seq_id = 1;
+        }
+    }
+
+    /// Sync the sequence counter to match the robot's NextSequenceID
+    ///
+    /// This is useful after recovering from a HOLD state or reconnecting to
+    /// an existing RMI session.
+    pub fn sync_sequence_counter(&self, next_sequence_id: u32) {
+        if let Ok(mut seq_id) = self.next_available_sequence_number.lock() {
+            *seq_id = next_sequence_id;
+        }
     }
 
     async fn send_packet_to_controller(&self, packet: SendPacket) -> Result<(), FrcError> {
@@ -790,6 +886,13 @@ impl FanucDriver {
         const LOOP_INTERVAL: Duration = Duration::from_millis(8);
         // Maximum in-flight packets (backpressure)
         const MAX_IN_FLIGHT: u32 = 8;
+        // Per FANUC documentation B-84184EN/02 Section 3.2:
+        // "For each of the 8 instructions, please wait at least 2 milliseconds before
+        // sending the next instruction. This is due to TCP/IP packs several RMI packets
+        // together in one TCP/IP packet if these RMI packets arrive around the same time.
+        // It is possible that during the packing, an RMI packet could be broken into two
+        // parts and carried by two TCP/IP packets. RMI will return an error in this case."
+        const INSTRUCTION_DELAY: Duration = Duration::from_millis(2);
 
         loop {
             let start_time = Instant::now();
@@ -917,6 +1020,11 @@ impl FanucDriver {
                             if let SendPacket::Instruction(instr) = driver_packet.packet {
                                 let _seq = instr.get_sequence_id();
                                 in_flight += 1;
+
+                                // Per FANUC documentation B-84184EN/02 Section 3.2:
+                                // Wait at least 2ms between consecutive instructions to prevent
+                                // TCP/IP packet fragmentation issues that cause RMI errors.
+                                tokio::time::sleep(INSTRUCTION_DELAY).await;
                             }
                         }
                     }
@@ -1043,27 +1151,20 @@ impl FanucDriver {
                             self.log_error(format!("Failed to send completion info: {}", e)).await;
                         }
                     }
-                    ResponsePacket::CommandResponse(CommandResponse::FrcGetStatus(status_response)) => {
-                        // Update sequence counter to match FANUC's NextSequenceID
-                        // Only update if we haven't initialized yet (counter is still at 1)
-                        let next_seq = status_response.next_sequence_id;
-                        let should_log = if let Ok(mut seq_id) = self.next_available_sequence_number.lock() {
-                            if *seq_id == 1 {
-                                *seq_id = next_seq;
-                                true
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        }; // MutexGuard dropped here
-
-                        if should_log {
-                            self.log_info(format!(
-                                "Initialized sequence counter to {} from FRC_GetStatus",
-                                next_seq
-                            )).await;
-                        }
+                    ResponsePacket::CommandResponse(CommandResponse::FrcGetStatus(_status_response)) => {
+                        // Per FANUC documentation B-84184EN/02 Section 2.4:
+                        // "Start your SequenceID number from 1 after the FRC_Initialize packet."
+                        //
+                        // We do NOT automatically sync the sequence counter from FRC_GetStatus.
+                        // The sequence counter should:
+                        // 1. Be reset to 1 after FRC_Initialize (done in startup_sequence)
+                        // 2. Increment consecutively with each instruction
+                        // 3. Only be synced during explicit error recovery (e.g., after FRC_Reset)
+                        //
+                        // Automatic syncing during normal operation causes race conditions and
+                        // can result in duplicate or skipped sequence IDs.
+                        //
+                        // Use sync_sequence_counter() explicitly when recovering from errors.
                     }
                     ResponsePacket::CommandResponse(CommandResponse::FrcSetOverRide(
                         frc_set_override_response,
