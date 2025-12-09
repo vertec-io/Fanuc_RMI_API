@@ -190,7 +190,7 @@ pub async fn read_frame_data(
                 };
             }
             ServerResponse::FrameData {
-                frame_number: resp.u_frame_number as u8,
+                frame_number: resp.frame_number as u8,
                 x: resp.frame.x,
                 y: resp.frame.y,
                 z: resp.frame.z,
