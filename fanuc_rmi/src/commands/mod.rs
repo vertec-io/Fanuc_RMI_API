@@ -23,6 +23,7 @@ mod frc_readpositionregister;
 mod frc_writepositionregister;
 mod frc_reset;
 mod frc_readtcpspeed;
+mod frc_unknown;
 
 pub use frc_initialize::*;
 pub use frc_readerror::*;
@@ -49,6 +50,7 @@ pub use frc_readpositionregister::*;
 pub use frc_writepositionregister::*;
 pub use frc_reset::*;
 pub use frc_readtcpspeed::*;
+pub use frc_unknown::*;
 
 #[cfg(feature = "DTO")]
 pub mod dto {
@@ -95,6 +97,7 @@ pub mod dto {
     pub use super::frc_setoveride::FrcSetOverRideResponseDto as FrcSetOverRideResponse;
     pub use super::frc_readpositionregister::FrcReadPositionRegisterResponseDto as FrcReadPositionRegisterResponse;
     pub use super::frc_writepositionregister::FrcWritePositionRegisterResponseDto as FrcWritePositionRegisterResponse;
+    pub use super::frc_unknown::FrcUnknownResponseDto as FrcUnknownResponse;
 }
 
 

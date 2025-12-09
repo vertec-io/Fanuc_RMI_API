@@ -161,6 +161,11 @@ pub enum CommandResponse {
 
     #[serde(rename = "FRC_ReadTCPSpeed")]
     FrcReadTCPSpeed(FrcReadTCPSpeedResponse),
+
+    /// Unknown/unrecognized command response
+    /// Robot sends this when it doesn't recognize a command
+    #[serde(rename = "Unknown")]
+    Unknown(FrcUnknownResponse),
 }
 
 impl Packet for Command {}
@@ -191,3 +196,4 @@ impl_extract_inner!(CommandResponse, FrcReadPositionRegister, FrcReadPositionReg
 impl_extract_inner!(CommandResponse, FrcWritePositionRegister, FrcWritePositionRegisterResponse);
 impl_extract_inner!(CommandResponse, FrcReset, FrcResetResponse);
 impl_extract_inner!(CommandResponse, FrcReadTCPSpeed, FrcReadTCPSpeedResponse);
+impl_extract_inner!(CommandResponse, Unknown, FrcUnknownResponse);

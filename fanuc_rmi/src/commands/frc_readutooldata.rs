@@ -4,21 +4,21 @@ use crate::FrameData;
 #[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadUToolData {
-    #[serde(rename = "FrameNumber")]
-    pub frame_number: i8,
+    #[serde(rename = "ToolNumber")]
+    pub tool_number: i8,
     #[serde(rename = "Group")]
     pub group: u8,
 }
 
 impl FrcReadUToolData{
     #[allow(unused)]
-    pub fn new(group: Option<u8>, frame_number:i8) -> Self {
+    pub fn new(group: Option<u8>, tool_number: i8) -> Self {
         Self {
             group: match group {
                 Some(gm) => gm,
                 None => 1
             },
-            frame_number
+            tool_number
         }
     }
 }
