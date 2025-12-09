@@ -46,6 +46,7 @@ pub mod protocol {
 
 #[cfg_attr(feature = "DTO", mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "PascalCase")]
 pub struct FrameData {
     pub x: f64,
     pub y: f64,
