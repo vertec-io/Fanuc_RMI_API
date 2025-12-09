@@ -96,3 +96,41 @@ fn test_read_uframe_data_response_from_real_robot() {
     }
 }
 
+#[test]
+fn test_read_utool_data_response_from_real_robot() {
+    // This is the actual JSON from the real robot (from the error log)
+    let robot_json = r#"{"Command" : "FRC_ReadUToolData", "ErrorID" : 0, "ToolNumber" : 2, "Group" : 1, "Frame" : { "X" : 0.000, "Y" : 0.000, "Z" : 0.000, "W" : 0.000, "P" : 0.000, "R" : 0.000}}"#;
+
+    // First try to deserialize as CommandResponse
+    let cmd_result: Result<CommandResponse, _> = serde_json::from_str(robot_json);
+    match &cmd_result {
+        Ok(resp) => println!("Successfully parsed as CommandResponse: {:?}", resp),
+        Err(e) => println!("Failed to parse as CommandResponse: {}", e),
+    }
+
+    // Try to deserialize as ResponsePacket
+    let result: Result<ResponsePacket, _> = serde_json::from_str(robot_json);
+
+    match &result {
+        Ok(packet) => println!("Successfully parsed as ResponsePacket: {:?}", packet),
+        Err(e) => println!("Failed to parse as ResponsePacket: {}", e),
+    }
+
+    assert!(result.is_ok(), "Should successfully parse real robot response");
+
+    // Verify it's the correct variant
+    if let Ok(ResponsePacket::CommandResponse(CommandResponse::FrcReadUToolData(resp))) = result {
+        assert_eq!(resp.error_id, 0);
+        assert_eq!(resp.tool_number, 2);
+        assert_eq!(resp.group, 1);
+        assert_eq!(resp.frame.x, 0.0);
+        assert_eq!(resp.frame.y, 0.0);
+        assert_eq!(resp.frame.z, 0.0);
+        assert_eq!(resp.frame.w, 0.0);
+        assert_eq!(resp.frame.p, 0.0);
+        assert_eq!(resp.frame.r, 0.0);
+    } else {
+        panic!("Wrong response variant");
+    }
+}
+

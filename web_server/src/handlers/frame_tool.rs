@@ -257,7 +257,7 @@ pub async fn read_tool_data(
                 };
             }
             ServerResponse::ToolData {
-                tool_number: resp.utool_number,
+                tool_number: resp.tool_number,
                 x: resp.frame.x,
                 y: resp.frame.y,
                 z: resp.frame.z,
