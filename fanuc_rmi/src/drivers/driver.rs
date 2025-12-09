@@ -815,6 +815,27 @@ impl FanucDriver {
         // Generate unique request ID
         let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
 
+        // Log what command/communication is being sent (at debug level)
+        // This uses the driver's log_debug method which respects config.log_level
+        let self_clone = self.clone();
+        let packet_clone = packet.clone();
+        tokio::spawn(async move {
+            match &packet_clone {
+                SendPacket::Command(cmd) => {
+                    self_clone.log_debug(format!("📤 Sending command: {:?}", cmd)).await;
+                }
+                SendPacket::Communication(comm) => {
+                    self_clone.log_debug(format!("📤 Sending communication: {:?}", comm)).await;
+                }
+                SendPacket::Instruction(instr) => {
+                    self_clone.log_debug(format!("📤 Sending instruction: {:?}", instr)).await;
+                }
+                SendPacket::DriverCommand(_) => {
+                    self_clone.log_debug("📤 Sending driver command".to_string()).await;
+                }
+            }
+        });
+
         // Commands and Communications bypass the instruction queue entirely.
         // Only Instructions need backpressure (the 8-slot buffer limit applies to TP instructions only).
         // Commands are processed immediately by the controller and don't consume buffer slots.

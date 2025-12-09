@@ -9,6 +9,7 @@ use fanuc_rmi::packets::{Command, CommandResponse, PacketPriority, ResponsePacke
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tracing::{info, warn, error};
 
 /// Read a digital input port.
 pub async fn read_din(
@@ -30,6 +31,7 @@ pub async fn read_din(
 
     let packet = SendPacket::Command(Command::FrcReadDIN(FrcReadDIN { port_number }));
 
+    info!("Sending FRC_ReadDIN command for port {}", port_number);
     let mut response_rx = driver.response_tx.subscribe();
     if let Err(e) = driver.send_packet(packet, PacketPriority::Standard) {
         return ServerResponse::Error {
@@ -40,6 +42,11 @@ pub async fn read_din(
     // Wait for response
     match tokio::time::timeout(Duration::from_secs(5), async {
         while let Ok(response) = response_rx.recv().await {
+            // Log Unknown responses
+            if let ResponsePacket::CommandResponse(CommandResponse::Unknown(ref unknown)) = response {
+                warn!("Received Unknown response while waiting for FRC_ReadDIN: error_id={}", unknown.error_id);
+            }
+
             if let ResponsePacket::CommandResponse(CommandResponse::FrcReadDIN(resp)) = response {
                 return Some(resp);
             }
@@ -59,12 +66,18 @@ pub async fn read_din(
                 port_value: resp.port_value != 0,
             }
         }
-        Ok(None) => ServerResponse::Error {
-            message: "No response received".to_string(),
-        },
-        Err(_) => ServerResponse::Error {
-            message: "Timeout waiting for response".to_string(),
-        },
+        Ok(None) => {
+            error!("No response received for FRC_ReadDIN (port {})", port_number);
+            ServerResponse::Error {
+                message: "No response received".to_string(),
+            }
+        }
+        Err(_) => {
+            error!("Timeout waiting for FRC_ReadDIN response (port {})", port_number);
+            ServerResponse::Error {
+                message: format!("Timeout waiting for FRC_ReadDIN response (port {})", port_number),
+            }
+        }
     }
 }
 

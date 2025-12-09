@@ -15,6 +15,7 @@ use fanuc_rmi::FrameData;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tracing::{info, warn, error};
 
 /// Get the currently active UFrame and UTool numbers.
 ///
@@ -163,6 +164,7 @@ pub async fn read_frame_data(
     let cmd = FrcReadUFrameData::new(None, frame_number as i8);
     let packet = SendPacket::Command(Command::FrcReadUFrameData(cmd));
 
+    info!("Sending FRC_ReadUFrameData command for frame {}", frame_number);
     let mut response_rx = driver.response_tx.subscribe();
     if let Err(e) = driver.send_packet(packet, PacketPriority::Standard) {
         return ServerResponse::Error {
@@ -173,6 +175,11 @@ pub async fn read_frame_data(
     // Wait for response
     match tokio::time::timeout(Duration::from_secs(5), async {
         while let Ok(response) = response_rx.recv().await {
+            // Log Unknown responses
+            if let ResponsePacket::CommandResponse(CommandResponse::Unknown(ref unknown)) = response {
+                warn!("Received Unknown response while waiting for FRC_ReadUFrameData: error_id={}", unknown.error_id);
+            }
+
             if let ResponsePacket::CommandResponse(CommandResponse::FrcReadUFrameData(resp)) =
                 response
             {
@@ -199,12 +206,18 @@ pub async fn read_frame_data(
                 r: resp.frame.r,
             }
         }
-        Ok(None) => ServerResponse::Error {
-            message: "No response received".to_string(),
-        },
-        Err(_) => ServerResponse::Error {
-            message: "Timeout waiting for response".to_string(),
-        },
+        Ok(None) => {
+            error!("No response received for FRC_ReadUFrameData (frame {})", frame_number);
+            ServerResponse::Error {
+                message: "No response received".to_string(),
+            }
+        }
+        Err(_) => {
+            error!("Timeout waiting for FRC_ReadUFrameData response (frame {})", frame_number);
+            ServerResponse::Error {
+                message: format!("Timeout waiting for FRC_ReadUFrameData response (frame {})", frame_number),
+            }
+        }
     }
 }
 
@@ -230,6 +243,7 @@ pub async fn read_tool_data(
     let cmd = FrcReadUToolData::new(None, tool_number as i8);
     let packet = SendPacket::Command(Command::FrcReadUToolData(cmd));
 
+    info!("Sending FRC_ReadUToolData command for tool {}", tool_number);
     let mut response_rx = driver.response_tx.subscribe();
     if let Err(e) = driver.send_packet(packet, PacketPriority::Standard) {
         return ServerResponse::Error {
@@ -240,6 +254,11 @@ pub async fn read_tool_data(
     // Wait for response
     match tokio::time::timeout(Duration::from_secs(5), async {
         while let Ok(response) = response_rx.recv().await {
+            // Log Unknown responses
+            if let ResponsePacket::CommandResponse(CommandResponse::Unknown(ref unknown)) = response {
+                warn!("Received Unknown response while waiting for FRC_ReadUToolData: error_id={}", unknown.error_id);
+            }
+
             if let ResponsePacket::CommandResponse(CommandResponse::FrcReadUToolData(resp)) =
                 response
             {
@@ -266,12 +285,18 @@ pub async fn read_tool_data(
                 r: resp.frame.r,
             }
         }
-        Ok(None) => ServerResponse::Error {
-            message: "No response received".to_string(),
-        },
-        Err(_) => ServerResponse::Error {
-            message: "Timeout waiting for response".to_string(),
-        },
+        Ok(None) => {
+            error!("No response received for FRC_ReadUToolData (tool {})", tool_number);
+            ServerResponse::Error {
+                message: "No response received".to_string(),
+            }
+        }
+        Err(_) => {
+            error!("Timeout waiting for FRC_ReadUToolData response (tool {})", tool_number);
+            ServerResponse::Error {
+                message: format!("Timeout waiting for FRC_ReadUToolData response (tool {})", tool_number),
+            }
+        }
     }
 }
 
