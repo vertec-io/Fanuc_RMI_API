@@ -7,6 +7,7 @@
 use leptos::prelude::*;
 use crate::components::layout::LayoutContext;
 use crate::components::layout::workspace::context::WorkspaceContext;
+use crate::components::FrameReaderDebug;
 use crate::websocket::WebSocketManager;
 
 /// Info tab showing frame, tool, and joint data.
@@ -54,6 +55,9 @@ pub fn InfoTab() -> impl IntoView {
         <div class="h-full flex flex-col gap-2 overflow-hidden">
             // Active Configuration Panel (full width at top)
             <ActiveConfigurationPanel/>
+
+            // DEBUG: Frame Reader (temporary debugging tool)
+            <FrameReaderDebug/>
 
             // Jog Defaults Panel (full width)
             <JogDefaultsPanel/>
