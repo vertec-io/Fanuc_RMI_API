@@ -23,13 +23,15 @@ pub fn InfoTab() -> impl IntoView {
             // Request active frame/tool
             ws.get_active_frame_tool();
 
-            // Request all frame data (0-9)
-            for i in 0..10u8 {
+            // Request all frame data (1-9)
+            // Note: Frame 0 doesn't exist on FANUC robots - frames are numbered 1-9
+            for i in 1..=10u8 {
                 ws.read_frame_data(i);
             }
 
-            // Request all tool data (0-9)
-            for i in 0..10u8 {
+            // Request all tool data (1-10)
+            // Note: Tool 0 doesn't exist on FANUC robots - tools are numbered 1-10
+            for i in 1..10u8 {
                 ws.read_tool_data(i);
             }
 
