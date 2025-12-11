@@ -116,12 +116,21 @@ pub async fn connect_to_saved_robot(
             Ok(None) => return ServerResponse::Error { message: "Connection not found".to_string() },
             Err(e) => return ServerResponse::Error { message: format!("Database error: {}", e) },
         };
-        // Try to get the default configuration for this robot
+        // Get the default configuration for this robot (REQUIRED)
         let config = match db.get_default_robot_configuration(connection_id) {
-            Ok(c) => c,
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                return ServerResponse::Error {
+                    message: format!(
+                        "Robot '{}' has no default configuration. Please create at least one configuration and mark it as default.",
+                        conn.name
+                    )
+                };
+            }
             Err(e) => {
-                warn!("Failed to get default configuration: {}", e);
-                None
+                return ServerResponse::Error {
+                    message: format!("Failed to get default configuration: {}", e)
+                };
             }
         };
         (conn, config)
@@ -141,14 +150,9 @@ pub async fn connect_to_saved_robot(
             info!("Successfully connected to saved robot '{}' at {}:{}",
                 saved_conn.name, saved_conn.ip_address, saved_conn.port);
 
-            // Initialize active configuration from default config or robot defaults
-            conn_guard.active_configuration = if let Some(ref config) = default_config {
-                info!("Loading default configuration '{}' for robot", config.name);
-                crate::ActiveConfiguration::from_saved(config)
-            } else {
-                info!("No default configuration found, using robot defaults");
-                crate::ActiveConfiguration::from_robot_defaults(&saved_conn)
-            };
+            // Initialize active configuration from default config
+            info!("Loading default configuration '{}' for robot", default_config.name);
+            conn_guard.active_configuration = crate::ActiveConfiguration::from_saved(&default_config);
 
             // Get the frame/tool from active configuration
             let uframe = conn_guard.active_configuration.u_frame_number as u8;

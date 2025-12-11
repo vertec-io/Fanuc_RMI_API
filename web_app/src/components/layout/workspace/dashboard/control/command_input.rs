@@ -7,21 +7,21 @@ use fanuc_rmi::dto::{SendPacket, Instruction, FrcLinearRelative, FrcLinearMotion
 use fanuc_rmi::{SpeedType, TermType};
 
 /// Helper function to create a motion packet from a RecentCommand
-/// Uses the WebSocketManager to get arm configuration from robot connection defaults
+/// Uses the WebSocketManager to get arm configuration from active configuration
 /// Returns None if no robot is connected (can't create valid packet without connection config)
 pub fn create_motion_packet(cmd: &RecentCommand, ws: &WebSocketManager) -> Option<SendPacket> {
-    // Get arm configuration from robot connection defaults
+    // Get arm configuration from active configuration
     // If no robot is connected, we can't create a valid motion packet
-    let active_conn = ws.get_active_connection()?;
+    let active_config = ws.active_configuration.get_untracked()?;
 
-    // Use per-robot configuration defaults (all required now)
-    let front = active_conn.default_front as i8;
-    let up = active_conn.default_up as i8;
-    let left = active_conn.default_left as i8;
-    let flip = active_conn.default_flip as i8;
-    let turn4 = active_conn.default_turn4 as i8;
-    let turn5 = active_conn.default_turn5 as i8;
-    let turn6 = active_conn.default_turn6 as i8;
+    // Use active configuration values
+    let front = active_config.front as i8;
+    let up = active_config.up as i8;
+    let left = active_config.left as i8;
+    let flip = active_config.flip as i8;
+    let turn4 = active_config.turn4 as i8;
+    let turn5 = active_config.turn5 as i8;
+    let turn6 = active_config.turn6 as i8;
 
     let config = Configuration {
         u_tool_number: cmd.utool as i8,

@@ -35,19 +35,27 @@ pub fn JogControls() -> impl IntoView {
             return;
         };
 
-        // Get UFrame/UTool from server-synced active_frame_tool (set via Info tab)
+        // Get configuration from active_configuration (loaded from robot_configurations table)
         // This is the authoritative value that reflects what the robot is actually using
-        let (u_frame, u_tool) = ws.active_frame_tool.get_untracked()
-            .unwrap_or((0, 1)); // Default: UFrame 0, UTool 1
+        let active_config = ws.active_configuration.get_untracked();
 
-        // Use per-robot configuration defaults (all required now)
-        let front = active_conn.default_front as i8;
-        let up = active_conn.default_up as i8;
-        let left = active_conn.default_left as i8;
-        let flip = active_conn.default_flip as i8;
-        let turn4 = active_conn.default_turn4 as i8;
-        let turn5 = active_conn.default_turn5 as i8;
-        let turn6 = active_conn.default_turn6 as i8;
+        let (u_frame, u_tool, front, up, left, flip, turn4, turn5, turn6) = if let Some(config) = active_config {
+            (
+                config.u_frame_number as i8,
+                config.u_tool_number as i8,
+                config.front as i8,
+                config.up as i8,
+                config.left as i8,
+                config.flip as i8,
+                config.turn4 as i8,
+                config.turn5 as i8,
+                config.turn6 as i8,
+            )
+        } else {
+            // Fallback if no active configuration (shouldn't happen if robot is connected)
+            log::warn!("No active configuration found for jog - using fallback defaults");
+            (0, 1, 1, 1, 0, 0, 0, 0, 0)
+        };
 
         let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(
             FrcLinearRelative {

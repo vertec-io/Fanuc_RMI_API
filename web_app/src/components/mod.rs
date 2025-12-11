@@ -5,6 +5,7 @@ mod error_log;
 mod motion_log;
 mod settings;
 mod toast;
+mod robot_creation_wizard;
 pub mod layout;
 pub mod debug;
 
@@ -15,6 +16,7 @@ pub use error_log::ErrorLog;
 pub use toast::ToastContainer;
 pub use layout::{DesktopLayout, FloatingJogControls};
 pub use debug::FrameReaderDebug;
+pub use robot_creation_wizard::RobotCreationWizard;
 
 // Re-export for potential future use (currently used in layout components)
 #[allow(unused_imports)]

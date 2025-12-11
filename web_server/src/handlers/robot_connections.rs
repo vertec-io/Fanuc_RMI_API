@@ -20,19 +20,11 @@ pub async fn list_robot_connections(db: Arc<Mutex<Database>>) -> ServerResponse 
                 ip_address: c.ip_address.clone(),
                 port: c.port,
                 default_speed: c.default_speed,
+                default_speed_type: c.default_speed_type.clone(),
                 default_term_type: c.default_term_type.clone(),
-                default_uframe: c.default_uframe,
-                default_utool: c.default_utool,
                 default_w: c.default_w,
                 default_p: c.default_p,
                 default_r: c.default_r,
-                default_front: c.default_front,
-                default_up: c.default_up,
-                default_left: c.default_left,
-                default_flip: c.default_flip,
-                default_turn4: c.default_turn4,
-                default_turn5: c.default_turn5,
-                default_turn6: c.default_turn6,
                 default_cartesian_jog_speed: c.default_cartesian_jog_speed,
                 default_cartesian_jog_step: c.default_cartesian_jog_step,
                 default_joint_jog_speed: c.default_joint_jog_speed,
@@ -57,19 +49,11 @@ pub async fn get_robot_connection(db: Arc<Mutex<Database>>, id: i64) -> ServerRe
                     ip_address: c.ip_address,
                     port: c.port,
                     default_speed: c.default_speed,
+                    default_speed_type: c.default_speed_type,
                     default_term_type: c.default_term_type,
-                    default_uframe: c.default_uframe,
-                    default_utool: c.default_utool,
                     default_w: c.default_w,
                     default_p: c.default_p,
                     default_r: c.default_r,
-                    default_front: c.default_front,
-                    default_up: c.default_up,
-                    default_left: c.default_left,
-                    default_flip: c.default_flip,
-                    default_turn4: c.default_turn4,
-                    default_turn5: c.default_turn5,
-                    default_turn6: c.default_turn6,
                     default_cartesian_jog_speed: c.default_cartesian_jog_speed,
                     default_cartesian_jog_step: c.default_cartesian_jog_step,
                     default_joint_jog_speed: c.default_joint_jog_speed,
@@ -82,7 +66,9 @@ pub async fn get_robot_connection(db: Arc<Mutex<Database>>, id: i64) -> ServerRe
     }
 }
 
-/// Create a new saved robot connection.
+/// Create a new saved robot connection (DEPRECATED - use create_robot_with_configurations instead).
+/// This creates a robot connection with default values but NO configurations.
+/// The robot will not be connectable until at least one configuration is created.
 pub async fn create_robot_connection(
     db: Arc<Mutex<Database>>,
     name: &str,
@@ -91,7 +77,23 @@ pub async fn create_robot_connection(
     port: u32,
 ) -> ServerResponse {
     let db = db.lock().await;
-    match db.create_robot_connection(name, description, ip_address, port) {
+    // Use sensible defaults for motion and jog parameters
+    match db.create_robot_connection(
+        name,
+        description,
+        ip_address,
+        port,
+        100.0,     // default_speed
+        "mmSec",   // default_speed_type
+        "CNT",     // default_term_type
+        0.0,       // default_w
+        0.0,       // default_p
+        0.0,       // default_r
+        10.0,      // default_cartesian_jog_speed (safer default)
+        1.0,       // default_cartesian_jog_step (safer default)
+        0.1,       // default_joint_jog_speed (safer default)
+        0.25,      // default_joint_jog_step (safer default)
+    ) {
         Ok(id) => {
             info!("Created robot connection: {} (id={})", name, id);
             ServerResponse::Success { message: format!("Connection '{}' created", name) }
@@ -119,47 +121,31 @@ pub async fn update_robot_connection(
     }
 }
 
-/// Update robot connection defaults (per-robot settings).
-/// All parameters are required (non-optional) - each robot has explicit settings.
-#[allow(clippy::too_many_arguments)]
+/// Update robot connection motion defaults.
+/// Motion parameters (speed, speed_type, term_type, w/p/r) only.
+/// Frame/tool/arm config is managed via robot_configurations table.
 pub async fn update_robot_connection_defaults(
     db: Arc<Mutex<Database>>,
     id: i64,
     default_speed: f64,
+    default_speed_type: &str,
     default_term_type: &str,
-    default_uframe: i32,
-    default_utool: i32,
     default_w: f64,
     default_p: f64,
     default_r: f64,
-    default_front: i32,
-    default_up: i32,
-    default_left: i32,
-    default_flip: i32,
-    default_turn4: i32,
-    default_turn5: i32,
-    default_turn6: i32,
 ) -> ServerResponse {
     let db = db.lock().await;
     match db.update_robot_connection_defaults(
         id,
         default_speed,
+        default_speed_type,
         default_term_type,
-        default_uframe,
-        default_utool,
         default_w,
         default_p,
         default_r,
-        default_front,
-        default_up,
-        default_left,
-        default_flip,
-        default_turn4,
-        default_turn5,
-        default_turn6,
     ) {
         Ok(_) => {
-            info!("Updated robot connection defaults for id={}", id);
+            info!("Updated robot connection motion defaults for id={}", id);
             ServerResponse::Success { message: "Connection defaults updated".to_string() }
         }
         Err(e) => ServerResponse::Error { message: format!("Failed to update connection defaults: {}", e) }
@@ -194,5 +180,156 @@ pub async fn delete_robot_connection(db: Arc<Mutex<Database>>, id: i64) -> Serve
             ServerResponse::Success { message: "Connection deleted".to_string() }
         }
         Err(e) => ServerResponse::Error { message: format!("Failed to delete connection: {}", e) }
+    }
+}
+
+/// Create robot connection with configurations atomically.
+/// This ensures at least one default configuration exists.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_robot_with_configurations(
+    db: Arc<Mutex<Database>>,
+    name: &str,
+    description: Option<&str>,
+    ip_address: &str,
+    port: u32,
+    default_speed: f64,
+    default_speed_type: &str,
+    default_term_type: &str,
+    default_w: f64,
+    default_p: f64,
+    default_r: f64,
+    default_cartesian_jog_speed: f64,
+    default_cartesian_jog_step: f64,
+    default_joint_jog_speed: f64,
+    default_joint_jog_step: f64,
+    configurations: Vec<NewRobotConfigurationDto>,
+) -> ServerResponse {
+    // Validate: at least one configuration required
+    if configurations.is_empty() {
+        return ServerResponse::Error {
+            message: "At least one configuration is required".to_string(),
+        };
+    }
+
+    // Validate: exactly one default configuration
+    let default_count = configurations.iter().filter(|c| c.is_default).count();
+    if default_count == 0 {
+        return ServerResponse::Error {
+            message: "At least one configuration must be marked as default".to_string(),
+        };
+    }
+    if default_count > 1 {
+        return ServerResponse::Error {
+            message: "Only one configuration can be marked as default".to_string(),
+        };
+    }
+
+    let db = db.lock().await;
+    let config_count = configurations.len();
+
+    // Create robot connection
+    let robot_id = match db.create_robot_connection(
+        name,
+        description,
+        ip_address,
+        port,
+        default_speed,
+        default_speed_type,
+        default_term_type,
+        default_w,
+        default_p,
+        default_r,
+        default_cartesian_jog_speed,
+        default_cartesian_jog_step,
+        default_joint_jog_speed,
+        default_joint_jog_step,
+    ) {
+        Ok(id) => id,
+        Err(e) => {
+            return ServerResponse::Error {
+                message: format!("Failed to create robot connection: {}", e),
+            }
+        }
+    };
+
+    // Create all configurations
+    for config in configurations {
+        if let Err(e) = db.create_robot_configuration(
+            robot_id,
+            &config.name,
+            config.is_default,
+            config.u_frame_number,
+            config.u_tool_number,
+            config.front,
+            config.up,
+            config.left,
+            config.flip,
+            config.turn4,
+            config.turn5,
+            config.turn6,
+        ) {
+            // If configuration creation fails, delete the robot connection
+            let _ = db.delete_robot_connection(robot_id);
+            return ServerResponse::Error {
+                message: format!("Failed to create configuration: {}", e),
+            };
+        }
+    }
+
+    info!("Created robot connection '{}' (id={}) with {} configurations", name, robot_id, config_count);
+
+    // Fetch the created robot connection and configurations
+    let connection = match db.get_robot_connection(robot_id) {
+        Ok(Some(c)) => c,
+        _ => {
+            return ServerResponse::Error {
+                message: "Failed to fetch created robot connection".to_string(),
+            }
+        }
+    };
+
+    let configurations = match db.list_robot_configurations(robot_id) {
+        Ok(configs) => configs.into_iter().map(|cfg| RobotConfigurationDto {
+            id: cfg.id,
+            robot_connection_id: cfg.robot_connection_id,
+            name: cfg.name,
+            is_default: cfg.is_default,
+            u_frame_number: cfg.u_frame_number,
+            u_tool_number: cfg.u_tool_number,
+            front: cfg.front,
+            up: cfg.up,
+            left: cfg.left,
+            flip: cfg.flip,
+            turn4: cfg.turn4,
+            turn5: cfg.turn5,
+            turn6: cfg.turn6,
+        }).collect(),
+        Err(e) => {
+            return ServerResponse::Error {
+                message: format!("Failed to fetch configurations: {}", e),
+            }
+        }
+    };
+
+    ServerResponse::RobotConnectionCreated {
+        id: robot_id,
+        connection: RobotConnectionDto {
+            id: connection.id,
+            name: connection.name,
+            description: connection.description,
+            ip_address: connection.ip_address,
+            port: connection.port,
+            default_speed: connection.default_speed,
+            default_speed_type: connection.default_speed_type,
+            default_term_type: connection.default_term_type,
+            default_w: connection.default_w,
+            default_p: connection.default_p,
+            default_r: connection.default_r,
+            default_cartesian_jog_speed: connection.default_cartesian_jog_speed,
+            default_cartesian_jog_step: connection.default_cartesian_jog_step,
+            default_joint_jog_speed: connection.default_joint_jog_speed,
+            default_joint_jog_step: connection.default_joint_jog_step,
+        },
+        configurations,
     }
 }

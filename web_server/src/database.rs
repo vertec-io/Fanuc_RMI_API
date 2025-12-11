@@ -77,7 +77,8 @@ pub struct RobotSettings {
 }
 
 /// A saved robot connection configuration.
-/// All defaults are required (non-optional) - each robot has its own explicit settings.
+/// Motion defaults (speed, term_type, w/p/r) and jog defaults are stored here.
+/// Frame/tool/arm configuration is stored in robot_configurations table.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct RobotConnection {
@@ -86,22 +87,13 @@ pub struct RobotConnection {
     pub description: Option<String>,
     pub ip_address: String,
     pub port: u32,
-    // Per-robot defaults (required - no global fallback)
+    // Motion defaults (required - no global fallback)
     pub default_speed: f64,
+    pub default_speed_type: String,  // mmSec, InchMin, Time, mSec
     pub default_term_type: String,
-    pub default_uframe: i32,
-    pub default_utool: i32,
     pub default_w: f64,
     pub default_p: f64,
     pub default_r: f64,
-    // Robot arm configuration defaults (required)
-    pub default_front: i32,
-    pub default_up: i32,
-    pub default_left: i32,
-    pub default_flip: i32,
-    pub default_turn4: i32,
-    pub default_turn5: i32,
-    pub default_turn6: i32,
     // Jog defaults
     pub default_cartesian_jog_speed: f64,
     pub default_cartesian_jog_step: f64,
@@ -181,22 +173,14 @@ impl Database {
     /// Run database migrations to add columns that may be missing from older schemas.
     fn run_migrations(&self) -> Result<()> {
         // Migration: Add new columns to robot_connections if they don't exist
+        // Note: Frame/tool/arm config moved to robot_configurations table
         let columns_to_add = [
             ("default_speed", "REAL"),
+            ("default_speed_type", "TEXT"),  // mmSec, InchMin, Time, mSec
             ("default_term_type", "TEXT"),
-            ("default_uframe", "INTEGER"),
-            ("default_utool", "INTEGER"),
             ("default_w", "REAL"),
             ("default_p", "REAL"),
             ("default_r", "REAL"),
-            // Robot arm configuration defaults
-            ("default_front", "INTEGER"),
-            ("default_up", "INTEGER"),
-            ("default_left", "INTEGER"),
-            ("default_flip", "INTEGER"),
-            ("default_turn4", "INTEGER"),
-            ("default_turn5", "INTEGER"),
-            ("default_turn6", "INTEGER"),
             // Jog defaults
             ("default_cartesian_jog_speed", "REAL"),
             ("default_cartesian_jog_step", "REAL"),
@@ -624,11 +608,38 @@ impl Database {
 
     // ========== Robot Connections CRUD Operations ==========
 
-    /// Create a new robot connection.
-    pub fn create_robot_connection(&self, name: &str, description: Option<&str>, ip_address: &str, port: u32) -> Result<i64> {
+    /// Create a new robot connection with all defaults.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_robot_connection(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        ip_address: &str,
+        port: u32,
+        default_speed: f64,
+        default_speed_type: &str,
+        default_term_type: &str,
+        default_w: f64,
+        default_p: f64,
+        default_r: f64,
+        default_cartesian_jog_speed: f64,
+        default_cartesian_jog_step: f64,
+        default_joint_jog_speed: f64,
+        default_joint_jog_step: f64,
+    ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO robot_connections (name, description, ip_address, port) VALUES (?1, ?2, ?3, ?4)",
-            params![name, description, ip_address, port],
+            "INSERT INTO robot_connections (
+                name, description, ip_address, port,
+                default_speed, default_speed_type, default_term_type, default_w, default_p, default_r,
+                default_cartesian_jog_speed, default_cartesian_jog_step,
+                default_joint_jog_speed, default_joint_jog_step
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                name, description, ip_address, port,
+                default_speed, default_speed_type, default_term_type, default_w, default_p, default_r,
+                default_cartesian_jog_speed, default_cartesian_jog_step,
+                default_joint_jog_speed, default_joint_jog_step
+            ],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -639,23 +650,15 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, ip_address, port,
                     COALESCE(default_speed, 100.0),
+                    COALESCE(default_speed_type, 'mmSec'),
                     COALESCE(default_term_type, 'CNT'),
-                    COALESCE(default_uframe, 0),
-                    COALESCE(default_utool, 0),
                     COALESCE(default_w, 0.0),
                     COALESCE(default_p, 0.0),
                     COALESCE(default_r, 0.0),
-                    COALESCE(default_front, 1),
-                    COALESCE(default_up, 1),
-                    COALESCE(default_left, 0),
-                    COALESCE(default_flip, 0),
-                    COALESCE(default_turn4, 0),
-                    COALESCE(default_turn5, 0),
-                    COALESCE(default_turn6, 0),
-                    COALESCE(default_cartesian_jog_speed, 50.0),
-                    COALESCE(default_cartesian_jog_step, 10.0),
-                    COALESCE(default_joint_jog_speed, 10.0),
-                    COALESCE(default_joint_jog_step, 1.0),
+                    COALESCE(default_cartesian_jog_speed, 10.0),
+                    COALESCE(default_cartesian_jog_step, 1.0),
+                    COALESCE(default_joint_jog_speed, 0.1),
+                    COALESCE(default_joint_jog_step, 0.25),
                     created_at, updated_at
              FROM robot_connections WHERE id = ?1"
         )?;
@@ -669,25 +672,17 @@ impl Database {
                 ip_address: row.get(3)?,
                 port: row.get::<_, i64>(4)? as u32,
                 default_speed: row.get(5)?,
-                default_term_type: row.get(6)?,
-                default_uframe: row.get(7)?,
-                default_utool: row.get(8)?,
-                default_w: row.get(9)?,
-                default_p: row.get(10)?,
-                default_r: row.get(11)?,
-                default_front: row.get(12)?,
-                default_up: row.get(13)?,
-                default_left: row.get(14)?,
-                default_flip: row.get(15)?,
-                default_turn4: row.get(16)?,
-                default_turn5: row.get(17)?,
-                default_turn6: row.get(18)?,
-                default_cartesian_jog_speed: row.get(19)?,
-                default_cartesian_jog_step: row.get(20)?,
-                default_joint_jog_speed: row.get(21)?,
-                default_joint_jog_step: row.get(22)?,
-                created_at: row.get(23)?,
-                updated_at: row.get(24)?,
+                default_speed_type: row.get(6)?,
+                default_term_type: row.get(7)?,
+                default_w: row.get(8)?,
+                default_p: row.get(9)?,
+                default_r: row.get(10)?,
+                default_cartesian_jog_speed: row.get(11)?,
+                default_cartesian_jog_step: row.get(12)?,
+                default_joint_jog_speed: row.get(13)?,
+                default_joint_jog_step: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
             }))
         } else {
             Ok(None)
@@ -700,23 +695,15 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, ip_address, port,
                     COALESCE(default_speed, 100.0),
+                    COALESCE(default_speed_type, 'mmSec'),
                     COALESCE(default_term_type, 'CNT'),
-                    COALESCE(default_uframe, 0),
-                    COALESCE(default_utool, 0),
                     COALESCE(default_w, 0.0),
                     COALESCE(default_p, 0.0),
                     COALESCE(default_r, 0.0),
-                    COALESCE(default_front, 1),
-                    COALESCE(default_up, 1),
-                    COALESCE(default_left, 0),
-                    COALESCE(default_flip, 0),
-                    COALESCE(default_turn4, 0),
-                    COALESCE(default_turn5, 0),
-                    COALESCE(default_turn6, 0),
-                    COALESCE(default_cartesian_jog_speed, 50.0),
-                    COALESCE(default_cartesian_jog_step, 10.0),
-                    COALESCE(default_joint_jog_speed, 10.0),
-                    COALESCE(default_joint_jog_step, 1.0),
+                    COALESCE(default_cartesian_jog_speed, 10.0),
+                    COALESCE(default_cartesian_jog_step, 1.0),
+                    COALESCE(default_joint_jog_speed, 0.1),
+                    COALESCE(default_joint_jog_step, 0.25),
                     created_at, updated_at
              FROM robot_connections ORDER BY name"
         )?;
@@ -729,25 +716,17 @@ impl Database {
                 ip_address: row.get(3)?,
                 port: row.get::<_, i64>(4)? as u32,
                 default_speed: row.get(5)?,
-                default_term_type: row.get(6)?,
-                default_uframe: row.get(7)?,
-                default_utool: row.get(8)?,
-                default_w: row.get(9)?,
-                default_p: row.get(10)?,
-                default_r: row.get(11)?,
-                default_front: row.get(12)?,
-                default_up: row.get(13)?,
-                default_left: row.get(14)?,
-                default_flip: row.get(15)?,
-                default_turn4: row.get(16)?,
-                default_turn5: row.get(17)?,
-                default_turn6: row.get(18)?,
-                default_cartesian_jog_speed: row.get(19)?,
-                default_cartesian_jog_step: row.get(20)?,
-                default_joint_jog_speed: row.get(21)?,
-                default_joint_jog_step: row.get(22)?,
-                created_at: row.get(23)?,
-                updated_at: row.get(24)?,
+                default_speed_type: row.get(6)?,
+                default_term_type: row.get(7)?,
+                default_w: row.get(8)?,
+                default_p: row.get(9)?,
+                default_r: row.get(10)?,
+                default_cartesian_jog_speed: row.get(11)?,
+                default_cartesian_jog_step: row.get(12)?,
+                default_joint_jog_speed: row.get(13)?,
+                default_joint_jog_step: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
             })
         })?;
 
@@ -765,42 +744,26 @@ impl Database {
         Ok(())
     }
 
-    /// Update robot connection defaults.
-    /// All parameters are required (non-optional) - each robot has explicit settings.
-    #[allow(clippy::too_many_arguments)]
+    /// Update robot connection motion defaults.
+    /// Motion parameters (speed, speed_type, term_type, w/p/r) only.
+    /// Frame/tool/arm config is managed via robot_configurations table.
     pub fn update_robot_connection_defaults(
         &self,
         id: i64,
         default_speed: f64,
+        default_speed_type: &str,
         default_term_type: &str,
-        default_uframe: i32,
-        default_utool: i32,
         default_w: f64,
         default_p: f64,
         default_r: f64,
-        default_front: i32,
-        default_up: i32,
-        default_left: i32,
-        default_flip: i32,
-        default_turn4: i32,
-        default_turn5: i32,
-        default_turn6: i32,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE robot_connections SET
-                default_speed = ?1, default_term_type = ?2, default_uframe = ?3, default_utool = ?4,
-                default_w = ?5, default_p = ?6, default_r = ?7,
-                default_front = ?8, default_up = ?9, default_left = ?10, default_flip = ?11,
-                default_turn4 = ?12, default_turn5 = ?13, default_turn6 = ?14,
+                default_speed = ?1, default_speed_type = ?2, default_term_type = ?3,
+                default_w = ?4, default_p = ?5, default_r = ?6,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?15",
-            params![
-                default_speed, default_term_type, default_uframe, default_utool,
-                default_w, default_p, default_r,
-                default_front, default_up, default_left, default_flip,
-                default_turn4, default_turn5, default_turn6,
-                id
-            ],
+             WHERE id = ?7",
+            params![default_speed, default_speed_type, default_term_type, default_w, default_p, default_r, id],
         )?;
         Ok(())
     }

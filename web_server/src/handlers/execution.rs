@@ -236,10 +236,10 @@ pub async fn load_program(
         None => return ServerResponse::Error { message: "Executor not available".to_string() }
     };
 
-    // Get robot connection defaults if available
-    let robot_defaults = if let Some(ref conn) = robot_connection {
+    // Get active configuration if available
+    let active_config = if let Some(ref conn) = robot_connection {
         let conn_guard = conn.read().await;
-        conn_guard.saved_connection.clone()
+        Some(conn_guard.active_configuration.clone())
     } else {
         None
     };
@@ -248,7 +248,7 @@ pub async fn load_program(
     let state_response = {
         let db_guard = db.lock().await;
         let mut exec_guard = executor.lock().await;
-        if let Err(e) = exec_guard.load_program(&db_guard, program_id, robot_defaults.as_ref()) {
+        if let Err(e) = exec_guard.load_program(&db_guard, program_id, active_config.as_ref()) {
             return ServerResponse::Error { message: format!("Failed to load program: {}", e) };
         }
         execution_state_to_response(&exec_guard.get_state())
@@ -326,10 +326,10 @@ pub async fn start_program(
         None => return ServerResponse::Error { message: "Executor not available".to_string() }
     };
 
-    // Get robot connection defaults if available
-    let robot_defaults = if let Some(ref conn) = robot_connection {
+    // Get active configuration if available
+    let active_config = if let Some(ref conn) = robot_connection {
         let conn_guard = conn.read().await;
-        conn_guard.saved_connection.clone()
+        Some(conn_guard.active_configuration.clone())
     } else {
         None
     };
@@ -338,7 +338,7 @@ pub async fn start_program(
     let (total_instructions, state_response) = {
         let db_guard = db.lock().await;
         let mut exec_guard = executor.lock().await;
-        if let Err(e) = exec_guard.load_program(&db_guard, program_id, robot_defaults.as_ref()) {
+        if let Err(e) = exec_guard.load_program(&db_guard, program_id, active_config.as_ref()) {
             return ServerResponse::Error { message: format!("Failed to load program: {}", e) };
         }
         exec_guard.start(); // Transitions from Loaded to Running

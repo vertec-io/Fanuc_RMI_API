@@ -6,11 +6,25 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc, RwLock};
 use tokio::time::Duration;
+use fanuc_rmi::{
+    commands::*,
+    packets::{CommandResponse, CommunicationResponse, InstructionResponse, FrcConnectResponse, FrcDisconnectResponse},
+    instructions::{FrcLinearMotion, FrcLinearMotionResponse, FrcLinearRelative, FrcLinearRelativeResponse, FrcJointMotion, FrcJointMotionResponse},
+    FrameData, Configuration, Position, JointAngles,
+};
 
 mod kinematics;
 mod robot_config;
 
 use kinematics::CRXKinematics;
+
+/// Helper to serialize a CommandResponse to JSON
+fn serialize_response(response: CommandResponse) -> serde_json::Value {
+    serde_json::to_value(&response).unwrap_or_else(|e| {
+        eprintln!("Failed to serialize response: {}", e);
+        json!({"ErrorID": 9999})
+    })
+}
 
 /// Simulator execution mode
 #[derive(Clone, Debug, PartialEq)]
@@ -101,16 +115,7 @@ impl MotionExecutorControl {
     }
 }
 
-/// Frame/Tool coordinate data (X, Y, Z, W, P, R)
-#[derive(Clone, Debug, Default)]
-struct FrameToolData {
-    x: f64,
-    y: f64,
-    z: f64,
-    w: f64,
-    p: f64,
-    r: f64,
-}
+
 
 /// Error code for invalid sequence ID (from FANUC RMI documentation)
 const ERROR_INVALID_SEQUENCE_ID: u32 = 2556957;
@@ -128,8 +133,8 @@ struct RobotState {
     // Frame/Tool state
     active_uframe: u8,
     active_utool: u8,
-    uframes: [FrameToolData; 10],
-    utools: [FrameToolData; 10],
+    uframes: [FrameData; 10],
+    utools: [FrameData; 10],
     // I/O state
     din: [bool; 256],  // Digital inputs (simulated)
     dout: [bool; 256], // Digital outputs
@@ -179,8 +184,30 @@ impl RobotState {
             // Initialize Frame/Tool state
             active_uframe: 0,
             active_utool: 0,
-            uframes: Default::default(),
-            utools: Default::default(),
+            uframes: [
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+            ],
+            utools: [
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+                FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 },
+            ],
             // Initialize I/O state
             din: [false; 256],
             dout: [false; 256],
@@ -195,14 +222,6 @@ impl RobotState {
         (distance_mm / speed_mm_per_sec).max(0.01) // At least 10ms
     }
 }
-
-// #[derive(Serialize, Deserialize, Debug)]
-// struct ConnectResponse {
-//     Communication: String,
-//     PortNumber: Option<u16>,
-//     MajorVersion: Option<u16>,
-//     MinorVersion: Option<u16>,
-// }
 
 async fn handle_client(
     mut socket: TcpStream,
@@ -233,17 +252,21 @@ async fn handle_client(
             };
             println!("✓ Client connected, assigned port {}", port);
 
-            json!({
-                "Communication": "FRC_Connect",
-                "ErrorID": 1,
-                "PortNumber": port,
-                "MajorVersion": 1,
-                "MinorVersion": 0,
+            let response = CommunicationResponse::FrcConnect(FrcConnectResponse {
+                error_id: 1,
+                port_number: port as u32,
+                major_version: 1,
+                minor_version: 0,
+            });
+            serde_json::to_value(&response).unwrap_or_else(|e| {
+                eprintln!("Failed to serialize FRC_Connect response: {}", e);
+                serde_json::json!({"Communication": "FRC_Connect", "ErrorID": 1, "PortNumber": port, "MajorVersion": 1, "MinorVersion": 0})
             })
         }
-        _ => json!({
-            "Error": "Unknown command"
-        }),
+        _ => {
+            eprintln!("Unknown communication command in handshake");
+            serde_json::json!({"Error": "Unknown command"})
+        }
     };
 
     let response = serde_json::to_string(&response_json)? + "\r\n";
@@ -522,6 +545,9 @@ async fn handle_secondary_client(
                     let mut response_json = match request_json["Command"].as_str() {
                         Some("FRC_Initialize") => {
                             println!("📋 FRC_Initialize");
+                            let cmd: FrcInitialize = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcInitialize { group_mask: 1 });
+
                             // Reset sequence tracking on initialize
                             {
                                 let mut state = robot_state.lock().await;
@@ -529,11 +555,11 @@ async fn handle_secondary_client(
                                 state.expected_next_sequence_id = 1;
                                 eprintln!("🔄 Sequence counter reset: expected_next=1");
                             }
-                            json!({
-                                "Command": "FRC_Initialize",
-                                "ErrorID": 0,
-                                "GroupMask": 1
-                            })
+                            let response = CommandResponse::FrcInitialize(FrcInitializeResponse {
+                                error_id: 0,
+                                group_mask: cmd.group_mask as u16,
+                            });
+                            serialize_response(response)
                         }
                         Some("FRC_GetStatus") => {
                             let state = robot_state.lock().await;
@@ -541,255 +567,316 @@ async fn handle_secondary_client(
                             let next_seq = state.expected_next_sequence_id;
                             let override_val = executor_control.get_speed_override();
                             let paused = if executor_control.is_paused() { 1 } else { 0 };
-                            json!({
-                                "Command": "FRC_GetStatus",
-                                "ErrorID": 0,
-                                "ServoReady": 1,
-                                "TPMode": 1,
-                                "RMIMotionStatus": paused, // 0=running, 1=paused
-                                "ProgramStatus": 0,
-                                "SingleStepMode": 0,
-                                "NumberUTool": 5,
-                                "NextSequenceID": next_seq,
-                                "NumberUFrame": 0,
-                                "Override": override_val
-                            })
+                            let response = CommandResponse::FrcGetStatus(FrcGetStatusResponse {
+                                error_id: 0,
+                                servo_ready: 1,
+                                tp_mode: 1,
+                                rmi_motion_status: paused, // 0=running, 1=paused
+                                program_status: 0,
+                                single_step_mode: 0,
+                                number_utool: 10,
+                                number_uframe: 9,
+                                next_sequence_id: next_seq,
+                                override_value: override_val as u32,
+                            });
+                            serialize_response(response)
                         },
                         Some("FRC_ReadJointAngles") => {
+                            let cmd: FrcReadJointAngles = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcReadJointAngles { group: 1 });
                             let state = robot_state.lock().await;
-                            json!({
-                                "Command": "FRC_ReadJointAngles",
-                                "ErrorID": 0,
-                                "TimeTag": 0,
-                                "JointAngles": {
-                                    "J1": state.joint_angles[0],
-                                    "J2": state.joint_angles[1],
-                                    "J3": state.joint_angles[2],
-                                    "J4": state.joint_angles[3],
-                                    "J5": state.joint_angles[4],
-                                    "J6": state.joint_angles[5],
+                            let response = CommandResponse::FrcReadJointAngles(FrcReadJointAnglesResponse {
+                                error_id: 0,
+                                time_tag: 0,
+                                joint_angles: JointAngles {
+                                    j1: state.joint_angles[0],
+                                    j2: state.joint_angles[1],
+                                    j3: state.joint_angles[2],
+                                    j4: state.joint_angles[3],
+                                    j5: state.joint_angles[4],
+                                    j6: state.joint_angles[5],
+                                    j7: 0.0,
+                                    j8: 0.0,
+                                    j9: 0.0,
                                 },
-                                "Group": 1
-                            })
+                                group: cmd.group,
+                            });
+                            serialize_response(response)
                         },
                         Some("FRC_ReadCartesianPosition") => {
+                            let cmd: FrcReadCartesianPosition = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcReadCartesianPosition { group: 1 });
                             let state = robot_state.lock().await;
-                            json!({
-                                "Command": "FRC_ReadCartesianPosition",
-                                "ErrorID": 0,
-                                "TimeTag": 0,
-                                "Configuration": {
-                                    "UToolNumber": 1,
-                                    "UFrameNumber": 1,
-                                    "Front": 1,
-                                    "Up": 1,
-                                    "Left": 1,
-                                    "Flip": 0,
-                                    "Turn4": 0,
-                                    "Turn5": 0,
-                                    "Turn6": 0,
+                            let response = CommandResponse::FrcReadCartesianPosition(FrcReadCartesianPositionResponse {
+                                error_id: 0,
+                                time_tag: 0,
+                                config: Configuration {
+                                    u_tool_number: state.active_utool as i8,
+                                    u_frame_number: state.active_uframe as i8,
+                                    front: 1,
+                                    up: 1,
+                                    left: 1,
+                                    flip: 0,
+                                    turn4: 0,
+                                    turn5: 0,
+                                    turn6: 0,
                                 },
-                                "Position": {
-                                    "X": state.cartesian_position[0],
-                                    "Y": state.cartesian_position[1],
-                                    "Z": state.cartesian_position[2],
-                                    "W": state.cartesian_orientation[0],
-                                    "P": state.cartesian_orientation[1],
-                                    "R": state.cartesian_orientation[2],
+                                pos: Position {
+                                    x: state.cartesian_position[0] as f64,
+                                    y: state.cartesian_position[1] as f64,
+                                    z: state.cartesian_position[2] as f64,
+                                    w: state.cartesian_orientation[0] as f64,
+                                    p: state.cartesian_orientation[1] as f64,
+                                    r: state.cartesian_orientation[2] as f64,
+                                    ext1: 0.0,
+                                    ext2: 0.0,
+                                    ext3: 0.0,
                                 },
-                                "Group": 1
-                            })
+                                group: cmd.group,
+                            });
+                            serialize_response(response)
                         },
-                        Some("FRC_LinearMotion") => json!({
-                            "Status": "Motion started"
-                        }),
                         Some("FRC_Abort") => {
                             println!("🛑 FRC_Abort - signaling motion executor to abort immediately");
                             executor_control.request_abort();
                             // Also unpause if paused, so abort takes effect
                             executor_control.unpause();
-                            json!({
-                                "Command": "FRC_Abort",
-                                "ErrorID": 0,
-                            })
+                            let response = CommandResponse::FrcAbort(FrcAbortResponse {
+                                error_id: 0,
+                            });
+                            serialize_response(response)
                         }
                         Some("FRC_Pause") => {
                             println!("⏸️ FRC_Pause - pausing motion executor");
                             executor_control.pause();
-                            json!({
-                                "Command": "FRC_Pause",
-                                "ErrorID": 0,
-                            })
+                            let response = CommandResponse::FrcPause(FrcPauseResponse {
+                                error_id: 0,
+                            });
+                            serialize_response(response)
                         }
                         Some("FRC_Continue") => {
                             println!("▶️ FRC_Continue - resuming motion executor");
                             executor_control.unpause();
-                            json!({
-                                "Command": "FRC_Continue",
-                                "ErrorID": 0,
-                            })
+                            let response = CommandResponse::FrcContinue(FrcContinueResponse {
+                                error_id: 0,
+                            });
+                            serialize_response(response)
                         }
                         Some("FRC_Reset") => {
                             println!("🔄 FRC_Reset");
                             // Reset also clears abort/pause state
                             executor_control.clear_abort();
                             executor_control.unpause();
-                            json!({
-                                "Command": "FRC_Reset",
-                                "ErrorID": 0,
-                            })
+                            let response = CommandResponse::FrcReset(FrcResetResponse {
+                                error_id: 0,
+                            });
+                            serialize_response(response)
                         }
                         Some("FRC_SetOverRide") => {
-                            // The struct uses "Value" field (serde rename)
-                            let override_val = request_json["Value"].as_u64().unwrap_or(100) as u8;
-                            executor_control.set_speed_override(override_val);
-                            println!("⚡ FRC_SetOverRide: {}%", override_val);
-                            json!({
-                                "Command": "FRC_SetOverRide",
-                                "ErrorID": 0,
-                            })
+                            let cmd: FrcSetOverRide = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcSetOverRide { value: 100 });
+                            executor_control.set_speed_override(cmd.value);
+                            println!("⚡ FRC_SetOverRide: {}%", cmd.value);
+                            let response = CommandResponse::FrcSetOverRide(FrcSetOverRideResponse {
+                                error_id: 0,
+                            });
+                            serialize_response(response)
                         }
                         Some("FRC_GetUFrameUTool") => {
+                            let cmd: FrcGetUFrameUTool = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcGetUFrameUTool { group: 1 });
                             let state = robot_state.lock().await;
-                            json!({
-                                "Command": "FRC_GetUFrameUTool",
-                                "ErrorID": 0,
-                                "UFrameNumber": state.active_uframe,
-                                "UToolNumber": state.active_utool,
-                                "Group": 1
-                            })
+                            let response = CommandResponse::FrcGetUFrameUTool(FrcGetUFrameUToolResponse {
+                                error_id: 0,
+                                u_frame_number: state.active_uframe,
+                                u_tool_number: state.active_utool,
+                                group: cmd.group as u16,
+                            });
+                            serialize_response(response)
                         }
                         Some("FRC_SetUFrameUTool") => {
+                            let cmd: FrcSetUFrameUTool = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcSetUFrameUTool { u_frame_number: 0, u_tool_number: 0, group: 1 });
                             let mut state = robot_state.lock().await;
-                            let uframe = request_json["UFrameNumber"].as_u64().unwrap_or(0) as u8;
-                            let utool = request_json["UToolNumber"].as_u64().unwrap_or(0) as u8;
-                            state.active_uframe = uframe;
-                            state.active_utool = utool;
-                            println!("🔧 FRC_SetUFrameUTool: UFrame={}, UTool={}", uframe, utool);
-                            json!({
-                                "Command": "FRC_SetUFrameUTool",
-                                "ErrorID": 0,
-                                "Group": 1
-                            })
+                            state.active_uframe = cmd.u_frame_number;
+                            state.active_utool = cmd.u_tool_number;
+                            println!("🔧 FRC_SetUFrameUTool: UFrame={}, UTool={}", cmd.u_frame_number, cmd.u_tool_number);
+                            let response = CommandResponse::FrcSetUFrameUTool(FrcSetUFrameUToolResponse {
+                                error_id: 0,
+                                group: cmd.group as u16,
+                            });
+                            serialize_response(response)
                         }
                         Some("FRC_ReadUFrameData") => {
-                            let state = robot_state.lock().await;
-                            // Request uses "FrameNumber", response uses "UFrameNumber"
-                            let frame_num = request_json["FrameNumber"].as_u64().unwrap_or(0) as usize;
-                            let frame = state.uframes.get(frame_num).cloned().unwrap_or_default();
-                            json!({
-                                "Command": "FRC_ReadUFrameData",
-                                "ErrorID": 0,
-                                "UFrameNumber": frame_num,
-                                "Group": 1,
-                                "Frame": {
-                                    "x": frame.x,
-                                    "y": frame.y,
-                                    "z": frame.z,
-                                    "w": frame.w,
-                                    "p": frame.p,
-                                    "r": frame.r
-                                }
-                            })
+                            // Deserialize the command properly
+                            let cmd: FrcReadUFrameData = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcReadUFrameData { frame_number: 0, group: 1 });
+
+                            // REAL ROBOT BEHAVIOR:
+                            // - Frame 0 (world frame) CANNOT be read - robot never responds (timeout)
+                            // - Frames 1-9 can be read successfully
+                            // - Frame 10+ don't exist (would return error on real robot)
+                            //
+                            // We simulate the timeout by simply not sending a response for frame 0
+                            if cmd.frame_number == 0 {
+                                eprintln!("⚠️ FRC_ReadUFrameData: Frame 0 requested - simulating timeout (real robot behavior)");
+                                // Don't send any response - this will cause a timeout on the client
+                                serde_json::json!({})  // Return empty to skip response
+                            } else {
+                                let state = robot_state.lock().await;
+                                let frame_num = cmd.frame_number as usize;
+                                let frame = state.uframes.get(frame_num).cloned().unwrap_or(FrameData {
+                                    x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0
+                                });
+
+                                let response = CommandResponse::FrcReadUFrameData(FrcReadUFrameDataResponse {
+                                    error_id: 0,
+                                    frame_number: cmd.frame_number,
+                                    group: cmd.group,
+                                    frame: FrameData {
+                                        x: frame.x,
+                                        y: frame.y,
+                                        z: frame.z,
+                                        w: frame.w,
+                                        p: frame.p,
+                                        r: frame.r,
+                                    },
+                                });
+                                serialize_response(response)
+                            }
                         }
                         Some("FRC_ReadUToolData") => {
-                            let state = robot_state.lock().await;
-                            // Request uses "FrameNumber", response uses "UToolNumber"
-                            let tool_num = request_json["FrameNumber"].as_u64().unwrap_or(0) as usize;
-                            let tool = state.utools.get(tool_num).cloned().unwrap_or_default();
-                            json!({
-                                "Command": "FRC_ReadUToolData",
-                                "ErrorID": 0,
-                                "UToolNumber": tool_num,
-                                "Group": 1,
-                                "Frame": {
-                                    "x": tool.x,
-                                    "y": tool.y,
-                                    "z": tool.z,
-                                    "w": tool.w,
-                                    "p": tool.p,
-                                    "r": tool.r
-                                }
-                            })
+                            // Deserialize the command properly
+                            let cmd: FrcReadUToolData = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcReadUToolData { tool_number: 0, group: 1 });
+
+                            // REAL ROBOT BEHAVIOR:
+                            // - Tool 0 does NOT exist - returns Unknown error 2556950
+                            // - Tools 1-10 are valid and can be read
+                            // - Tool 11+ don't exist (would return error on real robot)
+                            if cmd.tool_number == 0 {
+                                eprintln!("⚠️ FRC_ReadUToolData: Tool 0 requested - returning Unknown error (real robot behavior)");
+                                let response = CommandResponse::Unknown(FrcUnknownResponse {
+                                    error_id: 2556950,  // Same error as real robot
+                                });
+                                serialize_response(response)
+                            } else {
+                                let state = robot_state.lock().await;
+                                let tool_num = cmd.tool_number as usize;
+                                let tool = state.utools.get(tool_num).cloned().unwrap_or(FrameData {
+                                    x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0
+                                });
+
+                                let response = CommandResponse::FrcReadUToolData(FrcReadUToolDataResponse {
+                                    error_id: 0,
+                                    tool_number: cmd.tool_number as u8,
+                                    group: cmd.group,
+                                    frame: FrameData {
+                                        x: tool.x,
+                                        y: tool.y,
+                                        z: tool.z,
+                                        w: tool.w,
+                                        p: tool.p,
+                                        r: tool.r,
+                                    },
+                                });
+                                serialize_response(response)
+                            }
                         }
                         Some("FRC_WriteUFrameData") => {
+                            let cmd: FrcWriteUFrameData = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcWriteUFrameData {
+                                    frame_number: 0,
+                                    group: 1,
+                                    frame: FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 }
+                                });
                             let mut state = robot_state.lock().await;
-                            let frame_num = request_json["FrameNumber"].as_u64().unwrap_or(0) as usize;
+                            let frame_num = cmd.frame_number as usize;
                             if frame_num < 10 {
-                                if let Some(frame_obj) = request_json.get("Frame") {
-                                    state.uframes[frame_num] = FrameToolData {
-                                        x: frame_obj["x"].as_f64().unwrap_or(0.0),
-                                        y: frame_obj["y"].as_f64().unwrap_or(0.0),
-                                        z: frame_obj["z"].as_f64().unwrap_or(0.0),
-                                        w: frame_obj["w"].as_f64().unwrap_or(0.0),
-                                        p: frame_obj["p"].as_f64().unwrap_or(0.0),
-                                        r: frame_obj["r"].as_f64().unwrap_or(0.0),
-                                    };
-                                    println!("📝 FRC_WriteUFrameData: UFrame {} updated", frame_num);
-                                }
+                                state.uframes[frame_num] = FrameData {
+                                    x: cmd.frame.x,
+                                    y: cmd.frame.y,
+                                    z: cmd.frame.z,
+                                    w: cmd.frame.w,
+                                    p: cmd.frame.p,
+                                    r: cmd.frame.r,
+                                };
+                                println!("📝 FRC_WriteUFrameData: UFrame {} updated", frame_num);
                             }
-                            json!({
-                                "Command": "FRC_WriteUFrameData",
-                                "ErrorID": 0,
-                                "Group": 1
-                            })
+                            let response = CommandResponse::FrcWriteUFrameData(FrcWriteUFrameDataResponse {
+                                error_id: 0,
+                                group: cmd.group,
+                            });
+                            serialize_response(response)
                         }
                         Some("FRC_WriteUToolData") => {
+                            let cmd: FrcWriteUToolData = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcWriteUToolData {
+                                    tool_number: 0,
+                                    group: 1,
+                                    frame: FrameData { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0 }
+                                });
                             let mut state = robot_state.lock().await;
-                            let tool_num = request_json["ToolNumber"].as_u64().unwrap_or(0) as usize;
+                            let tool_num = cmd.tool_number as usize;
                             if tool_num < 10 {
-                                if let Some(frame_obj) = request_json.get("Frame") {
-                                    state.utools[tool_num] = FrameToolData {
-                                        x: frame_obj["x"].as_f64().unwrap_or(0.0),
-                                        y: frame_obj["y"].as_f64().unwrap_or(0.0),
-                                        z: frame_obj["z"].as_f64().unwrap_or(0.0),
-                                        w: frame_obj["w"].as_f64().unwrap_or(0.0),
-                                        p: frame_obj["p"].as_f64().unwrap_or(0.0),
-                                        r: frame_obj["r"].as_f64().unwrap_or(0.0),
-                                    };
-                                    println!("📝 FRC_WriteUToolData: UTool {} updated", tool_num);
-                                }
+                                state.utools[tool_num] = FrameData {
+                                    x: cmd.frame.x,
+                                    y: cmd.frame.y,
+                                    z: cmd.frame.z,
+                                    w: cmd.frame.w,
+                                    p: cmd.frame.p,
+                                    r: cmd.frame.r,
+                                };
+                                println!("📝 FRC_WriteUToolData: UTool {} updated", tool_num);
                             }
-                            json!({
-                                "Command": "FRC_WriteUToolData",
-                                "ErrorID": 0,
-                                "Group": 1
-                            })
+                            let response = CommandResponse::FrcWriteUToolData(cmd);
+                            serialize_response(response)
                         }
                         Some("FRC_ReadDIN") => {
+                            let cmd: FrcReadDIN = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcReadDIN { port_number: 0 });
                             let state = robot_state.lock().await;
-                            let port_num = request_json["PortNumber"].as_u64().unwrap_or(0) as usize;
+                            let port_num = cmd.port_number as usize;
                             let port_value = if port_num < 256 { state.din[port_num] } else { false };
                             println!("📥 FRC_ReadDIN: Port {} = {}", port_num, if port_value { "ON" } else { "OFF" });
-                            json!({
-                                "Command": "FRC_ReadDIN",
-                                "ErrorID": 0,
-                                "PortNumber": port_num,
-                                "PortValue": if port_value { 1 } else { 0 }
-                            })
+                            let response = CommandResponse::FrcReadDIN(FrcReadDINResponse {
+                                error_id: 0,
+                                port_number: cmd.port_number,
+                                port_value: if port_value { 1 } else { 0 },
+                            });
+                            serialize_response(response)
                         }
                         Some("FRC_WriteDOUT") => {
+                            let cmd: FrcWriteDOUT = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcWriteDOUT { port_number: 0, port_value: 0 });
                             let mut state = robot_state.lock().await;
-                            let port_num = request_json["PortNumber"].as_u64().unwrap_or(0) as usize;
-                            let port_value = request_json["PortValue"].as_u64().unwrap_or(0) != 0;
+                            let port_num = cmd.port_number as usize;
+                            let port_value = cmd.port_value != 0;
                             if port_num < 256 {
                                 state.dout[port_num] = port_value;
                             }
                             println!("📤 FRC_WriteDOUT: Port {} = {}", port_num, if port_value { "ON" } else { "OFF" });
-                            json!({
-                                "Command": "FRC_WriteDOUT",
-                                "ErrorID": 0
-                            })
+                            let response = CommandResponse::FrcWriteDOUT(FrcWriteDOUTResponse {
+                                error_id: 0,
+                            });
+                            serialize_response(response)
                         }
-                        _ => json!({}),
+                        _ => {
+                            // Unknown command - return empty JSON object
+                            // This is intentionally minimal to avoid breaking protocol
+                            serde_json::json!({})
+                        }
                     };
 
                     response_json = match request_json["Communication"].as_str() {
                         Some("FRC_Disconnect") => {
                             println!("👋 FRC_Disconnect\n");
-                            json!({
-                                "Communication": "FRC_Disconnect",
-                                "ErrorID": 0,
+                            let response = CommunicationResponse::FrcDisconnect(FrcDisconnectResponse {
+                                error_id: 0,
+                            });
+                            serde_json::to_value(&response).unwrap_or_else(|e| {
+                                eprintln!("Failed to serialize FRC_Disconnect response: {}", e);
+                                json!({"Communication": "FRC_Disconnect", "ErrorID": 0})
                             })
                         }
                         _ => response_json,
@@ -812,13 +899,17 @@ async fn handle_secondary_client(
 
                         if seq != expected {
                             eprintln!("❌ Sequence ID mismatch: received {} but expected {}", seq, expected);
-                            let instruction_name = request_json["Instruction"].as_str().unwrap_or("Unknown");
-                            let error_response = json!({
-                                "Instruction": instruction_name,
-                                "ErrorID": ERROR_INVALID_SEQUENCE_ID,
-                                "SequenceID": seq,
+                            // Return a generic error response for invalid sequence ID
+                            // We use FrcLinearMotionResponse as a generic instruction error response
+                            let error_response = InstructionResponse::FrcLinearMotion(FrcLinearMotionResponse {
+                                error_id: ERROR_INVALID_SEQUENCE_ID,
+                                sequence_id: seq,
                             });
-                            let response = serde_json::to_string(&error_response)? + "\r\n";
+                            let error_json = serde_json::to_value(&error_response).unwrap_or_else(|e| {
+                                eprintln!("Failed to serialize error response: {}", e);
+                                serde_json::json!({"Instruction": "FRC_LinearMotion", "ErrorID": ERROR_INVALID_SEQUENCE_ID, "SequenceID": seq})
+                            });
+                            let response = serde_json::to_string(&error_json)? + "\r\n";
                             socket.write_all(response.as_bytes()).await?;
                             continue; // Skip processing this instruction
                         }
@@ -875,10 +966,13 @@ async fn handle_secondary_client(
                                 }
                             }
 
-                            json!({
-                                "Instruction": "FRC_LinearMotion",
-                                "ErrorID": 0,
-                                "SequenceID": seq,
+                            let response = InstructionResponse::FrcLinearMotion(FrcLinearMotionResponse {
+                                error_id: 0,
+                                sequence_id: seq,
+                            });
+                            serde_json::to_value(&response).unwrap_or_else(|e| {
+                                eprintln!("Failed to serialize FRC_LinearMotion response: {}", e);
+                                serde_json::json!({"Instruction": "FRC_LinearMotion", "ErrorID": 0, "SequenceID": seq})
                             })
                         }
                         Some("FRC_LinearRelative") => {
@@ -924,10 +1018,13 @@ async fn handle_secondary_client(
                                 }
                             }
 
-                            json!({
-                                "Instruction": "FRC_LinearRelative",
-                                "ErrorID": 0,
-                                "SequenceID": seq
+                            let response = InstructionResponse::FrcLinearRelative(FrcLinearRelativeResponse {
+                                error_id: 0,
+                                sequence_id: seq,
+                            });
+                            serde_json::to_value(&response).unwrap_or_else(|e| {
+                                eprintln!("Failed to serialize FRC_LinearRelative response: {}", e);
+                                serde_json::json!({"Instruction": "FRC_LinearRelative", "ErrorID": 0, "SequenceID": seq})
                             })
                         }
                         _ => response_json,
@@ -940,11 +1037,31 @@ async fn handle_secondary_client(
             // Check for motion responses to send back
             Some(motion_response) = response_rx.recv() => {
                 eprintln!("📨 Received response from channel: seq_id={}", motion_response.seq_id);
-                let response_json = json!({
-                    "Instruction": motion_response.instruction_type,
-                    "ErrorID": 0,
-                    "SequenceID": motion_response.seq_id,
+
+                // Create the appropriate InstructionResponse based on instruction type
+                let response_enum = match motion_response.instruction_type.as_str() {
+                    "FRC_LinearMotion" => InstructionResponse::FrcLinearMotion(FrcLinearMotionResponse {
+                        error_id: 0,
+                        sequence_id: motion_response.seq_id,
+                    }),
+                    "FRC_LinearRelative" => InstructionResponse::FrcLinearRelative(FrcLinearRelativeResponse {
+                        error_id: 0,
+                        sequence_id: motion_response.seq_id,
+                    }),
+                    _ => {
+                        eprintln!("⚠️ Unknown instruction type: {}", motion_response.instruction_type);
+                        InstructionResponse::FrcLinearMotion(FrcLinearMotionResponse {
+                            error_id: 0,
+                            sequence_id: motion_response.seq_id,
+                        })
+                    }
+                };
+
+                let response_json = serde_json::to_value(&response_enum).unwrap_or_else(|e| {
+                    eprintln!("Failed to serialize motion response: {}", e);
+                    serde_json::json!({"Instruction": motion_response.instruction_type, "ErrorID": 0, "SequenceID": motion_response.seq_id})
                 });
+
                 let response = serde_json::to_string(&response_json)? + "\r\n";
                 eprintln!("📬 Sending to client: {}", response.trim());
                 socket.write_all(response.as_bytes()).await?;

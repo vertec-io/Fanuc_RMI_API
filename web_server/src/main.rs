@@ -92,23 +92,7 @@ impl ActiveConfiguration {
         }
     }
 
-    /// Create from robot connection defaults (when no saved config exists)
-    pub fn from_robot_defaults(conn: &database::RobotConnection) -> Self {
-        Self {
-            loaded_from_id: None,
-            loaded_from_name: Some("Robot Defaults".to_string()),
-            modified: false,
-            u_frame_number: conn.default_uframe,
-            u_tool_number: conn.default_utool,
-            front: conn.default_front,
-            up: conn.default_up,
-            left: conn.default_left,
-            flip: conn.default_flip,
-            turn4: conn.default_turn4,
-            turn5: conn.default_turn5,
-            turn6: conn.default_turn6,
-        }
-    }
+
 }
 
 /// Shared robot connection state

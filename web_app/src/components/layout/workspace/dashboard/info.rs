@@ -25,14 +25,16 @@ pub fn InfoTab() -> impl IntoView {
             ws.get_active_frame_tool();
 
             // Request all frame data (1-9)
-            // Note: Frame 0 doesn't exist on FANUC robots - frames are numbered 1-9
-            for i in 1..=10u8 {
+            // Note: Frame 0 (world frame) cannot be read - causes timeout
+            // Valid frames are 1-9 only
+            for i in 1..=9u8 {
                 ws.read_frame_data(i);
             }
 
             // Request all tool data (1-10)
-            // Note: Tool 0 doesn't exist on FANUC robots - tools are numbered 1-10
-            for i in 1..10u8 {
+            // Note: Tool 0 does not exist - returns error
+            // Valid tools are 1-10 only
+            for i in 1..=10u8 {
                 ws.read_tool_data(i);
             }
 
@@ -214,7 +216,7 @@ fn ActiveConfigurationPanel() -> impl IntoView {
                                         }
                                     }
                                 >
-                                    {(0..10).map(|i| {
+                                    {(1..=10).map(|i| {
                                         let is_selected = move || effective_utool() == i;
                                         view! {
                                             <option value={i.to_string()} selected=is_selected>
@@ -593,7 +595,7 @@ fn ToolManagementPanel() -> impl IntoView {
                 "User Tools"
             </h3>
             <div class="grid grid-cols-5 gap-0.5">
-                {(0..10).map(|i| {
+                {(1..=10).map(|i| {
                     let is_active = move || active_tool.get() == i;
                     view! {
                         <button
@@ -661,7 +663,7 @@ fn MultiFrameDisplay() -> impl IntoView {
                 </div>
             </div>
             <div class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
-                {(0u8..10).map(|i| {
+                {(1u8..=9).map(|i| {
                     let is_expanded = move || expand_all.get() || expanded.get() == i as i32;
                     view! {
                         <div class="border border-[#ffffff08] rounded overflow-hidden">
@@ -774,7 +776,7 @@ fn MultiToolDisplay() -> impl IntoView {
                 </div>
             </div>
             <div class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
-                {(0u8..10).map(|i| {
+                {(1u8..=10).map(|i| {
                     let is_expanded = move || expand_all.get() || expanded.get() == i as i32;
                     view! {
                         <div class="border border-[#ffffff08] rounded overflow-hidden">

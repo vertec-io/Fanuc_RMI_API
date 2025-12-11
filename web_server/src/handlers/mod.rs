@@ -207,20 +207,42 @@ pub async fn handle_request(
         ClientRequest::CreateRobotConnection { name, description, ip_address, port } => {
             robot_connections::create_robot_connection(db, &name, description.as_deref(), &ip_address, port).await
         }
+        ClientRequest::CreateRobotWithConfigurations {
+            name, description, ip_address, port,
+            default_speed, default_speed_type, default_term_type, default_w, default_p, default_r,
+            default_cartesian_jog_speed, default_cartesian_jog_step,
+            default_joint_jog_speed, default_joint_jog_step,
+            configurations,
+        } => {
+            robot_connections::create_robot_with_configurations(
+                db,
+                &name,
+                description.as_deref(),
+                &ip_address,
+                port,
+                default_speed,
+                &default_speed_type,
+                &default_term_type,
+                default_w,
+                default_p,
+                default_r,
+                default_cartesian_jog_speed,
+                default_cartesian_jog_step,
+                default_joint_jog_speed,
+                default_joint_jog_step,
+                configurations,
+            ).await
+        }
         ClientRequest::UpdateRobotConnection { id, name, description, ip_address, port } => {
             robot_connections::update_robot_connection(db, id, &name, description.as_deref(), &ip_address, port).await
         }
         ClientRequest::UpdateRobotConnectionDefaults {
-            id, default_speed, default_term_type, default_uframe, default_utool,
+            id, default_speed, default_speed_type, default_term_type,
             default_w, default_p, default_r,
-            default_front, default_up, default_left, default_flip,
-            default_turn4, default_turn5, default_turn6,
         } => {
             robot_connections::update_robot_connection_defaults(
-                db, id, default_speed, &default_term_type, default_uframe, default_utool,
+                db, id, default_speed, &default_speed_type, &default_term_type,
                 default_w, default_p, default_r,
-                default_front, default_up, default_left, default_flip,
-                default_turn4, default_turn5, default_turn6,
             ).await
         }
         ClientRequest::DeleteRobotConnection { id } => {

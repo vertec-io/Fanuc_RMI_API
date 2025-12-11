@@ -39,7 +39,7 @@ pub async fn list_robot_configurations(
 ) -> ServerResponse {
     let db = db.lock().await;
     match db.list_robot_configurations(robot_connection_id) {
-        Ok(configs) => ServerResponse::RobotConfigurations {
+        Ok(configs) => ServerResponse::RobotConfigurationList {
             configurations: configs.iter().map(to_dto).collect(),
         },
         Err(e) => ServerResponse::Error {

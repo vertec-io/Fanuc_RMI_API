@@ -88,12 +88,12 @@ impl ProgramExecutor {
     /// # Arguments
     /// * `db` - Database connection
     /// * `program_id` - ID of the program to load
-    /// * `robot_defaults` - Optional robot connection defaults for configuration (front, up, left, flip, turn4, turn5, turn6)
+    /// * `active_config` - Optional active configuration for arm configuration (front, up, left, flip, turn4, turn5, turn6)
     pub fn load_program(
         &mut self,
         db: &Database,
         program_id: i64,
-        robot_defaults: Option<&crate::database::RobotConnection>,
+        active_config: Option<&crate::ActiveConfiguration>,
     ) -> Result<(), String> {
         let program = db.get_program(program_id)
             .map_err(|e| format!("Database error: {}", e))?
@@ -106,7 +106,7 @@ impl ProgramExecutor {
             return Err("Program has no instructions".to_string());
         }
 
-        // Set defaults from program, with robot connection defaults for configuration
+        // Set defaults from program, with active configuration for arm configuration
         self.defaults = ProgramDefaults {
             w: program.default_w,
             p: program.default_p,
@@ -118,14 +118,14 @@ impl ProgramExecutor {
             term_type: program.default_term_type.clone(),
             uframe: program.default_uframe,
             utool: program.default_utool,
-            // Use robot connection defaults for configuration (all required now)
-            front: robot_defaults.map(|r| r.default_front),
-            up: robot_defaults.map(|r| r.default_up),
-            left: robot_defaults.map(|r| r.default_left),
-            flip: robot_defaults.map(|r| r.default_flip),
-            turn4: robot_defaults.map(|r| r.default_turn4),
-            turn5: robot_defaults.map(|r| r.default_turn5),
-            turn6: robot_defaults.map(|r| r.default_turn6),
+            // Use active configuration for arm configuration
+            front: active_config.map(|c| c.front),
+            up: active_config.map(|c| c.up),
+            left: active_config.map(|c| c.left),
+            flip: active_config.map(|c| c.flip),
+            turn4: active_config.map(|c| c.turn4),
+            turn5: active_config.map(|c| c.turn5),
+            turn6: active_config.map(|c| c.turn6),
         };
 
         // Build pending queue with all instructions
