@@ -123,6 +123,7 @@ pub async fn upload_csv(
         ext2: 0.0,
         ext3: 0.0,
         speed: 100.0,     // Default speed if not specified in CSV
+        speed_type: "mmSec".to_string(),  // Default speed type
         term_type: "FINE".to_string(),  // Safe default
         uframe: None,     // NULL - use active configuration at execution time
         utool: None,      // NULL - use active configuration at execution time
@@ -174,6 +175,7 @@ pub async fn upload_csv(
             ext2: instr.ext2,
             ext3: instr.ext3,
             speed: instr.speed,
+            speed_type: instr.speed_type.clone(),
             term_type: instr.term_type.clone(),
             uframe: instr.uframe,
             utool: instr.utool,

@@ -174,7 +174,7 @@ pub enum ClientRequest {
         default_r: f64,
     },
 
-    /// Update robot connection jog defaults.
+    /// Update robot connection jog defaults (saves to database).
     #[serde(rename = "update_robot_jog_defaults")]
     UpdateRobotJogDefaults {
         id: i64,
@@ -182,6 +182,31 @@ pub enum ClientRequest {
         cartesian_jog_step: f64,
         joint_jog_speed: f64,
         joint_jog_step: f64,
+    },
+
+    /// Update jog controls (from Control panel - updates active jog controls only, does NOT update defaults or increment changes_count).
+    #[serde(rename = "update_jog_controls")]
+    UpdateJogControls {
+        cartesian_jog_speed: f64,
+        cartesian_jog_step: f64,
+        joint_jog_speed: f64,
+        joint_jog_step: f64,
+    },
+
+    /// Apply jog defaults (from Configuration panel - updates active defaults AND active jog controls, increments changes_count, does NOT save to database).
+    #[serde(rename = "apply_jog_settings")]
+    ApplyJogSettings {
+        cartesian_jog_speed: f64,
+        cartesian_jog_step: f64,
+        joint_jog_speed: f64,
+        joint_jog_step: f64,
+    },
+
+    /// Save current configuration (active frame/tool/arm config + active jog settings) to database.
+    #[serde(rename = "save_current_configuration")]
+    SaveCurrentConfiguration {
+        /// Optional name for the configuration (if saving as new configuration)
+        configuration_name: Option<String>,
     },
 
     #[serde(rename = "delete_robot_connection")]
@@ -432,6 +457,7 @@ pub enum ServerResponse {
         error_type: String, // "protocol", "command", "communication"
         message: String,
         error_id: Option<i32>,
+        raw_data: Option<String>, // Raw JSON data that failed to parse (for protocol errors)
     },
 
     /// Response to robot control commands (abort, reset, initialize).
@@ -544,10 +570,11 @@ pub enum ServerResponse {
 
     /// Active configuration response
     #[serde(rename = "active_configuration")]
-    ActiveConfiguration {
+    ActiveConfigurationResponse {
         loaded_from_id: Option<i64>,
         loaded_from_name: Option<String>,
-        modified: bool,
+        changes_count: u32,
+        change_log: Vec<ChangeLogEntryDto>,
         u_frame_number: i32,
         u_tool_number: i32,
         front: i32,
@@ -557,6 +584,19 @@ pub enum ServerResponse {
         turn4: i32,
         turn5: i32,
         turn6: i32,
+        default_cartesian_jog_speed: f64,
+        default_cartesian_jog_step: f64,
+        default_joint_jog_speed: f64,
+        default_joint_jog_step: f64,
+    },
+
+    /// Active jog settings response (server-side state)
+    #[serde(rename = "active_jog_settings")]
+    ActiveJogSettings {
+        cartesian_jog_speed: f64,
+        cartesian_jog_step: f64,
+        joint_jog_speed: f64,
+        joint_jog_step: f64,
     },
 
     /// List of robot configurations
@@ -603,7 +643,7 @@ pub struct NewRobotConfigurationDto {
 /// Robot connection DTO.
 /// Motion defaults (speed, term_type, w/p/r) and jog defaults are stored here.
 /// Frame/tool/arm configuration is stored in robot_configurations table.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RobotConnectionDto {
     pub id: i64,
     pub name: String,
@@ -708,6 +748,9 @@ pub struct IoDisplayConfigDto {
 pub struct WebSocketManager {
     pub connected: ReadSignal<bool>,
     set_connected: WriteSignal<bool>,
+    /// WebSocket is attempting to connect
+    pub ws_connecting: ReadSignal<bool>,
+    pub set_ws_connecting: WriteSignal<bool>,
     pub position: ReadSignal<Option<(f64, f64, f64)>>,
     set_position: WriteSignal<Option<(f64, f64, f64)>>,
     /// Orientation data (W, P, R angles in degrees)
@@ -754,6 +797,9 @@ pub struct WebSocketManager {
     // Robot connection status
     pub robot_connected: ReadSignal<bool>,
     set_robot_connected: WriteSignal<bool>,
+    /// Robot is attempting to connect
+    pub robot_connecting: ReadSignal<bool>,
+    pub set_robot_connecting: WriteSignal<bool>,
     pub robot_addr: ReadSignal<String>,
     set_robot_addr: WriteSignal<String>,
     /// Name of the currently connected robot (from saved connection)
@@ -812,11 +858,24 @@ pub struct WebSocketManager {
     /// List of saved robot configurations
     pub robot_configurations: ReadSignal<Vec<RobotConfigurationDto>>,
     set_robot_configurations: WriteSignal<Vec<RobotConfigurationDto>>,
+    // Active jog settings (server-driven state)
+    /// Active jog settings from server
+    pub active_jog_settings: ReadSignal<Option<ActiveJogSettingsData>>,
+    set_active_jog_settings: WriteSignal<Option<ActiveJogSettingsData>>,
     /// Console messages for chronological display
     pub console_messages: ReadSignal<Vec<ConsoleMessage>>,
     set_console_messages: WriteSignal<Vec<ConsoleMessage>>,
     ws: StoredValue<Option<WebSocket>, LocalStorage>,
     ws_url: StoredValue<String>,
+}
+
+/// Active jog settings data (client-side representation of server state)
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActiveJogSettingsData {
+    pub cartesian_jog_speed: f64,
+    pub cartesian_jog_step: f64,
+    pub joint_jog_speed: f64,
+    pub joint_jog_step: f64,
 }
 
 /// Unified console message with timestamp and direction
@@ -883,6 +942,14 @@ pub struct ExecutionStatusData {
     pub error: Option<String>,
 }
 
+/// A single change entry in the changelog
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChangeLogEntryDto {
+    pub field_name: String,
+    pub old_value: String,
+    pub new_value: String,
+}
+
 /// Active configuration data for display in sidebar
 #[derive(Clone, Debug, Default)]
 pub struct ActiveConfigurationData {
@@ -890,8 +957,10 @@ pub struct ActiveConfigurationData {
     pub loaded_from_id: Option<i64>,
     /// Name of the loaded configuration
     pub loaded_from_name: Option<String>,
-    /// Whether the active config has been modified from the loaded state
-    pub modified: bool,
+    /// Number of configuration changes applied since loading (0 = unmodified)
+    pub changes_count: u32,
+    /// Changelog tracking all changes since loading
+    pub change_log: Vec<ChangeLogEntryDto>,
     /// Current UFrame number
     pub u_frame_number: i32,
     /// Current UTool number
@@ -910,11 +979,17 @@ pub struct ActiveConfigurationData {
     pub turn5: i32,
     /// J6 turn number
     pub turn6: i32,
+    /// Active default jog settings (applied but not yet saved to database)
+    pub default_cartesian_jog_speed: f64,
+    pub default_cartesian_jog_step: f64,
+    pub default_joint_jog_speed: f64,
+    pub default_joint_jog_step: f64,
 }
 
 impl WebSocketManager {
     pub fn new() -> Self {
         let (connected, set_connected) = signal(false);
+        let (ws_connecting, set_ws_connecting) = signal(false);
         let (position, set_position) = signal(None);
         let (orientation, set_orientation) = signal(None);
         let (joint_angles, set_joint_angles) = signal(None);
@@ -936,6 +1011,7 @@ impl WebSocketManager {
         let (executing_line, set_executing_line) = signal(None);
         // Robot connection status
         let (robot_connected, set_robot_connected) = signal(false);
+        let (robot_connecting, set_robot_connecting) = signal(false);
         let (robot_addr, set_robot_addr) = signal("127.0.0.1:16001".to_string());
         let (connected_robot_name, set_connected_robot_name) = signal::<Option<String>>(None);
         let (tp_program_initialized, set_tp_program_initialized) = signal(false);
@@ -960,6 +1036,8 @@ impl WebSocketManager {
         // Active configuration state
         let (active_configuration, set_active_configuration) = signal::<Option<ActiveConfigurationData>>(None);
         let (robot_configurations, set_robot_configurations) = signal::<Vec<RobotConfigurationDto>>(Vec::new());
+        // Active jog settings (server-driven state)
+        let (active_jog_settings, set_active_jog_settings) = signal::<Option<ActiveJogSettingsData>>(None);
         // Console messages
         let (console_messages, set_console_messages) = signal::<Vec<ConsoleMessage>>(Vec::new());
         let ws: StoredValue<Option<WebSocket>, LocalStorage> = StoredValue::new_local(None);
@@ -968,6 +1046,8 @@ impl WebSocketManager {
         let manager = Self {
             connected,
             set_connected,
+            ws_connecting,
+            set_ws_connecting,
             position,
             set_position,
             orientation,
@@ -1004,6 +1084,8 @@ impl WebSocketManager {
             set_executing_line,
             robot_connected,
             set_robot_connected,
+            robot_connecting,
+            set_robot_connecting,
             robot_addr,
             set_robot_addr,
             connected_robot_name,
@@ -1040,6 +1122,8 @@ impl WebSocketManager {
             set_active_configuration,
             robot_configurations,
             set_robot_configurations,
+            active_jog_settings,
+            set_active_jog_settings,
             console_messages,
             set_console_messages,
             ws,
@@ -1062,6 +1146,7 @@ impl WebSocketManager {
         ws.set_binary_type(BinaryType::Arraybuffer);
 
         let set_connected = self.set_connected;
+        let set_ws_connecting = self.set_ws_connecting;
         let set_position = self.set_position;
         let set_orientation = self.set_orientation;
         let set_joint_angles = self.set_joint_angles;
@@ -1080,6 +1165,7 @@ impl WebSocketManager {
         let set_program_progress = self.set_program_progress;
         let set_executing_line = self.set_executing_line;
         let set_robot_connected = self.set_robot_connected;
+        let set_robot_connecting = self.set_robot_connecting;
         let set_robot_addr = self.set_robot_addr;
         let set_connected_robot_name = self.set_connected_robot_name;
         let set_tp_program_initialized = self.set_tp_program_initialized;
@@ -1099,11 +1185,13 @@ impl WebSocketManager {
         let set_has_control = self.set_has_control;
         let set_active_configuration = self.set_active_configuration;
         let set_robot_configurations = self.set_robot_configurations;
+        let set_active_jog_settings = self.set_active_jog_settings;
         let set_console_messages = self.set_console_messages;
 
         // On open
         let onopen_callback = Closure::wrap(Box::new(move |_| {
             set_connected.set(true);
+            set_ws_connecting.set(false);
             log::info!("WebSocket connected");
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
@@ -1194,7 +1282,22 @@ impl WebSocketManager {
                         _ => {}
                     }
                 } else {
-                    log::error!("Failed to deserialize binary response");
+                    log::error!("Failed to deserialize binary response (length: {} bytes)", bytes.len());
+                    // Add parse error to console with hex dump for debugging
+                    let hex_dump = if bytes.len() <= 64 {
+                        bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")
+                    } else {
+                        format!("{}... ({} bytes total)",
+                            bytes[..64].iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" "),
+                            bytes.len())
+                    };
+                    add_console_msg(
+                        set_console_messages,
+                        MessageDirection::Received,
+                        MessageType::Error,
+                        format!("Failed to deserialize binary response. Hex: {}", hex_dump),
+                        None,
+                    );
                 }
             }
             // Handle text messages (API JSON responses)
@@ -1211,6 +1314,8 @@ impl WebSocketManager {
                             log::error!("API Error: {}", message);
                             set_api_message.set(Some(format!("Error: {}", message)));
                             set_api_error.set(Some(message)); // Set error signal
+                            // Clear connecting states on error
+                            set_robot_connecting.set(false);
                         }
                         ServerResponse::Programs { programs } => {
                             log::info!("Received {} programs", programs.len());
@@ -1291,6 +1396,8 @@ impl WebSocketManager {
                             log::info!("Effective settings: speed={}, term={}, uframe={}, utool={}, wpr=({},{},{})",
                                 effective_speed, effective_term_type, effective_uframe, effective_utool,
                                 effective_w, effective_p, effective_r);
+                            // Clear connecting state
+                            set_robot_connecting.set(false);
                             set_robot_connected.set(true);
                             set_robot_addr.set(format!("{}:{}", robot_addr, robot_port));
                             // Set the active connection ID and name
@@ -1469,6 +1576,7 @@ impl WebSocketManager {
                             log::warn!("Robot disconnected: {}", reason);
                             // Update connection state
                             set_robot_connected.set(false);
+                            set_robot_connecting.set(false);
                             set_connected_robot_name.set(None);
                             set_active_connection_id.set(None);
                             // NOTE: Do NOT clear has_control here - the user should maintain
@@ -1482,11 +1590,21 @@ impl WebSocketManager {
                             // Show error toast
                             set_api_error.set(Some(format!("Robot disconnected: {}", reason)));
                         }
-                        ServerResponse::RobotError { error_type, message, error_id } => {
+                        ServerResponse::RobotError { error_type, message, error_id, raw_data } => {
                             log::error!("Robot error ({}): {} (error_id: {:?})", error_type, message, error_id);
+                            if let Some(ref raw) = raw_data {
+                                log::error!("Raw data that failed to parse: {}", raw);
+                            }
                             // Add to error log
                             set_error_log.update(|log| {
-                                let error_msg = if let Some(id) = error_id {
+                                let error_msg = if let Some(ref raw) = raw_data {
+                                    // Include raw data for protocol errors
+                                    if let Some(id) = error_id {
+                                        format!("[{}] {} (ErrorID: {}) | Raw: {}", error_type, message, id, raw)
+                                    } else {
+                                        format!("[{}] {} | Raw: {}", error_type, message, raw)
+                                    }
+                                } else if let Some(id) = error_id {
                                     format!("[{}] {} (ErrorID: {})", error_type, message, id)
                                 } else {
                                     format!("[{}] {}", error_type, message)
@@ -1498,7 +1616,12 @@ impl WebSocketManager {
                             });
                             // Also show as toast for critical errors
                             if error_type == "protocol" || error_type == "communication" {
-                                set_api_error.set(Some(format!("Robot error: {}", message)));
+                                let toast_msg = if let Some(ref raw) = raw_data {
+                                    format!("Robot error: {} | Raw: {}", message, raw)
+                                } else {
+                                    format!("Robot error: {}", message)
+                                };
+                                set_api_error.set(Some(toast_msg));
                             }
                         }
                         ServerResponse::RobotCommandResult { command, success, error_id, message } => {
@@ -1534,10 +1657,11 @@ impl WebSocketManager {
                                 set_api_message.set(Some(format!("{} completed", command)));
                             }
                         }
-                        ServerResponse::ActiveConfiguration {
+                        ServerResponse::ActiveConfigurationResponse {
                             loaded_from_id,
                             loaded_from_name,
-                            modified,
+                            changes_count,
+                            change_log,
                             u_frame_number,
                             u_tool_number,
                             front,
@@ -1547,12 +1671,17 @@ impl WebSocketManager {
                             turn4,
                             turn5,
                             turn6,
+                            default_cartesian_jog_speed,
+                            default_cartesian_jog_step,
+                            default_joint_jog_speed,
+                            default_joint_jog_step,
                         } => {
                             log::info!("Received active configuration: {:?}", loaded_from_name);
                             set_active_configuration.set(Some(ActiveConfigurationData {
                                 loaded_from_id,
                                 loaded_from_name,
-                                modified,
+                                changes_count,
+                                change_log,
                                 u_frame_number,
                                 u_tool_number,
                                 front,
@@ -1562,6 +1691,25 @@ impl WebSocketManager {
                                 turn4,
                                 turn5,
                                 turn6,
+                                default_cartesian_jog_speed,
+                                default_cartesian_jog_step,
+                                default_joint_jog_speed,
+                                default_joint_jog_step,
+                            }));
+                        }
+                        ServerResponse::ActiveJogSettings {
+                            cartesian_jog_speed,
+                            cartesian_jog_step,
+                            joint_jog_speed,
+                            joint_jog_step,
+                        } => {
+                            log::info!("Received active jog settings: cart_speed={}, cart_step={}, joint_speed={}, joint_step={}",
+                                cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step);
+                            set_active_jog_settings.set(Some(ActiveJogSettingsData {
+                                cartesian_jog_speed,
+                                cartesian_jog_step,
+                                joint_jog_speed,
+                                joint_jog_step,
                             }));
                         }
                         ServerResponse::RobotConfigurationList { configurations } => {
@@ -1571,6 +1719,14 @@ impl WebSocketManager {
                     }
                 } else {
                     log::error!("Failed to parse API response: {}", text_str);
+                    // Add parse error to console with raw JSON for debugging
+                    add_console_msg(
+                        set_console_messages,
+                        MessageDirection::Received,
+                        MessageType::Error,
+                        format!("Failed to parse JSON response. Raw data: {}", text_str),
+                        None,
+                    );
                 }
             }
         }) as Box<dyn FnMut(MessageEvent)>);
@@ -1636,6 +1792,10 @@ impl WebSocketManager {
             }
             // Request execution state (what program is loaded and running)
             if let Ok(json) = serde_json::to_string(&ClientRequest::GetExecutionState) {
+                let _ = ws.send_with_str(&json);
+            }
+            // Request active configuration (if robot is connected)
+            if let Ok(json) = serde_json::to_string(&ClientRequest::GetActiveConfiguration) {
                 let _ = ws.send_with_str(&json);
             }
         }
@@ -1881,8 +2041,9 @@ impl WebSocketManager {
         // Update URL
         self.ws_url.set_value(new_url.to_string());
 
-        // Set disconnected
+        // Set disconnected and connecting
         self.set_connected.set(false);
+        self.set_ws_connecting.set(true);
 
         // Clear data
         self.set_position.set(None);
@@ -1902,6 +2063,7 @@ impl WebSocketManager {
 
     /// Connect to robot at specified address
     pub fn connect_robot(&self, robot_addr: &str, robot_port: u32) {
+        self.set_robot_connecting.set(true);
         self.send_api_request(ClientRequest::ConnectRobot {
             robot_addr: robot_addr.to_string(),
             robot_port,
@@ -1911,6 +2073,7 @@ impl WebSocketManager {
     /// Connect to a saved robot connection by ID.
     /// This will load the per-robot defaults and apply them.
     pub fn connect_to_saved_robot(&self, connection_id: i64) {
+        self.set_robot_connecting.set(true);
         self.send_api_request(ClientRequest::ConnectToSavedRobot { connection_id });
     }
 
@@ -2135,7 +2298,7 @@ impl WebSocketManager {
         self.send_api_request(ClientRequest::DeleteRobotConnection { id });
     }
 
-    /// Update robot connection jog defaults
+    /// Update robot connection jog defaults (saves to database)
     pub fn update_robot_jog_defaults(
         &self,
         id: i64,
@@ -2150,6 +2313,47 @@ impl WebSocketManager {
             cartesian_jog_step,
             joint_jog_speed,
             joint_jog_step,
+        });
+    }
+
+    /// Update jog controls (from Control panel - updates active jog controls only, does NOT update defaults or increment changes_count)
+    pub fn update_jog_controls(
+        &self,
+        cartesian_jog_speed: f64,
+        cartesian_jog_step: f64,
+        joint_jog_speed: f64,
+        joint_jog_step: f64,
+    ) {
+        self.send_api_request(ClientRequest::UpdateJogControls {
+            cartesian_jog_speed,
+            cartesian_jog_step,
+            joint_jog_speed,
+            joint_jog_step,
+        });
+    }
+
+    /// Apply jog defaults (from Configuration panel - updates active defaults AND active jog controls, increments changes_count, does NOT save to database)
+    pub fn apply_jog_settings(
+        &self,
+        cartesian_jog_speed: f64,
+        cartesian_jog_step: f64,
+        joint_jog_speed: f64,
+        joint_jog_step: f64,
+    ) {
+        self.send_api_request(ClientRequest::ApplyJogSettings {
+            cartesian_jog_speed,
+            cartesian_jog_step,
+            joint_jog_speed,
+            joint_jog_step,
+        });
+    }
+
+    /// Save current configuration (active frame/tool/arm config + active jog settings) to database.
+    /// If configuration_name is provided, creates a new configuration.
+    /// Otherwise, updates the currently loaded configuration.
+    pub fn save_current_configuration(&self, configuration_name: Option<String>) {
+        self.send_api_request(ClientRequest::SaveCurrentConfiguration {
+            configuration_name,
         });
     }
 

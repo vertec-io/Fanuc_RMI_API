@@ -5,7 +5,7 @@
 use crate::api_types::*;
 use crate::database::Database;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 
 /// List all saved robot connections.
@@ -152,7 +152,7 @@ pub async fn update_robot_connection_defaults(
     }
 }
 
-/// Update robot connection jog defaults.
+/// Update robot connection jog defaults (saves to database).
 pub async fn update_robot_jog_defaults(
     db: Arc<Mutex<Database>>,
     id: i64,
@@ -168,6 +168,165 @@ pub async fn update_robot_jog_defaults(
             ServerResponse::Success { message: "Jog defaults updated".to_string() }
         }
         Err(e) => ServerResponse::Error { message: format!("Failed to update jog defaults: {}", e) }
+    }
+}
+
+/// Update jog controls (from Control panel - updates active jog controls only, does NOT update defaults or increment changes_count).
+/// This is called when the user changes jog settings from the jog controls in the Control tab.
+pub async fn update_jog_controls(
+    robot_connection: Option<Arc<RwLock<crate::RobotConnection>>>,
+    client_manager: Option<Arc<crate::session::ClientManager>>,
+    cartesian_jog_speed: f64,
+    cartesian_jog_step: f64,
+    joint_jog_speed: f64,
+    joint_jog_step: f64,
+) -> ServerResponse {
+    let Some(conn) = robot_connection else {
+        return ServerResponse::Error {
+            message: "Not connected to robot".to_string(),
+        };
+    };
+
+    let mut conn = conn.write().await;
+
+    // Update active jog controls (NOT the defaults)
+    conn.active_cartesian_jog_speed = cartesian_jog_speed;
+    conn.active_cartesian_jog_step = cartesian_jog_step;
+    conn.active_joint_jog_speed = joint_jog_speed;
+    conn.active_joint_jog_step = joint_jog_step;
+
+    info!("Updated jog controls: cart_speed={}, cart_step={}, joint_speed={}, joint_step={}",
+        cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step);
+
+    // Broadcast active jog settings to all clients
+    if let Some(ref client_manager) = client_manager {
+        let jog_response = ServerResponse::ActiveJogSettings {
+            cartesian_jog_speed,
+            cartesian_jog_step,
+            joint_jog_speed,
+            joint_jog_step,
+        };
+        client_manager.broadcast_all(&jog_response).await;
+    }
+
+    ServerResponse::Success {
+        message: "Jog controls updated".to_string(),
+    }
+}
+
+/// Apply jog defaults (from Configuration panel - updates active defaults AND active jog controls, increments changes_count).
+/// This is called when the user clicks "Apply" in the Jog Defaults panel in the Configuration tab.
+/// Does NOT save to database - use SaveCurrentConfiguration to persist changes.
+pub async fn apply_jog_settings(
+    robot_connection: Option<Arc<RwLock<crate::RobotConnection>>>,
+    client_manager: Option<Arc<crate::session::ClientManager>>,
+    cartesian_jog_speed: f64,
+    cartesian_jog_step: f64,
+    joint_jog_speed: f64,
+    joint_jog_step: f64,
+) -> ServerResponse {
+    let Some(conn) = robot_connection else {
+        return ServerResponse::Error {
+            message: "Not connected to robot".to_string(),
+        };
+    };
+
+    let mut conn = conn.write().await;
+
+    // Capture old values from active defaults before updating
+    let old_cart_speed = conn.active_configuration.default_cartesian_jog_speed;
+    let old_cart_step = conn.active_configuration.default_cartesian_jog_step;
+    let old_joint_speed = conn.active_configuration.default_joint_jog_speed;
+    let old_joint_step = conn.active_configuration.default_joint_jog_step;
+
+    // Track changes to changelog
+    if old_cart_speed != cartesian_jog_speed {
+        conn.active_configuration.change_log.push(crate::ChangeLogEntry {
+            field_name: "Cartesian Jog Speed".to_string(),
+            old_value: format!("{:.1}", old_cart_speed),
+            new_value: format!("{:.1}", cartesian_jog_speed),
+        });
+    }
+    if old_cart_step != cartesian_jog_step {
+        conn.active_configuration.change_log.push(crate::ChangeLogEntry {
+            field_name: "Cartesian Jog Step".to_string(),
+            old_value: format!("{:.1}", old_cart_step),
+            new_value: format!("{:.1}", cartesian_jog_step),
+        });
+    }
+    if old_joint_speed != joint_jog_speed {
+        conn.active_configuration.change_log.push(crate::ChangeLogEntry {
+            field_name: "Joint Jog Speed".to_string(),
+            old_value: format!("{:.1}", old_joint_speed),
+            new_value: format!("{:.1}", joint_jog_speed),
+        });
+    }
+    if old_joint_step != joint_jog_step {
+        conn.active_configuration.change_log.push(crate::ChangeLogEntry {
+            field_name: "Joint Jog Step".to_string(),
+            old_value: format!("{:.1}", old_joint_step),
+            new_value: format!("{:.1}", joint_jog_step),
+        });
+    }
+
+    // Update active defaults (in active_configuration)
+    conn.active_configuration.default_cartesian_jog_speed = cartesian_jog_speed;
+    conn.active_configuration.default_cartesian_jog_step = cartesian_jog_step;
+    conn.active_configuration.default_joint_jog_speed = joint_jog_speed;
+    conn.active_configuration.default_joint_jog_step = joint_jog_step;
+
+    // Also update active jog controls (so they match the new defaults)
+    conn.active_cartesian_jog_speed = cartesian_jog_speed;
+    conn.active_cartesian_jog_step = cartesian_jog_step;
+    conn.active_joint_jog_speed = joint_jog_speed;
+    conn.active_joint_jog_step = joint_jog_step;
+
+    // Increment changes counter
+    conn.active_configuration.changes_count += 1;
+
+    info!("Applied jog defaults: cart_speed={}, cart_step={}, joint_speed={}, joint_step={}, changes_count={}",
+        cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, conn.active_configuration.changes_count);
+
+    // Broadcast active jog settings to all clients
+    if let Some(ref client_manager) = client_manager {
+        let jog_response = ServerResponse::ActiveJogSettings {
+            cartesian_jog_speed,
+            cartesian_jog_step,
+            joint_jog_speed,
+            joint_jog_step,
+        };
+        client_manager.broadcast_all(&jog_response).await;
+
+        // Also broadcast updated configuration with new changes_count and defaults
+        let config = &conn.active_configuration;
+        let config_response = ServerResponse::ActiveConfigurationResponse {
+            loaded_from_id: config.loaded_from_id,
+            loaded_from_name: config.loaded_from_name.clone(),
+            changes_count: config.changes_count,
+            change_log: config.change_log.iter().map(|entry| crate::api_types::ChangeLogEntryDto {
+                field_name: entry.field_name.clone(),
+                old_value: entry.old_value.clone(),
+                new_value: entry.new_value.clone(),
+            }).collect(),
+            u_frame_number: config.u_frame_number,
+            u_tool_number: config.u_tool_number,
+            front: config.front,
+            up: config.up,
+            left: config.left,
+            flip: config.flip,
+            turn4: config.turn4,
+            turn5: config.turn5,
+            turn6: config.turn6,
+            default_cartesian_jog_speed: config.default_cartesian_jog_speed,
+            default_cartesian_jog_step: config.default_cartesian_jog_step,
+            default_joint_jog_speed: config.default_joint_jog_speed,
+            default_joint_jog_step: config.default_joint_jog_step,
+        };
+        client_manager.broadcast_all(&config_response).await;
+    }
+
+    ServerResponse::Success {
+        message: "Jog defaults applied".to_string(),
     }
 }
 

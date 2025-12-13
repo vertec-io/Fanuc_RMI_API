@@ -236,19 +236,22 @@ pub async fn load_program(
         None => return ServerResponse::Error { message: "Executor not available".to_string() }
     };
 
-    // Get active configuration if available
-    let active_config = if let Some(ref conn) = robot_connection {
+    // Get active configuration and default_speed_type if available
+    let (active_config, default_speed_type) = if let Some(ref conn) = robot_connection {
         let conn_guard = conn.read().await;
-        Some(conn_guard.active_configuration.clone())
+        let speed_type = conn_guard.saved_connection.as_ref()
+            .map(|sc| sc.default_speed_type.clone())
+            .unwrap_or_else(|| "mmSec".to_string());
+        (Some(conn_guard.active_configuration.clone()), speed_type)
     } else {
-        None
+        (None, "mmSec".to_string())
     };
 
     // Load program into executor
     let state_response = {
         let db_guard = db.lock().await;
         let mut exec_guard = executor.lock().await;
-        if let Err(e) = exec_guard.load_program(&db_guard, program_id, active_config.as_ref()) {
+        if let Err(e) = exec_guard.load_program(&db_guard, program_id, active_config.as_ref(), &default_speed_type) {
             return ServerResponse::Error { message: format!("Failed to load program: {}", e) };
         }
         execution_state_to_response(&exec_guard.get_state())
@@ -326,19 +329,22 @@ pub async fn start_program(
         None => return ServerResponse::Error { message: "Executor not available".to_string() }
     };
 
-    // Get active configuration if available
-    let active_config = if let Some(ref conn) = robot_connection {
+    // Get active configuration and default_speed_type if available
+    let (active_config, default_speed_type) = if let Some(ref conn) = robot_connection {
         let conn_guard = conn.read().await;
-        Some(conn_guard.active_configuration.clone())
+        let speed_type = conn_guard.saved_connection.as_ref()
+            .map(|sc| sc.default_speed_type.clone())
+            .unwrap_or_else(|| "mmSec".to_string());
+        (Some(conn_guard.active_configuration.clone()), speed_type)
     } else {
-        None
+        (None, "mmSec".to_string())
     };
 
     // Load program into executor, then start it
     let (total_instructions, state_response) = {
         let db_guard = db.lock().await;
         let mut exec_guard = executor.lock().await;
-        if let Err(e) = exec_guard.load_program(&db_guard, program_id, active_config.as_ref()) {
+        if let Err(e) = exec_guard.load_program(&db_guard, program_id, active_config.as_ref(), &default_speed_type) {
             return ServerResponse::Error { message: format!("Failed to load program: {}", e) };
         }
         exec_guard.start(); // Transitions from Loaded to Running

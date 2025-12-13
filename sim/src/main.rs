@@ -138,6 +138,10 @@ struct RobotState {
     // I/O state
     din: [bool; 256],  // Digital inputs (simulated)
     dout: [bool; 256], // Digital outputs
+    ain: [f64; 256],   // Analog inputs (simulated)
+    aout: [f64; 256],  // Analog outputs
+    gin: [u32; 256],   // Group inputs (simulated)
+    gout: [u32; 256],  // Group outputs
 }
 
 impl Default for RobotState {
@@ -211,6 +215,10 @@ impl RobotState {
             // Initialize I/O state
             din: [false; 256],
             dout: [false; 256],
+            ain: [0.0; 256],
+            aout: [0.0; 256],
+            gin: [0; 256],
+            gout: [0; 256],
         }
     }
 
@@ -861,10 +869,69 @@ async fn handle_secondary_client(
                             });
                             serialize_response(response)
                         }
+                        Some("FRC_ReadAIN") => {
+                            let cmd: FrcReadAIN = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcReadAIN { port_number: 0 });
+                            let state = robot_state.lock().await;
+                            let port_num = cmd.port_number as usize;
+                            let port_value = if port_num < 256 { state.ain[port_num] } else { 0.0 };
+                            println!("📥 FRC_ReadAIN: Port {} = {:.2}", port_num, port_value);
+                            let response = CommandResponse::FrcReadAIN(FrcReadAINResponse {
+                                error_id: 0,
+                                port_number: cmd.port_number,
+                                port_value,
+                            });
+                            serialize_response(response)
+                        }
+                        Some("FRC_WriteAOUT") => {
+                            let cmd: FrcWriteAOUT = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcWriteAOUT { port_number: 0, port_value: 0.0 });
+                            let mut state = robot_state.lock().await;
+                            let port_num = cmd.port_number as usize;
+                            if port_num < 256 {
+                                state.aout[port_num] = cmd.port_value;
+                            }
+                            println!("📤 FRC_WriteAOUT: Port {} = {:.2}", port_num, cmd.port_value);
+                            let response = CommandResponse::FrcWriteAOUT(FrcWriteAOUTResponse {
+                                error_id: 0,
+                            });
+                            serialize_response(response)
+                        }
+                        Some("FRC_ReadGIN") => {
+                            let cmd: FrcReadGIN = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcReadGIN { port_number: 0 });
+                            let state = robot_state.lock().await;
+                            let port_num = cmd.port_number as usize;
+                            let port_value = if port_num < 256 { state.gin[port_num] } else { 0 };
+                            println!("📥 FRC_ReadGIN: Port {} = {}", port_num, port_value);
+                            let response = CommandResponse::FrcReadGIN(FrcReadGINResponse {
+                                error_id: 0,
+                                port_number: cmd.port_number,
+                                port_value,
+                            });
+                            serialize_response(response)
+                        }
+                        Some("FRC_WriteGOUT") => {
+                            let cmd: FrcWriteGOUT = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcWriteGOUT { port_number: 0, port_value: 0 });
+                            let mut state = robot_state.lock().await;
+                            let port_num = cmd.port_number as usize;
+                            if port_num < 256 {
+                                state.gout[port_num] = cmd.port_value;
+                            }
+                            println!("📤 FRC_WriteGOUT: Port {} = {}", port_num, cmd.port_value);
+                            let response = CommandResponse::FrcWriteGOUT(FrcWriteGOUTResponse {
+                                error_id: 0,
+                            });
+                            serialize_response(response)
+                        }
                         _ => {
-                            // Unknown command - return empty JSON object
-                            // This is intentionally minimal to avoid breaking protocol
-                            serde_json::json!({})
+                            // Unknown command - return proper Unknown response
+                            eprintln!("⚠️ Unknown command: {:?}", request_json.get("Command"));
+                            let response = CommandResponse::Unknown(FrcUnknownResponse {
+                                error_id: 2556950,  // InvalidTextString error (same as real robot)
+                            });
+                            serialize_response(response)
                         }
                     };
 

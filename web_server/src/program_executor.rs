@@ -89,11 +89,13 @@ impl ProgramExecutor {
     /// * `db` - Database connection
     /// * `program_id` - ID of the program to load
     /// * `active_config` - Optional active configuration for arm configuration (front, up, left, flip, turn4, turn5, turn6)
+    /// * `default_speed_type` - Default speed type from robot connection (mmSec, InchMin, Time, mSec)
     pub fn load_program(
         &mut self,
         db: &Database,
         program_id: i64,
         active_config: Option<&crate::ActiveConfiguration>,
+        default_speed_type: &str,
     ) -> Result<(), String> {
         let program = db.get_program(program_id)
             .map_err(|e| format!("Database error: {}", e))?
@@ -115,6 +117,7 @@ impl ProgramExecutor {
             ext2: 0.0,
             ext3: 0.0,
             speed: program.default_speed.unwrap_or(100.0),
+            speed_type: default_speed_type.to_string(),
             term_type: program.default_term_type.clone(),
             uframe: program.default_uframe,
             utool: program.default_utool,
@@ -326,6 +329,16 @@ impl ProgramExecutor {
         let ext3 = instruction.ext3.unwrap_or(self.defaults.ext3);
         let speed = instruction.speed.unwrap_or(self.defaults.speed);
 
+        // Parse speed_type from instruction or use defaults
+        let speed_type_str = instruction.speed_type.as_deref().unwrap_or(&self.defaults.speed_type);
+        let speed_type = match speed_type_str {
+            "mmSec" => SpeedType::MMSec,
+            "InchMin" => SpeedType::InchMin,
+            "Time" => SpeedType::Time,
+            "mSec" => SpeedType::MilliSeconds,
+            _ => SpeedType::MMSec,  // Fallback to mmSec if invalid
+        };
+
         // Use FINE for last instruction, otherwise CNT
         let term_type = if is_last {
             TermType::FINE
@@ -367,7 +380,7 @@ impl ProgramExecutor {
             instruction.line_number as u32,
             configuration,
             position,
-            SpeedType::MMSec,
+            speed_type,
             speed,
             term_type,
             0, // term_value

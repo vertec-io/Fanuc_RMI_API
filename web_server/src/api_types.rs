@@ -179,7 +179,7 @@ pub enum ClientRequest {
         default_r: f64,
     },
 
-    /// Update robot connection jog defaults.
+    /// Update robot connection jog defaults (saves to database).
     #[serde(rename = "update_robot_jog_defaults")]
     UpdateRobotJogDefaults {
         id: i64,
@@ -187,6 +187,33 @@ pub enum ClientRequest {
         cartesian_jog_step: f64,
         joint_jog_speed: f64,
         joint_jog_step: f64,
+    },
+
+    /// Update jog controls (from Control panel - updates active jog controls only, does NOT update defaults or increment changes_count).
+    #[serde(rename = "update_jog_controls")]
+    UpdateJogControls {
+        cartesian_jog_speed: f64,
+        cartesian_jog_step: f64,
+        joint_jog_speed: f64,
+        joint_jog_step: f64,
+    },
+
+    /// Apply jog defaults (from Configuration panel - updates active defaults AND active jog controls, increments changes_count, does NOT save to database).
+    #[serde(rename = "apply_jog_settings")]
+    ApplyJogSettings {
+        cartesian_jog_speed: f64,
+        cartesian_jog_step: f64,
+        joint_jog_speed: f64,
+        joint_jog_step: f64,
+    },
+
+    /// Save current configuration (active frame/tool/arm config + active jog settings) to database.
+    /// Saves robot configuration to robot_configurations table and jog settings to robot_connections table.
+    /// Resets changes_count to 0.
+    #[serde(rename = "save_current_configuration")]
+    SaveCurrentConfiguration {
+        /// Optional name for the configuration (if saving as new configuration)
+        configuration_name: Option<String>,
     },
 
     #[serde(rename = "delete_robot_connection")]
@@ -438,6 +465,7 @@ pub enum ServerResponse {
         error_type: String, // "protocol", "command", "communication"
         message: String,
         error_id: Option<i32>,
+        raw_data: Option<String>, // Raw JSON data that failed to parse (for protocol errors)
     },
 
     /// Response to robot control commands (abort, reset, initialize).
@@ -485,8 +513,10 @@ pub enum ServerResponse {
         loaded_from_id: Option<i64>,
         /// Name of the loaded configuration
         loaded_from_name: Option<String>,
-        /// Whether the active config has been modified from the loaded state
-        modified: bool,
+        /// Number of configuration changes applied since loading (0 = unmodified)
+        changes_count: u32,
+        /// Changelog tracking all changes since loading
+        change_log: Vec<ChangeLogEntryDto>,
         /// Current UFrame number
         u_frame_number: i32,
         /// Current UTool number
@@ -505,6 +535,20 @@ pub enum ServerResponse {
         turn5: i32,
         /// J6 turn number
         turn6: i32,
+        /// Active default jog settings (applied but not yet saved to database)
+        default_cartesian_jog_speed: f64,
+        default_cartesian_jog_step: f64,
+        default_joint_jog_speed: f64,
+        default_joint_jog_step: f64,
+    },
+
+    /// Active jog settings response (server-side state)
+    #[serde(rename = "active_jog_settings")]
+    ActiveJogSettings {
+        cartesian_jog_speed: f64,
+        cartesian_jog_step: f64,
+        joint_jog_speed: f64,
+        joint_jog_step: f64,
     },
 
     // Frame/Tool responses
@@ -646,6 +690,14 @@ pub struct RobotSettingsDto {
     pub default_term_type: String,
     pub default_uframe: i32,
     pub default_utool: i32,
+}
+
+/// A single change entry in the changelog
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeLogEntryDto {
+    pub field_name: String,
+    pub old_value: String,
+    pub new_value: String,
 }
 
 /// Robot connection DTO (for saved connections).

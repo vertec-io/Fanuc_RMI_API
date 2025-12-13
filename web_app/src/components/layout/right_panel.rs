@@ -12,7 +12,9 @@ use crate::websocket::WebSocketManager;
 #[component]
 pub fn RightPanel() -> impl IntoView {
     let layout_ctx = use_context::<LayoutContext>().expect("LayoutContext not found");
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
     let jog_popped = layout_ctx.jog_popped;
+    let robot_connected = ws.robot_connected;
 
     view! {
         <aside class="w-56 bg-[#0d0d0d] border-l border-[#ffffff08] flex flex-col overflow-hidden shrink-0">
@@ -26,11 +28,13 @@ pub fn RightPanel() -> impl IntoView {
                 // Errors panel
                 <ErrorLog/>
 
-                // I/O Status (placeholder)
-                <IOStatusPanel/>
+                // I/O Status (only show when robot connected)
+                <Show when=move || robot_connected.get()>
+                    <IOStatusPanel/>
+                </Show>
 
-                // Jog controls (when not popped)
-                <Show when=move || !jog_popped.get()>
+                // Jog controls (only show when robot connected and not popped)
+                <Show when=move || robot_connected.get() && !jog_popped.get()>
                     <JogControlsPanel/>
                 </Show>
             </div>
@@ -372,8 +376,7 @@ fn AnalogOutput(
             <span class="font-mono text-[#ff8800] truncate max-w-full" title={title_name}>{display_name}</span>
             <Show when=move || !editing.get() fallback=move || view! {
                 <input
-                    type="number"
-                    step="0.1"
+                    type="text"
                     class="w-10 text-[7px] bg-[#1a1a1a] border border-[#ff8800] rounded px-0.5 text-center text-white"
                     prop:value=input_value
                     on:input=move |ev| set_input_value.set(event_target_value(&ev))
@@ -448,7 +451,7 @@ fn GroupOutput(
             <span class="font-mono text-[#ff00ff] truncate max-w-full" title={title_name}>{display_name}</span>
             <Show when=move || !editing.get() fallback=move || view! {
                 <input
-                    type="number"
+                    type="text"
                     class="w-10 text-[7px] bg-[#1a1a1a] border border-[#ff00ff] rounded px-0.5 text-center text-white"
                     prop:value=input_value
                     on:input=move |ev| set_input_value.set(event_target_value(&ev))

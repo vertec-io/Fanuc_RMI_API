@@ -102,22 +102,46 @@ pub async fn set_active_frame_tool(
                 };
             }
 
+            // Track changes to changelog
+            let old_uframe = conn.active_configuration.u_frame_number;
+            let old_utool = conn.active_configuration.u_tool_number;
+
+            if old_uframe != uframe as i32 {
+                conn.active_configuration.change_log.push(crate::ChangeLogEntry {
+                    field_name: "UFrame".to_string(),
+                    old_value: format!("{}", old_uframe),
+                    new_value: format!("{}", uframe),
+                });
+            }
+            if old_utool != utool as i32 {
+                conn.active_configuration.change_log.push(crate::ChangeLogEntry {
+                    field_name: "UTool".to_string(),
+                    old_value: format!("{}", old_utool),
+                    new_value: format!("{}", utool),
+                });
+            }
+
             // Update server-side state
             conn.active_configuration.u_frame_number = uframe as i32;
             conn.active_configuration.u_tool_number = utool as i32;
-            conn.active_configuration.modified = true;
+            conn.active_configuration.changes_count += 1;  // Increment counter
 
             // Broadcast to all clients
             let broadcast_response = ServerResponse::ActiveFrameTool { uframe, utool };
             if let Some(ref client_manager) = client_manager {
                 client_manager.broadcast_all(&broadcast_response).await;
 
-                // Also broadcast the full active configuration with modified flag
+                // Also broadcast the full active configuration with changes count
                 let config = &conn.active_configuration;
                 let config_response = ServerResponse::ActiveConfigurationResponse {
                     loaded_from_id: config.loaded_from_id,
                     loaded_from_name: config.loaded_from_name.clone(),
-                    modified: config.modified,
+                    changes_count: config.changes_count,
+                    change_log: config.change_log.iter().map(|entry| crate::api_types::ChangeLogEntryDto {
+                        field_name: entry.field_name.clone(),
+                        old_value: entry.old_value.clone(),
+                        new_value: entry.new_value.clone(),
+                    }).collect(),
                     u_frame_number: config.u_frame_number,
                     u_tool_number: config.u_tool_number,
                     front: config.front,
@@ -127,6 +151,10 @@ pub async fn set_active_frame_tool(
                     turn4: config.turn4,
                     turn5: config.turn5,
                     turn6: config.turn6,
+                    default_cartesian_jog_speed: config.default_cartesian_jog_speed,
+                    default_cartesian_jog_step: config.default_cartesian_jog_step,
+                    default_joint_jog_speed: config.default_joint_jog_speed,
+                    default_joint_jog_step: config.default_joint_jog_step,
                 };
                 client_manager.broadcast_all(&config_response).await;
             }

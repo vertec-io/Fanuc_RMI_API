@@ -4,7 +4,6 @@
 //! Supports LinearAbsolute, LinearRelative, JointAbsolute, JointRelative instruction types.
 
 use leptos::prelude::*;
-use fanuc_rmi::dto::*;
 use crate::components::layout::workspace::context::{WorkspaceContext, RecentCommand};
 use crate::websocket::WebSocketManager;
 
@@ -130,109 +129,8 @@ pub fn CommandComposerModal() -> impl IntoView {
         }
     });
 
-    // Send command to robot
-    let send_command = move || {
-        let itype = instr_type.get_untracked();
-        let spd = speed.get_untracked();
-        let term = if term_type.get_untracked() == "FINE" {
-            fanuc_rmi::TermType::FINE
-        } else {
-            fanuc_rmi::TermType::CNT
-        };
-
-        // Build configuration from active config
-        let config = active_config.get_untracked();
-        let configuration = Configuration {
-            u_frame_number: config.as_ref().map(|c| c.u_frame_number as i8).unwrap_or(0),
-            u_tool_number: config.as_ref().map(|c| c.u_tool_number as i8).unwrap_or(1),
-            front: config.as_ref().map(|c| c.front as i8).unwrap_or(1),
-            up: config.as_ref().map(|c| c.up as i8).unwrap_or(1),
-            left: config.as_ref().map(|c| c.left as i8).unwrap_or(0),
-            flip: config.as_ref().map(|c| c.flip as i8).unwrap_or(0),
-            turn4: config.as_ref().map(|c| c.turn4 as i8).unwrap_or(0),
-            turn5: config.as_ref().map(|c| c.turn5 as i8).unwrap_or(0),
-            turn6: config.as_ref().map(|c| c.turn6 as i8).unwrap_or(0),
-        };
-
-        let packet = match itype {
-            InstructionType::LinearAbsolute => {
-                SendPacket::Instruction(Instruction::FrcLinearMotion(FrcLinearMotion {
-                    sequence_id: 0,
-                    configuration: configuration.clone(),
-                    position: Position {
-                        x: x.get_untracked(),
-                        y: y.get_untracked(),
-                        z: z.get_untracked(),
-                        w: w.get_untracked(),
-                        p: p.get_untracked(),
-                        r: r.get_untracked(),
-                        ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                    },
-                    speed_type: fanuc_rmi::SpeedType::MMSec,
-                    speed: spd,
-                    term_type: term,
-                    term_value: 1,
-                }))
-            }
-            InstructionType::LinearRelative => {
-                SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative {
-                    sequence_id: 0,
-                    configuration: configuration.clone(),
-                    position: Position {
-                        x: x.get_untracked(),
-                        y: y.get_untracked(),
-                        z: z.get_untracked(),
-                        w: w.get_untracked(),
-                        p: p.get_untracked(),
-                        r: r.get_untracked(),
-                        ext1: 0.0, ext2: 0.0, ext3: 0.0,
-                    },
-                    speed_type: fanuc_rmi::SpeedType::MMSec,
-                    speed: spd,
-                    term_type: term,
-                    term_value: 1,
-                }))
-            }
-            InstructionType::JointAbsolute => {
-                SendPacket::Instruction(Instruction::FrcJointMotionJRep(FrcJointMotionJRep {
-                    sequence_id: 0,
-                    joint_angles: JointAngles {
-                        j1: j1.get_untracked() as f32,
-                        j2: j2.get_untracked() as f32,
-                        j3: j3.get_untracked() as f32,
-                        j4: j4.get_untracked() as f32,
-                        j5: j5.get_untracked() as f32,
-                        j6: j6.get_untracked() as f32,
-                        j7: 0.0, j8: 0.0, j9: 0.0,
-                    },
-                    speed_type: fanuc_rmi::SpeedType::Time, // Time-based for joint motion
-                    speed: spd,
-                    term_type: term,
-                    term_value: 1,
-                }))
-            }
-            InstructionType::JointRelative => {
-                SendPacket::Instruction(Instruction::FrcJointRelativeJRep(FrcJointRelativeJRep {
-                    sequence_id: 0,
-                    joint_angles: JointAngles {
-                        j1: j1.get_untracked() as f32,
-                        j2: j2.get_untracked() as f32,
-                        j3: j3.get_untracked() as f32,
-                        j4: j4.get_untracked() as f32,
-                        j5: j5.get_untracked() as f32,
-                        j6: j6.get_untracked() as f32,
-                        j7: 0.0, j8: 0.0, j9: 0.0,
-                    },
-                    speed_type: fanuc_rmi::SpeedType::Time,
-                    speed: spd,
-                    term_type: term,
-                    term_value: 1,
-                }))
-            }
-        };
-
-        ws.send_command(packet);
-
+    // Apply command - adds to recent commands and selects it (doesn't send to robot)
+    let apply_command = move || {
         // Add to recent commands
         let new_id = js_sys::Date::now() as usize;
         let cmd = RecentCommand {
@@ -265,7 +163,7 @@ pub fn CommandComposerModal() -> impl IntoView {
         ctx.selected_command_id.set(Some(new_id));
         ctx.show_composer.set(false);
     };
-    let send_command = StoredValue::new(send_command);
+    let apply_command = StoredValue::new(apply_command);
 
     view! {
         <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -350,20 +248,11 @@ pub fn CommandComposerModal() -> impl IntoView {
                             <div>
                                 <label class="block text-[8px] text-[#555555] mb-0.5">"Speed"</label>
                                 <div class="flex items-center gap-1">
-                                    <input
-                                        type="number"
-                                        step="1"
-                                        class="flex-1 bg-[#111111] border border-[#ffffff08] rounded px-2 py-1 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
-                                        prop:value=move || format!("{:.0}", speed.get())
-                                        on:input=move |ev| {
-                                            if let Ok(v) = event_target_value(&ev).parse() {
-                                                set_speed.set(v);
-                                            }
-                                        }
+                                    <SpeedInput
+                                        value=speed
+                                        set_value=set_speed
+                                        is_cartesian=move || instr_type.get().is_cartesian()
                                     />
-                                    <span class="text-[8px] text-[#555555]">
-                                        {move || if instr_type.get().is_cartesian() { "mm/s" } else { "%" }}
-                                    </span>
                                 </div>
                             </div>
                             <div>
@@ -418,10 +307,10 @@ pub fn CommandComposerModal() -> impl IntoView {
                         "Cancel"
                     </button>
                     <button
-                        class="bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] text-[10px] px-3 py-1.5 rounded hover:bg-[#22c55e30]"
-                        on:click=move |_| send_command.with_value(|f| f())
+                        class="bg-[#00d9ff20] border border-[#00d9ff40] text-[#00d9ff] text-[10px] px-3 py-1.5 rounded hover:bg-[#00d9ff30]"
+                        on:click=move |_| apply_command.with_value(|f| f())
                     >
-                        "Send to Robot"
+                        "Apply"
                     </button>
                 </div>
             </div>
@@ -429,7 +318,55 @@ pub fn CommandComposerModal() -> impl IntoView {
     }
 }
 
-/// Number input helper component with unit display
+/// Speed input component with validation and dynamic unit display
+#[component]
+fn SpeedInput(
+    value: ReadSignal<f64>,
+    set_value: WriteSignal<f64>,
+    is_cartesian: impl Fn() -> bool + Send + Sync + 'static,
+) -> impl IntoView {
+    let (text_value, set_text_value) = signal(format!("{:.0}", value.get_untracked()));
+    let (is_valid, set_is_valid) = signal(true);
+
+    // Sync text when value changes externally
+    Effect::new(move |_| {
+        let v = value.get();
+        set_text_value.set(format!("{:.0}", v));
+    });
+
+    view! {
+        <input
+            type="text"
+            class=move || format!(
+                "flex-1 bg-[#111111] rounded px-2 py-1 text-[10px] text-white focus:outline-none {}",
+                if is_valid.get() {
+                    "border border-[#ffffff08] focus:border-[#00d9ff]"
+                } else {
+                    "border-2 border-[#ff4444] focus:border-[#ff4444]"
+                }
+            )
+            prop:value=move || text_value.get()
+            on:input=move |ev| {
+                let val = event_target_value(&ev);
+                set_text_value.set(val.clone());
+                match val.parse::<f64>() {
+                    Ok(v) => {
+                        set_is_valid.set(true);
+                        set_value.set(v);
+                    }
+                    Err(_) => {
+                        set_is_valid.set(false);
+                    }
+                }
+            }
+        />
+        <span class="text-[8px] text-[#555555]">
+            {move || if is_cartesian() { "mm/s" } else { "%" }}
+        </span>
+    }
+}
+
+/// Number input helper component with unit display and validation
 #[component]
 fn NumberInput(
     label: &'static str,
@@ -438,17 +375,40 @@ fn NumberInput(
     step: f64,
     #[prop(default = "")] unit: &'static str,
 ) -> impl IntoView {
+    let (text_value, set_text_value) = signal(format!("{:.1}", value.get_untracked()));
+    let (is_valid, set_is_valid) = signal(true);
+
+    // Sync text when value changes externally
+    Effect::new(move |_| {
+        let v = value.get();
+        set_text_value.set(format!("{:.1}", v));
+    });
+
     view! {
         <div>
             <label class="block text-[8px] text-[#555555] mb-0.5">{label}</label>
             <input
-                type="number"
-                step=step
-                class="w-full bg-[#111111] border border-[#ffffff08] rounded px-1.5 py-1 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none text-center"
-                prop:value=move || format!("{:.1}", value.get())
+                type="text"
+                class=move || format!(
+                    "w-full bg-[#111111] rounded px-1.5 py-1 text-[10px] text-white focus:outline-none text-center {}",
+                    if is_valid.get() {
+                        "border border-[#ffffff08] focus:border-[#00d9ff]"
+                    } else {
+                        "border-2 border-[#ff4444] focus:border-[#ff4444]"
+                    }
+                )
+                prop:value=move || text_value.get()
                 on:input=move |ev| {
-                    if let Ok(v) = event_target_value(&ev).parse() {
-                        set_value.set(v);
+                    let val = event_target_value(&ev);
+                    set_text_value.set(val.clone());
+                    match val.parse::<f64>() {
+                        Ok(v) => {
+                            set_is_valid.set(true);
+                            set_value.set(v);
+                        }
+                        Err(_) => {
+                            set_is_valid.set(false);
+                        }
                     }
                 }
             />

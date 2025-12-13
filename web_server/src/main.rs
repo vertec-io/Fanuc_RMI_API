@@ -24,16 +24,27 @@ use tokio::sync::{broadcast, RwLock};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{info, warn, error};
 
+/// A single change entry in the changelog
+#[derive(Debug, Clone)]
+pub struct ChangeLogEntry {
+    pub field_name: String,
+    pub old_value: String,
+    pub new_value: String,
+}
+
 /// Active configuration state (runtime, not persisted).
-/// Tracks which configuration is loaded and whether it has been modified.
+/// Tracks which configuration is loaded and how many changes have been applied.
 #[derive(Debug, Clone)]
 pub struct ActiveConfiguration {
     /// ID of the saved configuration this was loaded from (None = custom/unsaved)
     pub loaded_from_id: Option<i64>,
     /// Name of the loaded configuration
     pub loaded_from_name: Option<String>,
-    /// Whether the active config has been modified from the loaded state
-    pub modified: bool,
+    /// Number of configuration changes applied since loading (0 = unmodified)
+    /// Incremented when frame/tool or jog defaults are applied
+    pub changes_count: u32,
+    /// Changelog tracking all changes since loading
+    pub change_log: Vec<ChangeLogEntry>,
     /// Current UFrame number
     pub u_frame_number: i32,
     /// Current UTool number
@@ -52,6 +63,12 @@ pub struct ActiveConfiguration {
     pub turn5: i32,
     /// J6 turn number
     pub turn6: i32,
+    /// Active default jog settings (applied but not yet saved to database)
+    /// These are shown in the Configuration panel and can be applied to active jog controls
+    pub default_cartesian_jog_speed: f64,
+    pub default_cartesian_jog_step: f64,
+    pub default_joint_jog_speed: f64,
+    pub default_joint_jog_step: f64,
 }
 
 impl Default for ActiveConfiguration {
@@ -59,7 +76,8 @@ impl Default for ActiveConfiguration {
         Self {
             loaded_from_id: None,
             loaded_from_name: None,
-            modified: false,
+            changes_count: 0,
+            change_log: Vec::new(),
             u_frame_number: 0,
             u_tool_number: 1,
             front: 1,  // Front
@@ -69,17 +87,23 @@ impl Default for ActiveConfiguration {
             turn4: 0,
             turn5: 0,
             turn6: 0,
+            // Default jog settings
+            default_cartesian_jog_speed: 10.0,
+            default_cartesian_jog_step: 1.0,
+            default_joint_jog_speed: 10.0,
+            default_joint_jog_step: 1.0,
         }
     }
 }
 
 impl ActiveConfiguration {
-    /// Create from a saved RobotConfiguration
-    pub fn from_saved(config: &database::RobotConfiguration) -> Self {
+    /// Create from a saved RobotConfiguration and RobotConnection (for jog defaults)
+    pub fn from_saved(config: &database::RobotConfiguration, connection: &database::RobotConnection) -> Self {
         Self {
             loaded_from_id: Some(config.id),
             loaded_from_name: Some(config.name.clone()),
-            modified: false,
+            changes_count: 0,  // Reset counter when loading
+            change_log: Vec::new(),  // Clear changelog when loading
             u_frame_number: config.u_frame_number,
             u_tool_number: config.u_tool_number,
             front: config.front,
@@ -89,6 +113,11 @@ impl ActiveConfiguration {
             turn4: config.turn4,
             turn5: config.turn5,
             turn6: config.turn6,
+            // Load jog defaults from robot connection
+            default_cartesian_jog_speed: connection.default_cartesian_jog_speed,
+            default_cartesian_jog_step: connection.default_cartesian_jog_step,
+            default_joint_jog_speed: connection.default_joint_jog_speed,
+            default_joint_jog_step: connection.default_joint_jog_step,
         }
     }
 
@@ -105,6 +134,11 @@ pub struct RobotConnection {
     pub saved_connection: Option<database::RobotConnection>,
     /// Active configuration state (runtime, not persisted)
     pub active_configuration: ActiveConfiguration,
+    /// Active jog settings (runtime, not persisted until saved)
+    pub active_cartesian_jog_speed: f64,
+    pub active_cartesian_jog_step: f64,
+    pub active_joint_jog_speed: f64,
+    pub active_joint_jog_step: f64,
     /// Whether the TP program is initialized (FRC_Initialize was successful)
     /// This must be true to send motion commands. It becomes false after:
     /// - FRC_Abort is called
@@ -122,6 +156,10 @@ impl RobotConnection {
             robot_port,
             saved_connection: None,
             active_configuration: ActiveConfiguration::default(),
+            active_cartesian_jog_speed: 10.0,  // Default values
+            active_cartesian_jog_step: 1.0,
+            active_joint_jog_speed: 10.0,
+            active_joint_jog_step: 1.0,
             tp_program_initialized: false,
         }
     }
@@ -418,10 +456,14 @@ async fn main() {
                             match result {
                                 Ok(protocol_error) => {
                                     warn!("Protocol error: {} - {}", protocol_error.error_type, protocol_error.message);
+                                    if let Some(ref raw) = protocol_error.raw_data {
+                                        warn!("Raw data that failed to parse: {}", raw);
+                                    }
                                     let response = ServerResponse::RobotError {
                                         error_type: protocol_error.error_type,
                                         message: protocol_error.message,
                                         error_id: None,
+                                        raw_data: protocol_error.raw_data,
                                     };
                                     client_manager_error.broadcast_all(&response).await;
                                 }

@@ -476,7 +476,7 @@ fn ConnectionDetailsStep(
                         "Port" <span class="text-[#ef4444]">"*"</span>
                     </label>
                     <input
-                        type="number"
+                        type="text"
                         class="w-full bg-[#111111] border border-[#ffffff08] rounded px-3 py-2 text-sm text-white focus:border-[#00d9ff] focus:outline-none transition-colors font-mono"
                         placeholder="16001"
                         prop:value=move || robot_port.get()

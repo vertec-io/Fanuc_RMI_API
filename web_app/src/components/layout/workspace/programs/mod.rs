@@ -440,11 +440,14 @@ fn ProgramDetails(
     // Track current program ID to detect changes
     let (current_prog_id, set_current_prog_id) = signal::<Option<i64>>(None);
 
-    // Sync signals when program changes
+    // Sync signals when program changes or is updated
     Effect::new(move |_| {
         if let Some(prog) = current_program.get() {
-            // Only reset signals when program ID changes
-            if current_prog_id.get() != Some(prog.id) {
+            // Check if program ID changed (switching programs)
+            let id_changed = current_prog_id.get() != Some(prog.id);
+
+            if id_changed {
+                // Program switched - update all fields and reset modified flag
                 set_current_prog_id.set(Some(prog.id));
                 set_start_x.set(prog.start_x.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_start_y.set(prog.start_y.map(|v| format!("{:.2}", v)).unwrap_or_default());
@@ -454,6 +457,15 @@ fn ProgramDetails(
                 set_end_z.set(prog.end_z.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_move_speed.set(prog.move_speed.map(|v| format!("{:.0}", v)).unwrap_or_else(|| "100".to_string()));
                 set_settings_modified.set(false);
+            } else if !settings_modified.get() {
+                // Same program but data updated (e.g., CSV upload) - only update if user hasn't modified settings
+                set_start_x.set(prog.start_x.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_start_y.set(prog.start_y.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_start_z.set(prog.start_z.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_end_x.set(prog.end_x.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_end_y.set(prog.end_y.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_end_z.set(prog.end_z.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_move_speed.set(prog.move_speed.map(|v| format!("{:.0}", v)).unwrap_or_else(|| "100".to_string()));
             }
         }
     });

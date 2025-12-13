@@ -83,16 +83,22 @@ pub fn RobotStatus() -> impl IntoView {
             <Show when=move || robot_connected.get() && active_configuration.get().is_some()>
                 {move || {
                     let config = active_configuration.get().unwrap();
-                    let config_name = config.loaded_from_name.clone().unwrap_or_else(|| "Custom".to_string());
-                    let modified = config.modified;
+                    let config_name = config.loaded_from_name.clone().unwrap_or_else(|| {
+                        log::warn!("Active configuration has no name - this should not happen!");
+                        "ERROR: No Config".to_string()
+                    });
+                    let changes_count = config.changes_count;
                     view! {
                         <div class="mt-2 pt-2 border-t border-[#ffffff08]">
                             // Configuration name with modified indicator
                             <div class="flex items-center justify-between mb-1">
                                 <span class="text-[#666666] text-[8px]">"Config:"</span>
-                                <span class="text-[10px] font-medium text-white flex items-center">
+                                <span class=move || format!(
+                                    "text-[10px] font-medium flex items-center {}",
+                                    if config.loaded_from_name.is_none() { "text-[#ff4444]" } else { "text-white" }
+                                )>
                                     {config_name}
-                                    <Show when=move || modified>
+                                    <Show when=move || { changes_count > 0 }>
                                         <span class="ml-1 text-[#ffaa00]" title="Configuration has been modified">"⚠️"</span>
                                     </Show>
                                 </span>

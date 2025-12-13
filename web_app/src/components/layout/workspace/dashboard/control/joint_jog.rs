@@ -6,22 +6,24 @@
 use leptos::prelude::*;
 use fanuc_rmi::dto::*;
 use crate::websocket::WebSocketManager;
-use crate::components::layout::LayoutContext;
 
 /// Joint Jog Panel - Jog individual joints with up/down buttons.
 #[component]
 pub fn JointJogPanel() -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
-    let layout_ctx = use_context::<LayoutContext>().expect("LayoutContext not found");
+    let active_jog_settings = ws.active_jog_settings;
 
-    // Use shared signals from LayoutContext
-    let joint_speed = layout_ctx.joint_jog_speed;
-    let joint_step = layout_ctx.joint_jog_step;
+    // Local string state for inputs (initialized from server state)
+    let (speed_str, set_speed_str) = signal(String::new());
+    let (step_str, set_step_str) = signal(String::new());
 
-    // Speed change confirmation modal state
-    let (show_speed_confirm, set_show_speed_confirm) = signal(false);
-    let (pending_speed, set_pending_speed) = signal::<Option<f64>>(None);
-    let (previous_speed, set_previous_speed) = signal(joint_speed.get_untracked());
+    // Initialize from server state
+    Effect::new(move || {
+        if let Some(settings) = active_jog_settings.get() {
+            set_speed_str.set(format!("{:.1}", settings.joint_jog_speed));
+            set_step_str.set(format!("{:.1}", settings.joint_jog_step));
+        }
+    });
 
     // Disable jog controls when a program is actively running (not paused)
     let program_running = ws.program_running;
@@ -42,8 +44,12 @@ pub fn JointJogPanel() -> impl IntoView {
             return;
         }
 
-        let step = joint_step.get_untracked() as f32 * direction;
-        let speed = joint_speed.get_untracked();
+        // Get jog settings from server state
+        let (step, speed) = if let Some(settings) = active_jog_settings.get_untracked() {
+            (settings.joint_jog_step as f32 * direction, settings.joint_jog_speed)
+        } else {
+            (1.0 * direction, 10.0)
+        };
 
         // Create joint angles with only the target joint's delta set
         let mut angles = JointAngles {
@@ -91,10 +97,24 @@ pub fn JointJogPanel() -> impl IntoView {
                             type="number"
                             step="0.1"
                             class="w-12 bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-white text-[9px] focus:border-[#00d9ff] focus:outline-none text-center"
-                            prop:value=move || format!("{:.1}", joint_step.get())
+                            prop:value=move || step_str.get()
                             on:input=move |ev| {
-                                if let Ok(v) = event_target_value(&ev).parse::<f64>() {
-                                    joint_step.set(v);
+                                let val = event_target_value(&ev);
+                                set_step_str.set(val.clone());
+                            }
+                            on:change=move |ev| {
+                                let val = event_target_value(&ev);
+                                if let Ok(new_step) = val.parse::<f64>() {
+                                    // Get current settings from server
+                                    if let Some(settings) = active_jog_settings.get_untracked() {
+                                        // Update jog controls only (does NOT update defaults or increment changes_count)
+                                        ws.update_jog_controls(
+                                            settings.cartesian_jog_speed,
+                                            settings.cartesian_jog_step,
+                                            settings.joint_jog_speed,
+                                            new_step,
+                                        );
+                                    }
                                 }
                             }
                         />
@@ -106,27 +126,23 @@ pub fn JointJogPanel() -> impl IntoView {
                             type="number"
                             step="1"
                             class="w-12 bg-[#111111] border border-[#ffffff08] rounded px-1 py-0.5 text-white text-[9px] focus:border-[#00d9ff] focus:outline-none text-center"
-                            prop:value=move || format!("{:.0}", joint_speed.get())
+                            prop:value=move || speed_str.get()
+                            on:input=move |ev| {
+                                let val = event_target_value(&ev);
+                                set_speed_str.set(val.clone());
+                            }
                             on:change=move |ev| {
-                                if let Ok(new_speed) = event_target_value(&ev).parse::<f64>() {
-                                    let old_speed = previous_speed.get();
-                                    // Check if change is >50%
-                                    let percent_change = if old_speed > 0.0 {
-                                        ((new_speed - old_speed).abs() / old_speed) * 100.0
-                                    } else {
-                                        0.0
-                                    };
-
-                                    if percent_change > 50.0 {
-                                        // Show confirmation modal
-                                        set_pending_speed.set(Some(new_speed));
-                                        set_show_speed_confirm.set(true);
-                                        // Reset input to old value until confirmed
-                                        joint_speed.set(old_speed);
-                                    } else {
-                                        // Apply immediately
-                                        joint_speed.set(new_speed);
-                                        set_previous_speed.set(new_speed);
+                                let val = event_target_value(&ev);
+                                if let Ok(new_speed) = val.parse::<f64>() {
+                                    // Get current settings from server
+                                    if let Some(settings) = active_jog_settings.get_untracked() {
+                                        // Update jog controls only (does NOT update defaults or increment changes_count)
+                                        ws.update_jog_controls(
+                                            settings.cartesian_jog_speed,
+                                            settings.cartesian_jog_step,
+                                            new_speed,
+                                            settings.joint_jog_step,
+                                        );
                                     }
                                 }
                             }
@@ -161,74 +177,6 @@ pub fn JointJogPanel() -> impl IntoView {
                     }
                 }).collect_view()}
             </div>
-
-            // Speed change confirmation modal
-            <Show when=move || show_speed_confirm.get()>
-                <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-                    <div class="bg-[#111111] border border-[#ffaa0040] rounded-lg w-[320px] shadow-xl">
-                        // Header
-                        <div class="flex items-center p-3 border-b border-[#ffffff08]">
-                            <svg class="w-5 h-5 mr-2 text-[#ffaa00]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                            </svg>
-                            <h2 class="text-sm font-semibold text-white">"Large Speed Change"</h2>
-                        </div>
-
-                        // Content
-                        <div class="p-4 space-y-3">
-                            {move || {
-                                let old = previous_speed.get();
-                                let new = pending_speed.get().unwrap_or(old);
-                                let percent = if old > 0.0 { ((new - old).abs() / old) * 100.0 } else { 0.0 };
-                                view! {
-                                    <div class="bg-[#0a0a0a] rounded p-3 space-y-2">
-                                        <div class="flex items-center text-[11px]">
-                                            <span class="text-[#888888] w-20">"Speed:"</span>
-                                            <span class="text-[#ff6666] font-mono">{format!("{:.1}", old)}</span>
-                                            <span class="text-[#666666] mx-2">"→"</span>
-                                            <span class="text-[#66ff66] font-mono">{format!("{:.1}", new)}</span>
-                                            <span class="text-[#888888] ml-1">"°/s"</span>
-                                        </div>
-                                        <div class="flex items-center text-[11px]">
-                                            <span class="text-[#888888] w-20">"Change:"</span>
-                                            <span class="text-[#ffaa00] font-mono">{format!("{:.0}%", percent)}</span>
-                                        </div>
-                                    </div>
-                                    <p class="text-[10px] text-[#888888]">
-                                        "This is a significant speed change. Please confirm."
-                                    </p>
-                                }
-                            }}
-                        </div>
-
-                        // Footer
-                        <div class="flex gap-2 p-3 border-t border-[#ffffff08]">
-                            <button
-                                class="flex-1 text-[10px] px-4 py-2 bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] rounded hover:text-white"
-                                on:click=move |_| {
-                                    set_pending_speed.set(None);
-                                    set_show_speed_confirm.set(false);
-                                }
-                            >
-                                "Cancel"
-                            </button>
-                            <button
-                                class="flex-1 text-[10px] px-4 py-2 bg-[#00d9ff20] text-[#00d9ff] border border-[#00d9ff] rounded hover:bg-[#00d9ff30] font-medium"
-                                on:click=move |_| {
-                                    if let Some(new_speed) = pending_speed.get() {
-                                        joint_speed.set(new_speed);
-                                        set_previous_speed.set(new_speed);
-                                    }
-                                    set_pending_speed.set(None);
-                                    set_show_speed_confirm.set(false);
-                                }
-                            >
-                                "Confirm"
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </Show>
         </div>
     }
 }

@@ -28,14 +28,7 @@ pub struct LayoutContext {
     pub jog_position: RwSignal<(i32, i32)>,
     /// Whether the program browser sidebar is visible in Programs view.
     pub show_program_browser: RwSignal<bool>,
-    /// Cartesian jog speed in mm/s (shared between docked and floating jog controls).
-    pub jog_speed: RwSignal<f64>,
-    /// Cartesian jog step distance in mm (shared between docked and floating jog controls).
-    pub jog_step: RwSignal<f64>,
-    /// Joint jog speed in deg/s.
-    pub joint_jog_speed: RwSignal<f64>,
-    /// Joint jog step distance in degrees.
-    pub joint_jog_step: RwSignal<f64>,
+    // Note: Jog settings (speed/step) are now server-driven via WebSocketManager.active_jog_settings
 }
 
 impl LayoutContext {
@@ -45,10 +38,6 @@ impl LayoutContext {
             jog_popped: RwSignal::new(false),
             jog_position: RwSignal::new((100, 100)),
             show_program_browser: RwSignal::new(false), // Hidden by default
-            jog_speed: RwSignal::new(10.0),
-            jog_step: RwSignal::new(1.0),
-            joint_jog_speed: RwSignal::new(10.0), // deg/s
-            joint_jog_step: RwSignal::new(1.0),   // degrees
         }
     }
 }

@@ -4,6 +4,7 @@
 //! and common data structures used throughout the workspace.
 
 use leptos::prelude::*;
+use std::collections::HashSet;
 
 /// Shared context for frame/tool data and program state
 #[derive(Clone, Copy)]
@@ -12,10 +13,10 @@ pub struct WorkspaceContext {
     pub active_frame: RwSignal<usize>,
     /// Active UTool number
     pub active_tool: RwSignal<usize>,
-    /// Expanded frame in accordion (-1 = none)
-    pub expanded_frame: RwSignal<i32>,
-    /// Expanded tool in accordion (-1 = none)
-    pub expanded_tool: RwSignal<i32>,
+    /// Expanded frames in accordion (set of frame numbers)
+    pub expanded_frames: RwSignal<HashSet<i32>>,
+    /// Expanded tools in accordion (set of tool numbers)
+    pub expanded_tools: RwSignal<HashSet<i32>>,
     /// Command log entries (legacy - kept for compatibility)
     pub command_log: RwSignal<Vec<CommandLogEntry>>,
     /// Recent commands that can be re-run
@@ -43,8 +44,8 @@ impl WorkspaceContext {
         Self {
             active_frame: RwSignal::new(0),
             active_tool: RwSignal::new(0),
-            expanded_frame: RwSignal::new(0), // Default expand frame 0
-            expanded_tool: RwSignal::new(0),  // Default expand tool 0
+            expanded_frames: RwSignal::new(HashSet::new()), // No frames expanded by default
+            expanded_tools: RwSignal::new(HashSet::new()),  // No tools expanded by default
             command_log: RwSignal::new(Vec::new()),
             recent_commands: RwSignal::new(Vec::new()),
             selected_command_id: RwSignal::new(None),

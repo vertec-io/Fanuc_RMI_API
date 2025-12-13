@@ -79,14 +79,15 @@ pub async fn connect_robot(
 }
 
 /// Disconnect from the robot.
+/// Note: This does NOT clear saved_connection or active_configuration, so reconnection can work properly.
 pub async fn disconnect_robot(
     robot_connection: Option<Arc<RwLock<RobotConnection>>>,
 ) -> ServerResponse {
     if let Some(conn) = robot_connection {
         let mut conn = conn.write().await;
         conn.disconnect();
-        conn.saved_connection = None; // Clear saved connection on disconnect
-        conn.active_configuration = crate::ActiveConfiguration::default(); // Reset active config
+        // DO NOT clear saved_connection - keep it so reconnection works
+        // DO NOT reset active_configuration - keep it so reconnection works
         info!("Disconnected from robot");
         ServerResponse::Success { message: "Disconnected from robot".to_string() }
     } else {
@@ -152,7 +153,17 @@ pub async fn connect_to_saved_robot(
 
             // Initialize active configuration from default config
             info!("Loading default configuration '{}' for robot", default_config.name);
-            conn_guard.active_configuration = crate::ActiveConfiguration::from_saved(&default_config);
+            conn_guard.active_configuration = crate::ActiveConfiguration::from_saved(&default_config, &saved_conn);
+
+            // Initialize active jog settings from saved connection defaults
+            // These are the "active jog controls" that can be changed independently from the defaults
+            conn_guard.active_cartesian_jog_speed = saved_conn.default_cartesian_jog_speed;
+            conn_guard.active_cartesian_jog_step = saved_conn.default_cartesian_jog_step;
+            conn_guard.active_joint_jog_speed = saved_conn.default_joint_jog_speed;
+            conn_guard.active_joint_jog_step = saved_conn.default_joint_jog_step;
+            info!("Loaded jog defaults: cart_speed={}, cart_step={}, joint_speed={}, joint_step={}",
+                conn_guard.active_cartesian_jog_speed, conn_guard.active_cartesian_jog_step,
+                conn_guard.active_joint_jog_speed, conn_guard.active_joint_jog_step);
 
             // Get the frame/tool from active configuration
             let uframe = conn_guard.active_configuration.u_frame_number as u8;
@@ -189,7 +200,7 @@ pub async fn connect_to_saved_robot(
                 }
             }
 
-            // Broadcast ActiveFrameTool and ActiveConfiguration to all clients
+            // Broadcast ActiveFrameTool, ActiveConfiguration, and ConnectionStatus to all clients
             if let Some(ref client_manager) = client_manager {
                 let frame_tool_response = ServerResponse::ActiveFrameTool {
                     uframe,
@@ -202,7 +213,12 @@ pub async fn connect_to_saved_robot(
                 let config_response = ServerResponse::ActiveConfigurationResponse {
                     loaded_from_id: config.loaded_from_id,
                     loaded_from_name: config.loaded_from_name.clone(),
-                    modified: config.modified,
+                    changes_count: config.changes_count,
+                    change_log: config.change_log.iter().map(|entry| crate::api_types::ChangeLogEntryDto {
+                        field_name: entry.field_name.clone(),
+                        old_value: entry.old_value.clone(),
+                        new_value: entry.new_value.clone(),
+                    }).collect(),
                     u_frame_number: config.u_frame_number,
                     u_tool_number: config.u_tool_number,
                     front: config.front,
@@ -212,8 +228,32 @@ pub async fn connect_to_saved_robot(
                     turn4: config.turn4,
                     turn5: config.turn5,
                     turn6: config.turn6,
+                    default_cartesian_jog_speed: config.default_cartesian_jog_speed,
+                    default_cartesian_jog_step: config.default_cartesian_jog_step,
+                    default_joint_jog_speed: config.default_joint_jog_speed,
+                    default_joint_jog_step: config.default_joint_jog_step,
                 };
                 client_manager.broadcast_all(&config_response).await;
+
+                // Broadcast active jog settings
+                let jog_response = ServerResponse::ActiveJogSettings {
+                    cartesian_jog_speed: conn_guard.active_cartesian_jog_speed,
+                    cartesian_jog_step: conn_guard.active_cartesian_jog_step,
+                    joint_jog_speed: conn_guard.active_joint_jog_speed,
+                    joint_jog_step: conn_guard.active_joint_jog_step,
+                };
+                client_manager.broadcast_all(&jog_response).await;
+
+                // Broadcast connection status with tp_program_initialized flag
+                let status_response = ServerResponse::ConnectionStatus {
+                    connected: conn_guard.connected,
+                    robot_addr: conn_guard.robot_addr.clone(),
+                    robot_port: conn_guard.robot_port,
+                    connection_name: Some(saved_conn.name.clone()),
+                    connection_id: Some(saved_conn.id),
+                    tp_program_initialized: conn_guard.tp_program_initialized,
+                };
+                client_manager.broadcast_all(&status_response).await;
             }
 
             // Store the saved connection for configuration defaults

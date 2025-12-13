@@ -2,12 +2,13 @@
 //!
 //! Supports flexible CSV format:
 //! - Minimal: x, y, z, speed (required columns, values required per row)
-//! - Full: x, y, z, w, p, r, ext1, ext2, ext3, speed, term_type, uframe, utool
+//! - Full: x, y, z, w, p, r, ext1, ext2, ext3, speed, speed_type, term_type, uframe, utool
 //!
 //! Validation rules:
 //! - Required columns (x, y, z, speed) must have values in every row
 //! - Optional columns must be consistent: if present, either ALL rows have values or NONE do
 //! - Range validation: speed > 0, uframe >= 0, utool >= 0
+//! - Valid speed_type values: mmSec, InchMin, Time, mSec (defaults to robot's default_speed_type if not specified)
 //! - Valid term_type values: FINE, CNT (also accepts CNT with value like CNT100, normalized to CNT)
 
 use crate::database::ProgramInstruction;
@@ -109,6 +110,7 @@ pub struct ProgramDefaults {
     pub ext2: f64,
     pub ext3: f64,
     pub speed: f64,
+    pub speed_type: String,  // mmSec, InchMin, Time, mSec
     pub term_type: String,
     pub uframe: Option<i32>,
     pub utool: Option<i32>,
@@ -132,6 +134,7 @@ impl Default for ProgramDefaults {
             ext2: 0.0,
             ext3: 0.0,
             speed: 100.0,
+            speed_type: "mmSec".to_string(),
             term_type: "CNT".to_string(),
             uframe: None,
             utool: None,
@@ -255,7 +258,7 @@ pub fn parse_csv<R: Read>(reader: R, _defaults: &ProgramDefaults) -> Result<Pars
     let mut line_number = 1usize;
 
     // Optional columns that need consistency tracking
-    let optional_columns = ["w", "p", "r", "ext1", "ext2", "ext3", "term_type", "uframe", "utool"];
+    let optional_columns = ["w", "p", "r", "ext1", "ext2", "ext3", "speed_type", "term_type", "uframe", "utool"];
 
     for result in csv_reader.records() {
         let record = match result {
@@ -389,6 +392,7 @@ pub fn parse_csv<R: Read>(reader: R, _defaults: &ProgramDefaults) -> Result<Pars
         let ext1 = get_f64("ext1", &mut errors);
         let ext2 = get_f64("ext2", &mut errors);
         let ext3 = get_f64("ext3", &mut errors);
+        let speed_type = get_str("speed_type");
         let term_type = get_str("term_type");
         let uframe = get_i32("uframe", &mut errors);
         let utool = get_i32("utool", &mut errors);
@@ -403,6 +407,7 @@ pub fn parse_csv<R: Read>(reader: R, _defaults: &ProgramDefaults) -> Result<Pars
                     "ext1" => ext1.is_some(),
                     "ext2" => ext2.is_some(),
                     "ext3" => ext3.is_some(),
+                    "speed_type" => speed_type.is_some(),
                     "term_type" => term_type.is_some(),
                     "uframe" => uframe.is_some(),
                     "utool" => utool.is_some(),
@@ -411,6 +416,24 @@ pub fn parse_csv<R: Read>(reader: R, _defaults: &ProgramDefaults) -> Result<Pars
                 consistency_tracker.record(col, csv_line, has_value);
             }
         }
+
+        // Validate speed_type if present
+        // Must be one of: mmSec, InchMin, Time, mSec
+        let speed_type = if let Some(ref st) = speed_type {
+            let valid_types = ["mmSec", "InchMin", "Time", "mSec"];
+            if valid_types.contains(&st.as_str()) {
+                Some(st.clone())
+            } else {
+                errors.push(ValidationError {
+                    line: csv_line,
+                    column: "speed_type".to_string(),
+                    message: format!("Invalid speed_type '{}'. Must be one of: mmSec, InchMin, Time, mSec", st),
+                });
+                None
+            }
+        } else {
+            None
+        };
 
         // Validate and normalize term_type if present
         // Accepts FINE, CNT, or CNT with value (e.g., CNT100) - normalized to CNT
@@ -467,6 +490,7 @@ pub fn parse_csv<R: Read>(reader: R, _defaults: &ProgramDefaults) -> Result<Pars
                 ext2,
                 ext3,
                 speed: Some(speed),
+                speed_type,
                 term_type,
                 uframe,
                 utool,

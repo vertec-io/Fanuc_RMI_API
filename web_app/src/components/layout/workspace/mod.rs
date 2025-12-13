@@ -35,7 +35,7 @@ pub fn MainWorkspace() -> impl IntoView {
     let workspace_ctx = WorkspaceContext::new();
     provide_context(workspace_ctx);
 
-    // Clear recent commands and load jog defaults when switching robots
+    // Clear recent commands when switching robots
     // Track the previous connection ID to detect changes
     let prev_connection_id = StoredValue::new(ws.active_connection_id.get_untracked());
     Effect::new(move |_| {
@@ -50,16 +50,8 @@ pub fn MainWorkspace() -> impl IntoView {
             workspace_ctx.command_log.set(Vec::new());
             prev_connection_id.set_value(current_id);
 
-            // Load robot-specific jog defaults when a robot connects
-            if let Some(conn) = ws.get_active_connection() {
-                log::info!("Loading jog defaults for robot: cart_speed={}, cart_step={}, joint_speed={}, joint_step={}",
-                    conn.default_cartesian_jog_speed, conn.default_cartesian_jog_step,
-                    conn.default_joint_jog_speed, conn.default_joint_jog_step);
-                layout_ctx.jog_speed.set(conn.default_cartesian_jog_speed);
-                layout_ctx.jog_step.set(conn.default_cartesian_jog_step);
-                layout_ctx.joint_jog_speed.set(conn.default_joint_jog_speed);
-                layout_ctx.joint_jog_step.set(conn.default_joint_jog_step);
-            }
+            // Note: Jog defaults are now server-driven via active_jog_settings
+            // Server broadcasts ActiveJogSettings when robot connects
         }
     });
 

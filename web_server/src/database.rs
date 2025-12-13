@@ -56,6 +56,7 @@ pub struct ProgramInstruction {
     pub ext2: Option<f64>,
     pub ext3: Option<f64>,
     pub speed: Option<f64>,
+    pub speed_type: Option<String>,  // mmSec, InchMin, Time, mSec
     pub term_type: Option<String>,
     pub uframe: Option<i32>,
     pub utool: Option<i32>,
@@ -261,6 +262,20 @@ impl Database {
                 )?;
                 tracing::info!("Migration: Added column {} to programs", column_name);
             }
+        }
+
+        // Migration: Add speed_type column to program_instructions table if it doesn't exist
+        let column_exists = self
+            .conn
+            .prepare("SELECT speed_type FROM program_instructions LIMIT 1")
+            .is_ok();
+
+        if !column_exists {
+            self.conn.execute(
+                "ALTER TABLE program_instructions ADD COLUMN speed_type TEXT",
+                [],
+            )?;
+            tracing::info!("Migration: Added column speed_type to program_instructions");
         }
 
         Ok(())
@@ -510,14 +525,14 @@ impl Database {
     pub fn add_instruction(&self, program_id: i64, instruction: &ProgramInstruction) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO program_instructions
-                (program_id, line_number, x, y, z, w, p, r, ext1, ext2, ext3, speed, term_type, uframe, utool)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                (program_id, line_number, x, y, z, w, p, r, ext1, ext2, ext3, speed, speed_type, term_type, uframe, utool)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 program_id, instruction.line_number,
                 instruction.x, instruction.y, instruction.z,
                 instruction.w, instruction.p, instruction.r,
                 instruction.ext1, instruction.ext2, instruction.ext3,
-                instruction.speed, instruction.term_type,
+                instruction.speed, instruction.speed_type, instruction.term_type,
                 instruction.uframe, instruction.utool
             ],
         )?;
@@ -527,7 +542,7 @@ impl Database {
     /// Get all instructions for a program, ordered by line number.
     pub fn get_instructions(&self, program_id: i64) -> Result<Vec<ProgramInstruction>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, program_id, line_number, x, y, z, w, p, r, ext1, ext2, ext3, speed, term_type, uframe, utool
+            "SELECT id, program_id, line_number, x, y, z, w, p, r, ext1, ext2, ext3, speed, speed_type, term_type, uframe, utool
              FROM program_instructions WHERE program_id = ?1 ORDER BY line_number"
         )?;
 
@@ -546,9 +561,10 @@ impl Database {
                 ext2: row.get(10)?,
                 ext3: row.get(11)?,
                 speed: row.get(12)?,
-                term_type: row.get(13)?,
-                uframe: row.get(14)?,
-                utool: row.get(15)?,
+                speed_type: row.get(13)?,
+                term_type: row.get(14)?,
+                uframe: row.get(15)?,
+                utool: row.get(16)?,
             })
         })?;
 

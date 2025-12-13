@@ -51,44 +51,12 @@ pub fn QuickCommandsPanel() -> impl IntoView {
 
     view! {
         <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-2 shrink-0">
-            <div class="flex items-center justify-between mb-2">
-                <h3 class="text-[10px] font-semibold text-[#00d9ff] uppercase tracking-wide flex items-center">
-                    <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                    </svg>
-                    "Quick Commands"
-                </h3>
-                // Control lock indicator and button
-                <div class="flex items-center gap-1">
-                    {move || if has_control.get() {
-                        view! {
-                            <button
-                                class="bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] text-[8px] px-2 py-0.5 rounded hover:bg-[#22c55e30] flex items-center gap-1"
-                                on:click=move |_| ws.release_control()
-                                title="You have control. Click to release."
-                            >
-                                <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24">
-                                    <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
-                                </svg>
-                                "IN CONTROL"
-                            </button>
-                        }.into_any()
-                    } else {
-                        view! {
-                            <button
-                                class="bg-[#f59e0b20] border border-[#f59e0b40] text-[#f59e0b] text-[8px] px-2 py-0.5 rounded hover:bg-[#f59e0b30] flex items-center gap-1"
-                                on:click=move |_| ws.request_control()
-                                title="Request control of the robot"
-                            >
-                                <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24">
-                                    <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
-                                </svg>
-                                "REQUEST CONTROL"
-                            </button>
-                        }.into_any()
-                    }}
-                </div>
-            </div>
+            <h3 class="text-[10px] font-semibold text-[#00d9ff] uppercase tracking-wide flex items-center mb-2">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+                "Quick Commands"
+            </h3>
             <div class="flex gap-2 flex-wrap items-center">
                 // Initialize button - uses API endpoint for proper error handling
                 <button

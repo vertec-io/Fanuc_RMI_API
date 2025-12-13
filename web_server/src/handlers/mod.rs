@@ -251,6 +251,20 @@ pub async fn handle_request(
         ClientRequest::UpdateRobotJogDefaults { id, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step } => {
             robot_connections::update_robot_jog_defaults(db, id, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step).await
         }
+        ClientRequest::UpdateJogControls { cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step } => {
+            // Requires control - changes active jog controls (from Control panel)
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
+            robot_connections::update_jog_controls(robot_connection, client_manager, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step).await
+        }
+        ClientRequest::ApplyJogSettings { cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step } => {
+            // Requires control - applies jog defaults (from Configuration panel)
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
+            robot_connections::apply_jog_settings(robot_connection, client_manager, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step).await
+        }
 
         // Frame/Tool management
         ClientRequest::GetActiveFrameTool => {
@@ -435,6 +449,13 @@ pub async fn handle_request(
         }
         ClientRequest::LoadConfiguration { configuration_id } => {
             configurations::load_configuration(db, robot_connection, client_manager, configuration_id).await
+        }
+        ClientRequest::SaveCurrentConfiguration { configuration_name } => {
+            // Requires control - saves configuration to database
+            if let Err(e) = require_control(&client_manager, client_id).await {
+                return e;
+            }
+            configurations::save_current_configuration(db, robot_connection, client_manager, configuration_name).await
         }
     }
 }
