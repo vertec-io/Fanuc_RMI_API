@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use leptos::either::Either;
 use crate::websocket::WebSocketManager;
-use crate::robot_models::RobotModel;
+use web_common::RobotModel;
 
 #[component]
 pub fn Settings() -> impl IntoView {

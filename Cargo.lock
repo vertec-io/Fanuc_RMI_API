@@ -2440,6 +2440,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "web_common",
 ]
 
 [[package]]
@@ -3224,6 +3225,15 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "web_common",
+]
+
+[[package]]
+name = "web_common"
+version = "0.1.0"
+dependencies = [
+ "fanuc_rmi",
+ "serde",
 ]
 
 [[package]]
@@ -3244,6 +3254,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "web_common",
 ]
 
 [[package]]

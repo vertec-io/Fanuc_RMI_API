@@ -283,19 +283,19 @@ pub async fn handle_request(
         ClientRequest::ReadToolData { tool_number } => {
             frame_tool::read_tool_data(robot_connection, tool_number).await
         }
-        ClientRequest::WriteFrameData { frame_number, x, y, z, w, p, r } => {
+        ClientRequest::WriteFrameData { frame_number, data } => {
             // Requires control - modifies robot data
             if let Err(e) = require_control(&client_manager, client_id).await {
                 return e;
             }
-            frame_tool::write_frame_data(robot_connection, frame_number, x, y, z, w, p, r).await
+            frame_tool::write_frame_data(robot_connection, frame_number, data.into()).await
         }
-        ClientRequest::WriteToolData { tool_number, x, y, z, w, p, r } => {
+        ClientRequest::WriteToolData { tool_number, data } => {
             // Requires control - modifies robot data
             if let Err(e) = require_control(&client_manager, client_id).await {
                 return e;
             }
-            frame_tool::write_tool_data(robot_connection, tool_number, x, y, z, w, p, r).await
+            frame_tool::write_tool_data(robot_connection, tool_number, data.into()).await
         }
 
         // I/O management - Digital

@@ -15,6 +15,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bincode = "1"
 fanuc_rmi = { path = "../fanuc_rmi", features = ["DTO", "driver","logging"] }
+web_common = { path = "../web_common" }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 rusqlite = { version = "0.37.0", features = ["bundled"] }

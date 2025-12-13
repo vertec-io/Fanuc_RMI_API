@@ -5,11 +5,10 @@ use wasm_bindgen::prelude::*;
 
 mod components;
 mod websocket;
-mod robot_models;
 
 use components::{DesktopLayout, FloatingJogControls, ToastContainer};
 use websocket::WebSocketManager;
-pub use robot_models::RobotModel;
+pub use web_common::RobotModel;
 
 #[wasm_bindgen(start)]
 pub fn main() {

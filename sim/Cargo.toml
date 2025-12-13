@@ -18,3 +18,4 @@ serde_json = "1"
 tracing = "0.1.41"
 nalgebra = "0.33"
 fanuc_rmi = { path = "../fanuc_rmi" }
+web_common = { path = "../web_common" }

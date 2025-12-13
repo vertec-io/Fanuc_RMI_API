@@ -224,14 +224,9 @@ pub async fn read_frame_data(
                     message: format!("Robot error: {}", resp.error_id),
                 };
             }
-            ServerResponse::FrameData {
+            ServerResponse::FrameDataResponse {
                 frame_number: resp.frame_number as u8,
-                x: resp.frame.x,
-                y: resp.frame.y,
-                z: resp.frame.z,
-                w: resp.frame.w,
-                p: resp.frame.p,
-                r: resp.frame.r,
+                data: resp.frame.into(),
             }
         }
         Ok(None) => {
@@ -303,14 +298,9 @@ pub async fn read_tool_data(
                     message: format!("Robot error: {}", resp.error_id),
                 };
             }
-            ServerResponse::ToolData {
+            ServerResponse::ToolDataResponse {
                 tool_number: resp.tool_number,
-                x: resp.frame.x,
-                y: resp.frame.y,
-                z: resp.frame.z,
-                w: resp.frame.w,
-                p: resp.frame.p,
-                r: resp.frame.r,
+                data: resp.frame.into(),
             }
         }
         Ok(None) => {
@@ -329,16 +319,10 @@ pub async fn read_tool_data(
 }
 
 /// Write UFrame data for a specific frame number.
-#[allow(clippy::too_many_arguments)]
 pub async fn write_frame_data(
     robot_connection: Option<Arc<RwLock<RobotConnection>>>,
     frame_number: u8,
-    x: f64,
-    y: f64,
-    z: f64,
-    w: f64,
-    p: f64,
-    r: f64,
+    frame: FrameData,
 ) -> ServerResponse {
     let Some(conn) = robot_connection else {
         return ServerResponse::Error {
@@ -354,7 +338,6 @@ pub async fn write_frame_data(
     };
 
     // Send FrcWriteUFrameData command
-    let frame = FrameData { x, y, z, w, p, r };
     let cmd = FrcWriteUFrameData::new(None, frame_number as i8, frame);
     let packet = SendPacket::Command(Command::FrcWriteUFrameData(cmd));
 
@@ -398,16 +381,10 @@ pub async fn write_frame_data(
 }
 
 /// Write UTool data for a specific tool number.
-#[allow(clippy::too_many_arguments)]
 pub async fn write_tool_data(
     robot_connection: Option<Arc<RwLock<RobotConnection>>>,
     tool_number: u8,
-    x: f64,
-    y: f64,
-    z: f64,
-    w: f64,
-    p: f64,
-    r: f64,
+    frame: FrameData,
 ) -> ServerResponse {
     let Some(conn) = robot_connection else {
         return ServerResponse::Error {
@@ -423,7 +400,6 @@ pub async fn write_tool_data(
     };
 
     // Send FrcWriteUToolData command
-    let frame = FrameData { x, y, z, w, p, r };
     let cmd = FrcWriteUToolData::new(None, tool_number as i8, frame);
     let packet = SendPacket::Command(Command::FrcWriteUToolData(cmd));
 
