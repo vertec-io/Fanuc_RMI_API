@@ -307,7 +307,14 @@ pub async fn handle_request(
             if let Err(e) = require_control(&client_manager, client_id).await {
                 return e;
             }
-            io::write_dout(robot_connection, port_number, port_value).await
+            let response = io::write_dout(robot_connection, port_number, port_value).await;
+            // Broadcast successful I/O changes to all clients
+            if matches!(response, ServerResponse::DoutValue { .. }) {
+                if let Some(ref cm) = client_manager {
+                    cm.broadcast_all(&response).await;
+                }
+            }
+            response
         }
         ClientRequest::ReadDinBatch { port_numbers } => {
             io::read_din_batch(robot_connection, port_numbers).await
@@ -322,7 +329,14 @@ pub async fn handle_request(
             if let Err(e) = require_control(&client_manager, client_id).await {
                 return e;
             }
-            io::write_aout(robot_connection, port_number, port_value).await
+            let response = io::write_aout(robot_connection, port_number, port_value).await;
+            // Broadcast successful I/O changes to all clients
+            if matches!(response, ServerResponse::AoutValue { .. }) {
+                if let Some(ref cm) = client_manager {
+                    cm.broadcast_all(&response).await;
+                }
+            }
+            response
         }
 
         // I/O management - Group
@@ -334,7 +348,14 @@ pub async fn handle_request(
             if let Err(e) = require_control(&client_manager, client_id).await {
                 return e;
             }
-            io::write_gout(robot_connection, port_number, port_value).await
+            let response = io::write_gout(robot_connection, port_number, port_value).await;
+            // Broadcast successful I/O changes to all clients
+            if matches!(response, ServerResponse::GoutValue { .. }) {
+                if let Some(ref cm) = client_manager {
+                    cm.broadcast_all(&response).await;
+                }
+            }
+            response
         }
 
         // Control locking

@@ -68,7 +68,8 @@ pub fn create_motion_packet(cmd: &RecentCommand, ws: &WebSocketManager) -> Optio
             term_type,
             term_value,
         })),
-        "joint" => SendPacket::Instruction(Instruction::FrcJointMotion(FrcJointMotion {
+        // Both joint_abs and joint_rel use FrcJointMotion - the position determines absolute vs relative
+        "joint_abs" | "joint_rel" => SendPacket::Instruction(Instruction::FrcJointMotion(FrcJointMotion {
             sequence_id: 0,
             configuration: config,
             position,
@@ -77,15 +78,18 @@ pub fn create_motion_packet(cmd: &RecentCommand, ws: &WebSocketManager) -> Optio
             term_type,
             term_value,
         })),
-        _ => SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative {
-            sequence_id: 0,
-            configuration: config,
-            position,
-            speed_type,
-            speed: cmd.speed,
-            term_type,
-            term_value,
-        })),
+        unknown => {
+            log::warn!("Unknown command type '{}', defaulting to linear_rel", unknown);
+            SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative {
+                sequence_id: 0,
+                configuration: config,
+                position,
+                speed_type,
+                speed: cmd.speed,
+                term_type,
+                term_value,
+            }))
+        }
     })
 }
 

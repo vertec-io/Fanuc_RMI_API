@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 mod components;
 mod websocket;
 
-use components::{DesktopLayout, FloatingJogControls, ToastContainer};
+use components::{DesktopLayout, FloatingJogControls, FloatingIOStatus, ToastContainer};
 use websocket::WebSocketManager;
 pub use web_common::RobotModel;
 
@@ -27,6 +27,7 @@ pub fn App() -> impl IntoView {
         <Router>
             <DesktopLayout/>
             <FloatingJogControls/>
+            <FloatingIOStatus/>
             <ToastContainer/>
         </Router>
     }

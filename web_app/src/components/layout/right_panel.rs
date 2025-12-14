@@ -4,6 +4,7 @@ use leptos::prelude::*;
 use leptos::html::Div;
 use leptos_use::{use_draggable_with_options, UseDraggableOptions, UseDraggableReturn, core::Position};
 use leptos_router::hooks::use_location;
+use wasm_bindgen::JsCast;
 use super::LayoutContext;
 use crate::components::{PositionDisplay, ErrorLog, JogControls, RobotStatus};
 use crate::websocket::WebSocketManager;
@@ -14,6 +15,7 @@ pub fn RightPanel() -> impl IntoView {
     let layout_ctx = use_context::<LayoutContext>().expect("LayoutContext not found");
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
     let jog_popped = layout_ctx.jog_popped;
+    let io_popped = layout_ctx.io_popped;
     let robot_connected = ws.robot_connected;
 
     view! {
@@ -28,8 +30,8 @@ pub fn RightPanel() -> impl IntoView {
                 // Errors panel
                 <ErrorLog/>
 
-                // I/O Status (only show when robot connected)
-                <Show when=move || robot_connected.get()>
+                // I/O Status (only show when robot connected and not popped)
+                <Show when=move || robot_connected.get() && !io_popped.get()>
                     <IOStatusPanel/>
                 </Show>
 
@@ -45,6 +47,8 @@ pub fn RightPanel() -> impl IntoView {
 /// I/O Status panel with DIN/DOUT/AIN/AOUT/GIN/GOUT support.
 #[component]
 fn IOStatusPanel() -> impl IntoView {
+    let layout_ctx = use_context::<LayoutContext>().expect("LayoutContext not found");
+    let io_popped = layout_ctx.io_popped;
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
     let (collapsed, set_collapsed) = signal(true);
     let (selected_tab, set_selected_tab) = signal::<&'static str>("din");
@@ -118,9 +122,19 @@ fn IOStatusPanel() -> impl IntoView {
     };
 
     view! {
-        <div class="bg-[#0a0a0a] rounded border border-[#ffffff08]">
+        <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] relative">
+            // Pop-out button (absolute positioned)
             <button
-                class="w-full flex items-center justify-between p-2 hover:bg-[#ffffff05] transition-colors"
+                class="absolute top-1.5 right-1.5 p-0.5 hover:bg-[#ffffff10] rounded z-10"
+                title="Pop out I/O panel"
+                on:click=move |_| io_popped.set(true)
+            >
+                <svg class="w-3 h-3 text-[#555555] hover:text-[#00d9ff]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                </svg>
+            </button>
+            <button
+                class="w-full flex items-center justify-between p-2 pr-8 hover:bg-[#ffffff05] transition-colors"
                 on:click=toggle_collapse
             >
                 <h3 class="text-[10px] font-semibold text-[#00d9ff] uppercase tracking-wide flex items-center">
@@ -295,11 +309,11 @@ fn IOButton(
     let display_name = name.clone();
     let title_name = name;
 
+    // Send write request to server - UI will update when server broadcasts the result
     let toggle = move |_| {
         let current = value.get();
         ws.write_dout(port, !current);
-        // Optimistically update local state
-        ws.update_dout_cache(port, !current);
+        // DO NOT update local cache - wait for server confirmation via broadcast
     };
 
     view! {
@@ -360,10 +374,11 @@ fn AnalogOutput(
         set_editing.set(true);
     };
 
+    // Send write request to server - UI will update when server broadcasts the result
     let do_submit = move || {
         if let Ok(new_val) = input_value.get().parse::<f64>() {
             ws.write_aout(port, new_val);
-            ws.update_aout_cache(port, new_val);
+            // DO NOT update local cache - wait for server confirmation via broadcast
         }
         set_editing.set(false);
     };
@@ -435,10 +450,11 @@ fn GroupOutput(
         set_editing.set(true);
     };
 
+    // Send write request to server - UI will update when server broadcasts the result
     let do_submit = move || {
         if let Ok(new_val) = input_value.get().parse::<u32>() {
             ws.write_gout(port, new_val);
-            ws.update_gout_cache(port, new_val);
+            // DO NOT update local cache - wait for server confirmation via broadcast
         }
         set_editing.set(false);
     };
@@ -522,16 +538,23 @@ pub fn FloatingJogControls() -> impl IntoView {
             .prevent_default(true),
     );
 
+    // Size state for resizing - generous default size for comfortable use
+    let (width, set_width) = signal(420i32);
+    let (height, set_height) = signal(275i32);
+
     view! {
         <Show when=should_show>
             <div
-                class="fixed bg-[#111111] rounded border border-[#00d9ff40] shadow-2xl z-50 select-none"
-                style=move || format!("touch-action: none; min-width: 200px; {}", style.get())
+                class="fixed bg-[#111111] rounded border border-[#00d9ff40] shadow-2xl z-50 select-none flex flex-col"
+                style=move || format!(
+                    "touch-action: none; min-width: 200px; min-height: 200px; width: {}px; height: {}px; {}",
+                    width.get(), height.get(), style.get()
+                )
             >
                 // Header with close button - THIS is the drag handle
                 <div
                     node_ref=header_el
-                    class="flex items-center justify-between p-2 cursor-move border-b border-[#ffffff10]"
+                    class="flex items-center justify-between p-2 cursor-move border-b border-[#ffffff10] shrink-0"
                 >
                     <h3 class="text-[10px] font-semibold text-[#00d9ff] uppercase tracking-wide flex items-center gap-1">
                         <svg class="w-3 h-3 text-[#555555]" fill="currentColor" viewBox="0 0 24 24">
@@ -551,11 +574,347 @@ pub fn FloatingJogControls() -> impl IntoView {
                 </div>
 
                 // Content area - NOT draggable, so inputs work normally
-                <div class="p-2">
+                <div class="p-2 flex-1 overflow-auto">
                     <JogControls/>
                 </div>
+
+                // Resize handle (bottom-right corner)
+                <ResizeHandle width=width height=height set_width=set_width set_height=set_height />
             </div>
         </Show>
     }
 }
 
+/// Resize handle component for floating panels
+#[component]
+fn ResizeHandle(
+    width: ReadSignal<i32>,
+    height: ReadSignal<i32>,
+    set_width: WriteSignal<i32>,
+    set_height: WriteSignal<i32>,
+) -> impl IntoView {
+    let (is_resizing, set_is_resizing) = signal(false);
+    let (start_x, set_start_x) = signal(0i32);
+    let (start_y, set_start_y) = signal(0i32);
+    let (start_width, set_start_width) = signal(0i32);
+    let (start_height, set_start_height) = signal(0i32);
+
+    // Mouse down on resize handle - capture current size from signals (reliable)
+    let on_mousedown = move |ev: web_sys::MouseEvent| {
+        ev.prevent_default();
+        set_is_resizing.set(true);
+        set_start_x.set(ev.client_x());
+        set_start_y.set(ev.client_y());
+        // Use the actual signal values instead of trying to read from DOM
+        set_start_width.set(width.get_untracked());
+        set_start_height.set(height.get_untracked());
+    };
+
+    // Global mouse move/up handlers when resizing
+    Effect::new(move |_| {
+        use wasm_bindgen::prelude::*;
+        use wasm_bindgen::JsCast;
+
+        if is_resizing.get() {
+            let window = web_sys::window().unwrap();
+            let document = window.document().unwrap();
+
+            let set_width = set_width;
+            let set_height = set_height;
+            let set_is_resizing = set_is_resizing;
+
+            // Mouse move handler
+            let mousemove_closure = Closure::<dyn Fn(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
+                if is_resizing.get_untracked() {
+                    let dx = ev.client_x() - start_x.get_untracked();
+                    let dy = ev.client_y() - start_y.get_untracked();
+                    let new_width = (start_width.get_untracked() + dx).max(200);
+                    let new_height = (start_height.get_untracked() + dy).max(150);
+                    set_width.set(new_width);
+                    set_height.set(new_height);
+                }
+            });
+
+            // Mouse up handler
+            let mouseup_closure = Closure::<dyn Fn(web_sys::MouseEvent)>::new(move |_: web_sys::MouseEvent| {
+                set_is_resizing.set(false);
+            });
+
+            let _ = document.add_event_listener_with_callback(
+                "mousemove",
+                mousemove_closure.as_ref().unchecked_ref()
+            );
+            let _ = document.add_event_listener_with_callback(
+                "mouseup",
+                mouseup_closure.as_ref().unchecked_ref()
+            );
+
+            // Keep closures alive - they'll be cleaned up when effect re-runs
+            mousemove_closure.forget();
+            mouseup_closure.forget();
+        }
+    });
+
+    view! {
+        <div
+            class="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize group"
+            on:mousedown=on_mousedown
+        >
+            // Resize grip icon
+            <svg
+                class="w-3 h-3 text-[#444444] group-hover:text-[#00d9ff] absolute bottom-0.5 right-0.5"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+            >
+                <path d="M22 22H20V20H22V22ZM22 18H20V16H22V18ZM18 22H16V20H18V22ZM22 14H20V12H22V14ZM18 18H16V16H18V18ZM14 22H12V20H14V22Z"/>
+            </svg>
+        </div>
+    }
+}
+
+/// Floating I/O Status panel (when popped out).
+#[component]
+pub fn FloatingIOStatus() -> impl IntoView {
+    let layout_ctx = use_context::<LayoutContext>().expect("LayoutContext not found");
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
+    let io_popped = layout_ctx.io_popped;
+    let robot_connected = ws.robot_connected;
+    let location = use_location();
+
+    // Only show if popped AND in Dashboard route AND robot connected
+    let is_dashboard = move || {
+        let path = location.pathname.get();
+        path == "/" || path.starts_with("/dashboard")
+    };
+    let should_show = move || io_popped.get() && is_dashboard() && robot_connected.get();
+
+    // Create node ref for the HEADER (drag handle only)
+    let header_el = NodeRef::<Div>::new();
+
+    // Use leptos-use draggable hook on the header only
+    let UseDraggableReturn {
+        style,
+        ..
+    } = use_draggable_with_options(
+        header_el,
+        UseDraggableOptions::default()
+            .initial_value(Position { x: 150.0, y: 150.0 })
+            .prevent_default(true),
+    );
+
+    // Size state for resizing
+    let (width, set_width) = signal(320i32);
+    let (height, set_height) = signal(240i32);
+
+    // I/O state (same as IOStatusPanel but always expanded)
+    let (selected_tab, set_selected_tab) = signal::<&'static str>("din");
+    const DEFAULT_PORTS: [u16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+
+    let io_config = ws.io_config;
+    let get_display_name = move |io_type: &str, port: u16| -> String {
+        let config = io_config.get();
+        if let Some(cfg) = config.get(&(io_type.to_string(), port as i32)) {
+            if let Some(ref name) = cfg.display_name {
+                return name.clone();
+            }
+        }
+        port.to_string()
+    };
+
+    let is_port_visible = move |io_type: &str, port: u16| -> bool {
+        let config = io_config.get();
+        if let Some(cfg) = config.get(&(io_type.to_string(), port as i32)) {
+            return cfg.is_visible;
+        }
+        true
+    };
+
+    let refresh_io = move || {
+        ws.clear_io_cache();
+        let ports: Vec<u16> = DEFAULT_PORTS.to_vec();
+        ws.read_din_batch(ports);
+        for &port in &DEFAULT_PORTS {
+            ws.read_din(port);
+            ws.read_ain(port);
+            ws.read_gin(port);
+        }
+    };
+
+    // Refresh on mount
+    Effect::new(move || {
+        if should_show() {
+            refresh_io();
+        }
+    });
+
+    let din_values = ws.din_values;
+    let dout_values = ws.dout_values;
+    let ain_values = ws.ain_values;
+    let aout_values = ws.aout_values;
+    let gin_values = ws.gin_values;
+    let gout_values = ws.gout_values;
+
+    let tab_class = move |tab: &'static str| {
+        format!(
+            "flex-1 text-[8px] py-1 rounded transition-colors {}",
+            if selected_tab.get() == tab { "bg-[#00d9ff20] text-[#00d9ff]" } else { "bg-[#ffffff05] text-[#666666] hover:text-[#888888]" }
+        )
+    };
+
+    view! {
+        <Show when=should_show>
+            <div
+                class="fixed bg-[#111111] rounded border border-[#00d9ff40] shadow-2xl z-50 select-none flex flex-col"
+                style=move || format!(
+                    "touch-action: none; min-width: 280px; min-height: 100px; width: {}px; height: {}px; {}",
+                    width.get(), height.get(), style.get()
+                )
+            >
+                // Header with close button - THIS is the drag handle
+                <div
+                    node_ref=header_el
+                    class="flex items-center justify-between p-2 cursor-move border-b border-[#ffffff10] shrink-0"
+                >
+                    <h3 class="text-[10px] font-semibold text-[#00d9ff] uppercase tracking-wide flex items-center gap-1">
+                        <svg class="w-3 h-3 text-[#555555]" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M8 6h2v2H8V6zm6 0h2v2h-2V6zM8 11h2v2H8v-2zm6 0h2v2h-2v-2zm-6 5h2v2H8v-2zm6 0h2v2h-2v-2z"/>
+                        </svg>
+                        "I/O Status"
+                    </h3>
+                    <div class="flex items-center gap-1">
+                        <button
+                            class="p-0.5 hover:bg-[#ffffff10] rounded cursor-pointer"
+                            title="Refresh I/O"
+                            on:click=move |_| refresh_io()
+                        >
+                            <svg class="w-3 h-3 text-[#666666] hover:text-[#00d9ff]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                        </button>
+                        <button
+                            class="p-0.5 hover:bg-[#ffffff10] rounded cursor-pointer"
+                            title="Dock I/O panel"
+                            on:click=move |_| io_popped.set(false)
+                        >
+                            <svg class="w-3 h-3 text-[#666666] hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                // Content area - NOT draggable, so inputs work normally
+                <div class="p-2 space-y-2 flex-1 overflow-auto">
+                    // Tab buttons
+                    <div class="flex gap-1">
+                        <button class={move || tab_class("din")} on:click=move |_| set_selected_tab.set("din")>"DIN"</button>
+                        <button class={move || tab_class("dout")} on:click=move |_| set_selected_tab.set("dout")>"DOUT"</button>
+                        <button class={move || tab_class("ain")} on:click=move |_| set_selected_tab.set("ain")>"AIN"</button>
+                        <button class={move || tab_class("aout")} on:click=move |_| set_selected_tab.set("aout")>"AOUT"</button>
+                        <button class={move || tab_class("gin")} on:click=move |_| set_selected_tab.set("gin")>"GIN"</button>
+                        <button class={move || tab_class("gout")} on:click=move |_| set_selected_tab.set("gout")>"GOUT"</button>
+                    </div>
+
+                    // I/O grid - DIN
+                    <Show when=move || selected_tab.get() == "din">
+                        <div class="grid grid-cols-4 gap-1">
+                            {DEFAULT_PORTS.iter().filter(|&&port| is_port_visible("DIN", port)).map(|&port| {
+                                let name = get_display_name("DIN", port);
+                                view! {
+                                    <IOIndicator
+                                        port=port
+                                        name=name
+                                        value=Signal::derive(move || din_values.get().get(&port).copied().unwrap_or(false))
+                                    />
+                                }
+                            }).collect_view()}
+                        </div>
+                    </Show>
+
+                    // I/O grid - DOUT
+                    <Show when=move || selected_tab.get() == "dout">
+                        <div class="grid grid-cols-4 gap-1">
+                            {DEFAULT_PORTS.iter().filter(|&&port| is_port_visible("DOUT", port)).map(|&port| {
+                                let name = get_display_name("DOUT", port);
+                                view! {
+                                    <IOButton
+                                        port=port
+                                        name=name
+                                        value=Signal::derive(move || dout_values.get().get(&port).copied().unwrap_or(false))
+                                    />
+                                }
+                            }).collect_view()}
+                        </div>
+                    </Show>
+
+                    // I/O grid - AIN
+                    <Show when=move || selected_tab.get() == "ain">
+                        <div class="grid grid-cols-4 gap-1">
+                            {DEFAULT_PORTS.iter().filter(|&&port| is_port_visible("AIN", port)).map(|&port| {
+                                let name = get_display_name("AIN", port);
+                                view! {
+                                    <AnalogIndicator
+                                        port=port
+                                        name=name
+                                        value=Signal::derive(move || ain_values.get().get(&port).copied().unwrap_or(0.0))
+                                    />
+                                }
+                            }).collect_view()}
+                        </div>
+                    </Show>
+
+                    // I/O grid - AOUT
+                    <Show when=move || selected_tab.get() == "aout">
+                        <div class="grid grid-cols-4 gap-1">
+                            {DEFAULT_PORTS.iter().filter(|&&port| is_port_visible("AOUT", port)).map(|&port| {
+                                let name = get_display_name("AOUT", port);
+                                view! {
+                                    <AnalogOutput
+                                        port=port
+                                        name=name
+                                        value=Signal::derive(move || aout_values.get().get(&port).copied().unwrap_or(0.0))
+                                    />
+                                }
+                            }).collect_view()}
+                        </div>
+                    </Show>
+
+                    // I/O grid - GIN
+                    <Show when=move || selected_tab.get() == "gin">
+                        <div class="grid grid-cols-4 gap-1">
+                            {DEFAULT_PORTS.iter().filter(|&&port| is_port_visible("GIN", port)).map(|&port| {
+                                let name = get_display_name("GIN", port);
+                                view! {
+                                    <GroupIndicator
+                                        port=port
+                                        name=name
+                                        value=Signal::derive(move || gin_values.get().get(&port).copied().unwrap_or(0))
+                                    />
+                                }
+                            }).collect_view()}
+                        </div>
+                    </Show>
+
+                    // I/O grid - GOUT
+                    <Show when=move || selected_tab.get() == "gout">
+                        <div class="grid grid-cols-4 gap-1">
+                            {DEFAULT_PORTS.iter().filter(|&&port| is_port_visible("GOUT", port)).map(|&port| {
+                                let name = get_display_name("GOUT", port);
+                                view! {
+                                    <GroupOutput
+                                        port=port
+                                        name=name
+                                        value=Signal::derive(move || gout_values.get().get(&port).copied().unwrap_or(0))
+                                    />
+                                }
+                            }).collect_view()}
+                        </div>
+                    </Show>
+                </div>
+
+                // Resize handle (bottom-right corner)
+                <ResizeHandle width=width height=height set_width=set_width set_height=set_height />
+            </div>
+        </Show>
+    }
+}

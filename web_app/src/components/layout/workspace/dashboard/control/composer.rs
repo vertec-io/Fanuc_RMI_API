@@ -26,6 +26,16 @@ impl InstructionType {
         }
     }
 
+    /// Returns a code string for packet creation (used by create_motion_packet)
+    fn code(&self) -> &'static str {
+        match self {
+            Self::LinearAbsolute => "linear_abs",
+            Self::LinearRelative => "linear_rel",
+            Self::JointAbsolute => "joint_abs",
+            Self::JointRelative => "joint_rel",
+        }
+    }
+
     fn is_cartesian(&self) -> bool {
         matches!(self, Self::LinearAbsolute | Self::LinearRelative)
     }
@@ -74,9 +84,20 @@ pub fn CommandComposerModal() -> impl IntoView {
     let (speed, set_speed) = signal(default_cartesian_speed);
     let (term_type, set_term_type) = signal("FINE".to_string());
 
-    // Update position and speed defaults when instruction type changes
+    // Track previous instruction type to detect changes
+    let (prev_instr_type, set_prev_instr_type) = signal::<Option<InstructionType>>(None);
+
+    // Update position and speed defaults ONLY when instruction type changes
+    // Use untrack to read position values without creating reactive dependencies
     Effect::new(move || {
         let itype = instr_type.get();
+        let prev = prev_instr_type.get_untracked();
+
+        // Only update defaults when instruction type actually changes
+        if prev == Some(itype) {
+            return;
+        }
+        set_prev_instr_type.set(Some(itype));
 
         // Update speed default based on instruction type
         // Cartesian moves use cartesian jog speed, joint moves use joint jog speed
@@ -90,20 +111,22 @@ pub fn CommandComposerModal() -> impl IntoView {
 
         if itype.is_absolute() {
             // Absolute moves: default to current position
+            // Use untrack to read current values without creating reactive dependencies
+            // This ensures we only set the initial values, not continuously override user input
             if itype.is_cartesian() {
-                if let Some((px, py, pz)) = current_pos.get() {
+                if let Some((px, py, pz)) = current_pos.get_untracked() {
                     set_x.set(px);
                     set_y.set(py);
                     set_z.set(pz);
                 }
-                if let Some((pw, pp, pr)) = current_orient.get() {
+                if let Some((pw, pp, pr)) = current_orient.get_untracked() {
                     set_w.set(pw);
                     set_p.set(pp);
                     set_r.set(pr);
                 }
             } else {
                 // Joint absolute
-                if let Some(angles) = current_joints.get() {
+                if let Some(angles) = current_joints.get_untracked() {
                     set_j1.set(angles[0] as f64);
                     set_j2.set(angles[1] as f64);
                     set_j3.set(angles[2] as f64);
@@ -141,7 +164,7 @@ pub fn CommandComposerModal() -> impl IntoView {
                 if instr_type.get_untracked().is_cartesian() { y.get_untracked() } else { j2.get_untracked() },
                 if instr_type.get_untracked().is_cartesian() { z.get_untracked() } else { j3.get_untracked() }
             ),
-            command_type: instr_type.get_untracked().label().to_string(),
+            command_type: instr_type.get_untracked().code().to_string(),
             description: format!("{} {}", speed.get_untracked(), term_type.get_untracked()),
             x: x.get_untracked(),
             y: y.get_untracked(),
@@ -218,24 +241,24 @@ pub fn CommandComposerModal() -> impl IntoView {
                             // Cartesian position (X,Y,Z,W,P,R)
                             view! {
                                 <div class="grid grid-cols-6 gap-1">
-                                    <NumberInput label="X" value=x set_value=set_x step=0.1 unit="mm"/>
-                                    <NumberInput label="Y" value=y set_value=set_y step=0.1 unit="mm"/>
-                                    <NumberInput label="Z" value=z set_value=set_z step=0.1 unit="mm"/>
-                                    <NumberInput label="W" value=w set_value=set_w step=0.1 unit="°"/>
-                                    <NumberInput label="P" value=p set_value=set_p step=0.1 unit="°"/>
-                                    <NumberInput label="R" value=r set_value=set_r step=0.1 unit="°"/>
+                                    <NumberInput label="X" value=x set_value=set_x unit="mm"/>
+                                    <NumberInput label="Y" value=y set_value=set_y unit="mm"/>
+                                    <NumberInput label="Z" value=z set_value=set_z unit="mm"/>
+                                    <NumberInput label="W" value=w set_value=set_w unit="°"/>
+                                    <NumberInput label="P" value=p set_value=set_p unit="°"/>
+                                    <NumberInput label="R" value=r set_value=set_r unit="°"/>
                                 </div>
                             }.into_any()
                         } else {
                             // Joint angles (J1-J6)
                             view! {
                                 <div class="grid grid-cols-6 gap-1">
-                                    <NumberInput label="J1" value=j1 set_value=set_j1 step=0.1 unit="°"/>
-                                    <NumberInput label="J2" value=j2 set_value=set_j2 step=0.1 unit="°"/>
-                                    <NumberInput label="J3" value=j3 set_value=set_j3 step=0.1 unit="°"/>
-                                    <NumberInput label="J4" value=j4 set_value=set_j4 step=0.1 unit="°"/>
-                                    <NumberInput label="J5" value=j5 set_value=set_j5 step=0.1 unit="°"/>
-                                    <NumberInput label="J6" value=j6 set_value=set_j6 step=0.1 unit="°"/>
+                                    <NumberInput label="J1" value=j1 set_value=set_j1 unit="°"/>
+                                    <NumberInput label="J2" value=j2 set_value=set_j2 unit="°"/>
+                                    <NumberInput label="J3" value=j3 set_value=set_j3 unit="°"/>
+                                    <NumberInput label="J4" value=j4 set_value=set_j4 unit="°"/>
+                                    <NumberInput label="J5" value=j5 set_value=set_j5 unit="°"/>
+                                    <NumberInput label="J6" value=j6 set_value=set_j6 unit="°"/>
                                 </div>
                             }.into_any()
                         }}
@@ -367,21 +390,30 @@ fn SpeedInput(
 }
 
 /// Number input helper component with unit display and validation
+/// Uses controlled text input to allow free-form editing while validating on blur
 #[component]
 fn NumberInput(
     label: &'static str,
     value: ReadSignal<f64>,
     set_value: WriteSignal<f64>,
-    step: f64,
     #[prop(default = "")] unit: &'static str,
 ) -> impl IntoView {
+    // Track whether user is actively editing - don't overwrite during edits
+    let (is_editing, set_is_editing) = signal(false);
     let (text_value, set_text_value) = signal(format!("{:.1}", value.get_untracked()));
     let (is_valid, set_is_valid) = signal(true);
 
-    // Sync text when value changes externally
-    Effect::new(move |_| {
+    // Only sync from external value changes when NOT editing
+    // This prevents the reactive update from clobbering user input
+    Effect::new(move |prev_value: Option<f64>| {
         let v = value.get();
-        set_text_value.set(format!("{:.1}", v));
+        // Only update text if not editing AND value actually changed externally
+        if !is_editing.get_untracked() {
+            if prev_value.map(|p| (p - v).abs() > 0.0001).unwrap_or(true) {
+                set_text_value.set(format!("{:.1}", v));
+            }
+        }
+        v
     });
 
     view! {
@@ -389,6 +421,7 @@ fn NumberInput(
             <label class="block text-[8px] text-[#555555] mb-0.5">{label}</label>
             <input
                 type="text"
+                inputmode="decimal"
                 class=move || format!(
                     "w-full bg-[#111111] rounded px-1.5 py-1 text-[10px] text-white focus:outline-none text-center {}",
                     if is_valid.get() {
@@ -398,16 +431,40 @@ fn NumberInput(
                     }
                 )
                 prop:value=move || text_value.get()
+                on:focus=move |_| {
+                    set_is_editing.set(true);
+                }
                 on:input=move |ev| {
                     let val = event_target_value(&ev);
                     set_text_value.set(val.clone());
+                    // Validate but don't update the actual value yet - wait for blur
+                    match val.parse::<f64>() {
+                        Ok(_) => set_is_valid.set(true),
+                        Err(_) => {
+                            // Allow intermediate states like "-" or "1." or ".5"
+                            if val.is_empty() || val == "-" || val == "." || val.ends_with('.') || val.starts_with('.') {
+                                set_is_valid.set(true);
+                            } else {
+                                set_is_valid.set(false);
+                            }
+                        }
+                    }
+                }
+                on:blur=move |_| {
+                    set_is_editing.set(false);
+                    // On blur, commit the value if valid
+                    let val = text_value.get_untracked();
                     match val.parse::<f64>() {
                         Ok(v) => {
                             set_is_valid.set(true);
                             set_value.set(v);
+                            // Format nicely after committing
+                            set_text_value.set(format!("{:.1}", v));
                         }
                         Err(_) => {
-                            set_is_valid.set(false);
+                            // Invalid - revert to current value
+                            set_is_valid.set(true);
+                            set_text_value.set(format!("{:.1}", value.get_untracked()));
                         }
                     }
                 }

@@ -182,7 +182,7 @@ pub enum ServerResponse {
         data: FrameData,
     },
 
-    // I/O responses
+    // I/O responses (inputs - read only)
     #[serde(rename = "din_value")]
     DinValue { port_number: u16, port_value: bool },
 
@@ -194,6 +194,16 @@ pub enum ServerResponse {
 
     #[serde(rename = "gin_value")]
     GinValue { port_number: u16, port_value: u32 },
+
+    // I/O responses (outputs - broadcast after successful write)
+    #[serde(rename = "dout_value")]
+    DoutValue { port_number: u16, port_value: bool },
+
+    #[serde(rename = "aout_value")]
+    AoutValue { port_number: u16, port_value: f64 },
+
+    #[serde(rename = "gout_value")]
+    GoutValue { port_number: u16, port_value: u32 },
 
     // I/O configuration responses
     #[serde(rename = "io_config")]

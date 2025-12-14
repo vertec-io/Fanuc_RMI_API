@@ -598,6 +598,44 @@ async fn handle_connection(
     let client_id = client_manager.register(Arc::clone(&ws_sender)).await;
     info!("Client {} connected", client_id);
 
+    // Send initial state to the new client
+    // This ensures the client knows the current robot connection status immediately
+    {
+        let status = handlers::connection::get_connection_status(Some(Arc::clone(&robot_connection))).await;
+        let json = serde_json::to_string(&status).unwrap_or_default();
+        let mut sender = ws_sender.lock().await;
+        let _ = sender.send(Message::Text(json)).await;
+        info!("Sent initial connection status to client {}", client_id);
+    }
+
+    // Also send control status so the client knows who has control
+    {
+        let has_control = client_manager.has_control(client_id).await;
+        let holder = client_manager.get_control_holder().await;
+        let control_response = ServerResponse::ControlStatus {
+            has_control,
+            holder_id: holder.map(|h| h.to_string()),
+        };
+        let json = serde_json::to_string(&control_response).unwrap_or_default();
+        let mut sender = ws_sender.lock().await;
+        let _ = sender.send(Message::Text(json)).await;
+    }
+
+    // Send active jog settings so jog controls are populated immediately
+    {
+        let conn = robot_connection.read().await;
+        let jog_response = ServerResponse::ActiveJogSettings {
+            cartesian_jog_speed: conn.active_cartesian_jog_speed,
+            cartesian_jog_step: conn.active_cartesian_jog_step,
+            joint_jog_speed: conn.active_joint_jog_speed,
+            joint_jog_step: conn.active_joint_jog_step,
+        };
+        let json = serde_json::to_string(&jog_response).unwrap_or_default();
+        let mut sender = ws_sender.lock().await;
+        let _ = sender.send(Message::Text(json)).await;
+        info!("Sent initial jog settings to client {}", client_id);
+    }
+
     // Task to forward broadcast messages to this client
     let ws_sender_clone = Arc::clone(&ws_sender);
     let send_task = tokio::spawn(async move {

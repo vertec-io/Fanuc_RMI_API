@@ -13,7 +13,7 @@ pub use position_display::PositionDisplay;
 pub use jog_controls::JogControls;
 pub use error_log::ErrorLog;
 pub use toast::ToastContainer;
-pub use layout::{DesktopLayout, FloatingJogControls};
+pub use layout::{DesktopLayout, FloatingJogControls, FloatingIOStatus};
 pub use robot_creation_wizard::RobotCreationWizard;
 
 // Re-export for potential future use (currently used in layout components)

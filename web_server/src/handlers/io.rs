@@ -129,13 +129,9 @@ pub async fn write_dout(
                     message: format!("Robot error: {}", resp.error_id),
                 };
             }
-            ServerResponse::Success {
-                message: format!(
-                    "DOUT[{}] set to {}",
-                    port_number,
-                    if port_value { "ON" } else { "OFF" }
-                ),
-            }
+            info!("DOUT[{}] set to {} successfully", port_number, if port_value { "ON" } else { "OFF" });
+            // Return the new value - this will be broadcast to all clients
+            ServerResponse::DoutValue { port_number, port_value }
         }
         Ok(None) => ServerResponse::Error {
             message: "No response received".to_string(),
@@ -302,9 +298,9 @@ pub async fn write_aout(
                     message: format!("Robot error: {}", resp.error_id),
                 };
             }
-            ServerResponse::Success {
-                message: format!("AOUT[{}] set to {:.2}", port_number, port_value),
-            }
+            info!("AOUT[{}] set to {:.2} successfully", port_number, port_value);
+            // Return the new value - this will be broadcast to all clients
+            ServerResponse::AoutValue { port_number, port_value }
         }
         Ok(None) => ServerResponse::Error {
             message: "No response received".to_string(),
@@ -423,9 +419,9 @@ pub async fn write_gout(
                     message: format!("Robot error: {}", resp.error_id),
                 };
             }
-            ServerResponse::Success {
-                message: format!("GOUT[{}] set to {}", port_number, port_value),
-            }
+            info!("GOUT[{}] set to {} successfully", port_number, port_value);
+            // Return the new value - this will be broadcast to all clients
+            ServerResponse::GoutValue { port_number, port_value }
         }
         Ok(None) => ServerResponse::Error {
             message: "No response received".to_string(),

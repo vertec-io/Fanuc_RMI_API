@@ -451,12 +451,12 @@ impl WebSocketManager {
         let set_frame_data = self.set_frame_data;
         let set_tool_data = self.set_tool_data;
         let set_din_values = self.set_din_values;
-        // DOUT values are updated optimistically via update_dout_cache, not from server responses
-        let _set_dout_values = self.set_dout_values;
+        // Output values are now updated from server broadcasts (not optimistically)
+        let set_dout_values = self.set_dout_values;
         let set_ain_values = self.set_ain_values;
-        let _set_aout_values = self.set_aout_values;
+        let set_aout_values = self.set_aout_values;
         let set_gin_values = self.set_gin_values;
-        let _set_gout_values = self.set_gout_values;
+        let set_gout_values = self.set_gout_values;
         let set_io_config = self.set_io_config;
         let set_has_control = self.set_has_control;
         let set_active_configuration = self.set_active_configuration;
@@ -753,6 +753,25 @@ impl WebSocketManager {
                         ServerResponse::GinValue { port_number, port_value } => {
                             log::debug!("GIN[{}] = {}", port_number, port_value);
                             set_gin_values.update(|map| {
+                                map.insert(port_number, port_value);
+                            });
+                        }
+                        // Output values - broadcast from server after successful write
+                        ServerResponse::DoutValue { port_number, port_value } => {
+                            log::debug!("DOUT[{}] = {} (confirmed)", port_number, if port_value { "ON" } else { "OFF" });
+                            set_dout_values.update(|map| {
+                                map.insert(port_number, port_value);
+                            });
+                        }
+                        ServerResponse::AoutValue { port_number, port_value } => {
+                            log::debug!("AOUT[{}] = {:.3} (confirmed)", port_number, port_value);
+                            set_aout_values.update(|map| {
+                                map.insert(port_number, port_value);
+                            });
+                        }
+                        ServerResponse::GoutValue { port_number, port_value } => {
+                            log::debug!("GOUT[{}] = {} (confirmed)", port_number, port_value);
+                            set_gout_values.update(|map| {
                                 map.insert(port_number, port_value);
                             });
                         }

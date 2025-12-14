@@ -7,7 +7,7 @@ pub mod workspace;
 
 pub use top_bar::TopBar;
 pub use left_navbar::LeftNavbar;
-pub use right_panel::{RightPanel, FloatingJogControls};
+pub use right_panel::{RightPanel, FloatingJogControls, FloatingIOStatus};
 pub use workspace::MainWorkspace;
 
 use leptos::prelude::*;
@@ -26,6 +26,8 @@ pub struct LayoutContext {
     /// Reserved for future position persistence.
     #[allow(dead_code)]
     pub jog_position: RwSignal<(i32, i32)>,
+    /// Whether I/O status panel is popped out (floating).
+    pub io_popped: RwSignal<bool>,
     /// Whether the program browser sidebar is visible in Programs view.
     pub show_program_browser: RwSignal<bool>,
     // Note: Jog settings (speed/step) are now server-driven via WebSocketManager.active_jog_settings
@@ -37,6 +39,7 @@ impl LayoutContext {
             dashboard_tab: RwSignal::new(0),
             jog_popped: RwSignal::new(false),
             jog_position: RwSignal::new((100, 100)),
+            io_popped: RwSignal::new(false),
             show_program_browser: RwSignal::new(false), // Hidden by default
         }
     }

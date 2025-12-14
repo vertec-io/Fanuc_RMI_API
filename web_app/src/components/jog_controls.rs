@@ -1,18 +1,17 @@
 use leptos::prelude::*;
 use fanuc_rmi::dto::*;
 use crate::websocket::WebSocketManager;
-use crate::components::layout::LayoutContext;
 
 #[component]
 pub fn JogControls() -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager not found");
     let active_jog_settings = ws.active_jog_settings;
 
-    // Local string state for inputs (initialized from server state)
+    // Local string state for inputs - start empty, will be populated from server
     let (speed_str, set_speed_str) = signal(String::new());
     let (step_str, set_step_str) = signal(String::new());
 
-    // Initialize from server state
+    // Always sync from server state - these should reflect server truth
     Effect::new(move || {
         if let Some(settings) = active_jog_settings.get() {
             set_speed_str.set(format!("{:.1}", settings.cartesian_jog_speed));
