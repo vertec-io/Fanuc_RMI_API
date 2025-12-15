@@ -12,6 +12,8 @@ pub use web_common::{
     StartPosition, ProgramInfo, ProgramDetail,
     RobotConnectionDto, RobotConfigurationDto, NewRobotConfigurationDto,
     RobotSettingsDto, IoDisplayConfigDto, ChangeLogEntryDto,
+    // HMI Panel System types
+    IoType, WidgetType, AlarmState, IoPortConfig, HmiPanel, HmiPanelWithPorts,
 };
 
 /// Frame or Tool coordinate data (X, Y, Z, W, P, R)
@@ -131,6 +133,15 @@ pub struct WebSocketManager {
     /// I/O display configuration - keyed by (io_type, io_index)
     pub io_config: ReadSignal<HashMap<(String, i32), IoDisplayConfigDto>>,
     set_io_config: WriteSignal<HashMap<(String, i32), IoDisplayConfigDto>>,
+    /// Extended I/O port configurations - keyed by (io_type, io_index)
+    pub io_port_configs: ReadSignal<Vec<IoPortConfig>>,
+    set_io_port_configs: WriteSignal<Vec<IoPortConfig>>,
+    /// HMI panels for the current robot
+    pub hmi_panels: ReadSignal<Vec<HmiPanel>>,
+    set_hmi_panels: WriteSignal<Vec<HmiPanel>>,
+    /// Currently selected HMI panel with its ports
+    pub current_hmi_panel: ReadSignal<Option<HmiPanelWithPorts>>,
+    set_current_hmi_panel: WriteSignal<Option<HmiPanelWithPorts>>,
     // Control lock state
     /// Whether this client has control of the robot
     pub has_control: ReadSignal<bool>,
@@ -307,6 +318,10 @@ impl WebSocketManager {
         let (gin_values, set_gin_values) = signal::<HashMap<u16, u32>>(HashMap::new());
         let (gout_values, set_gout_values) = signal::<HashMap<u16, u32>>(HashMap::new());
         let (io_config, set_io_config) = signal::<HashMap<(String, i32), IoDisplayConfigDto>>(HashMap::new());
+        // HMI Panel System state
+        let (io_port_configs, set_io_port_configs) = signal::<Vec<IoPortConfig>>(Vec::new());
+        let (hmi_panels, set_hmi_panels) = signal::<Vec<HmiPanel>>(Vec::new());
+        let (current_hmi_panel, set_current_hmi_panel) = signal::<Option<HmiPanelWithPorts>>(None);
         // Control lock state
         let (has_control, set_has_control) = signal(false);
         // Active configuration state
@@ -392,6 +407,12 @@ impl WebSocketManager {
             set_gout_values,
             io_config,
             set_io_config,
+            io_port_configs,
+            set_io_port_configs,
+            hmi_panels,
+            set_hmi_panels,
+            current_hmi_panel,
+            set_current_hmi_panel,
             has_control,
             set_has_control,
             active_configuration,
@@ -458,6 +479,9 @@ impl WebSocketManager {
         let set_gin_values = self.set_gin_values;
         let set_gout_values = self.set_gout_values;
         let set_io_config = self.set_io_config;
+        let set_io_port_configs = self.set_io_port_configs;
+        let set_hmi_panels = self.set_hmi_panels;
+        let set_current_hmi_panel = self.set_current_hmi_panel;
         let set_has_control = self.set_has_control;
         let set_active_configuration = self.set_active_configuration;
         let set_robot_configurations = self.set_robot_configurations;
@@ -784,6 +808,63 @@ impl WebSocketManager {
                                 }
                             });
                         }
+                        // HMI Panel System responses
+                        ServerResponse::IoPortConfigs { configs } => {
+                            log::debug!("Received I/O port configs: {} entries", configs.len());
+                            set_io_port_configs.set(configs);
+                        }
+                        ServerResponse::IoPortConfigSaved { config } => {
+                            log::info!("I/O port config saved: {}[{}]", config.io_type, config.io_index);
+                            // Update the config in the list
+                            set_io_port_configs.update(|configs| {
+                                if let Some(pos) = configs.iter().position(|c|
+                                    c.io_type == config.io_type && c.io_index == config.io_index
+                                ) {
+                                    configs[pos] = config.clone();
+                                } else {
+                                    configs.push(config.clone());
+                                }
+                            });
+                        }
+                        ServerResponse::IoPortConfigDeleted { io_type, io_index } => {
+                            log::info!("I/O port config deleted: {}[{}]", io_type, io_index);
+                            set_io_port_configs.update(|configs| {
+                                configs.retain(|c| !(c.io_type == io_type && c.io_index == io_index));
+                            });
+                        }
+                        ServerResponse::HmiPanels { panels } => {
+                            log::debug!("Received HMI panels: {} entries", panels.len());
+                            set_hmi_panels.set(panels);
+                        }
+                        ServerResponse::HmiPanelWithPorts { panel } => {
+                            log::debug!("Received HMI panel with ports: {} ({} ports)", panel.panel.name, panel.ports.len());
+                            set_current_hmi_panel.set(Some(panel));
+                        }
+                        ServerResponse::HmiPanelSaved { panel } => {
+                            log::info!("HMI panel saved: {}", panel.name);
+                            // Update the panel in the list
+                            set_hmi_panels.update(|panels| {
+                                if let Some(pos) = panels.iter().position(|p| p.id == panel.id) {
+                                    panels[pos] = panel.clone();
+                                } else {
+                                    panels.push(panel.clone());
+                                }
+                            });
+                        }
+                        ServerResponse::HmiPanelDeleted { panel_id } => {
+                            log::info!("HMI panel deleted: {}", panel_id);
+                            set_hmi_panels.update(|panels| {
+                                panels.retain(|p| p.id != panel_id);
+                            });
+                            // Clear current panel if it was deleted
+                            set_current_hmi_panel.update(|current| {
+                                if let Some(ref p) = current {
+                                    if p.panel.id == panel_id {
+                                        *current = None;
+                                    }
+                                }
+                            });
+                        }
                         ServerResponse::ExecutionStateChanged { state, program_id, current_line, total_lines, message } => {
                             log::info!("Execution state changed: {} (program={:?}, line={:?}/{:?})", state, program_id, current_line, total_lines);
                             // Update loaded program ID if provided
@@ -1027,6 +1108,21 @@ impl WebSocketManager {
                                     configs.push(configuration.clone());
                                 }
                             });
+                        }
+
+                        // Session linking responses (for HMI pop-out windows)
+                        ServerResponse::SessionInfo { session_id, robot_connection_id, has_control, parent_session_id, child_session_ids } => {
+                            log::info!("Session info: id={}, robot={:?}, control={}, parent={:?}, children={:?}",
+                                session_id, robot_connection_id, has_control, parent_session_id, child_session_ids);
+                            // TODO: Store session info for cross-tab coordination
+                        }
+                        ServerResponse::SessionLinked { parent_session_id } => {
+                            log::info!("Session linked to parent: {}", parent_session_id);
+                            // TODO: Update local state to reflect linked status
+                        }
+                        ServerResponse::SessionUnlinked => {
+                            log::info!("Session unlinked from parent");
+                            // TODO: Update local state to reflect unlinked status
                         }
                     }
                 } else {
@@ -1813,6 +1909,48 @@ impl WebSocketManager {
             is_visible,
             display_order,
         });
+    }
+
+    // ========== HMI Panel System ==========
+
+    /// Get all I/O port configurations for a robot
+    pub fn get_io_port_configs(&self, robot_connection_id: i64) {
+        self.send_api_request(ClientRequest::GetIoPortConfigs { robot_connection_id });
+    }
+
+    /// Save an I/O port configuration
+    pub fn save_io_port_config(&self, robot_connection_id: i64, config: IoPortConfig) {
+        self.send_api_request(ClientRequest::SaveIoPortConfig { robot_connection_id, config });
+    }
+
+    /// Save multiple I/O port configurations at once
+    pub fn save_io_port_configs(&self, robot_connection_id: i64, configs: Vec<IoPortConfig>) {
+        self.send_api_request(ClientRequest::SaveIoPortConfigs { robot_connection_id, configs });
+    }
+
+    /// Delete an I/O port configuration
+    pub fn delete_io_port_config(&self, robot_connection_id: i64, io_type: IoType, io_index: u16) {
+        self.send_api_request(ClientRequest::DeleteIoPortConfig { robot_connection_id, io_type, io_index });
+    }
+
+    /// Get all HMI panels for a robot
+    pub fn get_hmi_panels(&self, robot_connection_id: i64) {
+        self.send_api_request(ClientRequest::GetHmiPanels { robot_connection_id });
+    }
+
+    /// Get an HMI panel with its configured ports
+    pub fn get_hmi_panel_with_ports(&self, panel_id: i64) {
+        self.send_api_request(ClientRequest::GetHmiPanelWithPorts { panel_id });
+    }
+
+    /// Save an HMI panel
+    pub fn save_hmi_panel(&self, panel: HmiPanel) {
+        self.send_api_request(ClientRequest::SaveHmiPanel { panel });
+    }
+
+    /// Delete an HMI panel
+    pub fn delete_hmi_panel(&self, panel_id: i64) {
+        self.send_api_request(ClientRequest::DeleteHmiPanel { panel_id });
     }
 
     // ========== Control Lock ==========

@@ -1,12 +1,15 @@
 use leptos::prelude::*;
 use leptos::mount::mount_to_body;
-use leptos_router::components::Router;
+use leptos_router::components::{Router, Routes, Route};
+use leptos_router::path;
 use wasm_bindgen::prelude::*;
 
 mod components;
+mod hmi_broadcast;
 mod websocket;
 
-use components::{DesktopLayout, FloatingJogControls, FloatingIOStatus, ToastContainer};
+use components::{DesktopLayout, FloatingJogControls, FloatingIOStatus, ToastContainer, HmiPopup};
+use hmi_broadcast::HmiBroadcastHandler;
 use websocket::WebSocketManager;
 pub use web_common::RobotModel;
 
@@ -25,10 +28,19 @@ pub fn App() -> impl IntoView {
 
     view! {
         <Router>
-            <DesktopLayout/>
-            <FloatingJogControls/>
-            <FloatingIOStatus/>
-            <ToastContainer/>
+            <Routes fallback=|| view! { <DesktopLayout/> }>
+                // HMI popup route - minimal chrome for pop-out windows
+                <Route path=path!("/hmi-popup") view=HmiPopup />
+
+                // All other routes go through DesktopLayout
+                <Route path=path!("/*any") view=|| view! {
+                    <DesktopLayout/>
+                    <FloatingJogControls/>
+                    <FloatingIOStatus/>
+                    <ToastContainer/>
+                    <HmiBroadcastHandler/>
+                } />
+            </Routes>
         </Router>
     }
 }

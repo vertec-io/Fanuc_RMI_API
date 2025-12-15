@@ -16,6 +16,7 @@ pub use context::*;
 pub use dashboard::DashboardView;
 pub use dashboard::control::ControlTab;
 pub use dashboard::info::InfoTab;
+pub use dashboard::hmi::HmiTab;
 pub use programs::ProgramsView;
 pub use settings::SettingsView;
 
@@ -65,6 +66,7 @@ pub fn MainWorkspace() -> impl IntoView {
                 <ParentRoute path=path!("/dashboard") view=DashboardView>
                     <Route path=path!("/") view=|| view! { <Redirect path="/dashboard/control" /> } />
                     <Route path=path!("/control") view=ControlTab />
+                    <Route path=path!("/hmi") view=HmiTab />
                     <Route path=path!("/info") view=InfoTab />
                 </ParentRoute>
 

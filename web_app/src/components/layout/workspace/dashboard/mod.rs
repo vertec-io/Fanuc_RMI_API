@@ -3,9 +3,11 @@
 //! This module contains the Dashboard view components organized into:
 //! - `info` - Configuration tab with frame/tool management and robot configuration
 //! - `control` - Control tab with command composer, console, program execution
+//! - `hmi` - HMI Panel View with live I/O widgets
 
 pub mod info;
 pub mod control;
+pub mod hmi;
 
 use leptos::prelude::*;
 use leptos_router::components::*;
@@ -38,6 +40,19 @@ pub fn DashboardView() -> impl IntoView {
                     )
                 >
                     "Control"
+                </A>
+                <A
+                    href="/dashboard/hmi"
+                    attr:class=move || format!(
+                        "px-4 py-2 text-[10px] font-medium transition-colors {}",
+                        if is_active_tab("hmi") {
+                            "text-[#00d9ff] border-b-2 border-[#00d9ff]"
+                        } else {
+                            "text-[#666666] hover:text-[#888888]"
+                        }
+                    )
+                >
+                    "HMI"
                 </A>
                 <A
                     href="/dashboard/info"

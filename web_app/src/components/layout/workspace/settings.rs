@@ -6,10 +6,10 @@
 //!
 //! Settings are organized into:
 //! - System Settings: WebSocket server URL, display preferences
-//! - Robot Settings: Per-robot motion defaults, orientation, I/O config
+//! - Robot Settings: Per-robot motion defaults, orientation, I/O config, HMI panels
 
 use leptos::prelude::*;
-use crate::websocket::WebSocketManager;
+use crate::websocket::{WebSocketManager, HmiPanel, IoPortConfig, IoType, WidgetType};
 
 /// Settings view with two-panel layout.
 #[component]
@@ -911,6 +911,9 @@ where
                                 </div>
                             </div>
 
+                            // HMI Panels Section
+                            <HmiPanelBuilder robot_connection_id=robot.id />
+
                             // Quick Connect button
                             <div class="pt-2 border-t border-[#ffffff08]">
                                 <button
@@ -1322,6 +1325,807 @@ fn DeleteConfirmModal(
                     >
                         "Cancel"
                     </button>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+/// HMI Panel Builder section for robot settings.
+/// Allows users to create and configure HMI panels with custom I/O port layouts.
+#[component]
+fn HmiPanelBuilder(robot_connection_id: i64) -> impl IntoView {
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
+
+    // Local state for panel management
+    let (selected_panel_id, set_selected_panel_id) = signal::<Option<i64>>(None);
+    let (show_panel_form, set_show_panel_form) = signal(false);
+    let (editing_panel_id, set_editing_panel_id) = signal::<Option<i64>>(None);
+    let (show_delete_confirm, set_show_delete_confirm) = signal(false);
+    let (panel_to_delete, set_panel_to_delete) = signal::<Option<(i64, String)>>(None);
+
+    // Panel form fields
+    let (panel_name, set_panel_name) = signal::<String>("New Panel".to_string());
+    let (panel_description, set_panel_description) = signal::<String>(String::new());
+    let (panel_columns, set_panel_columns) = signal::<String>("8".to_string());
+    let (panel_rows, set_panel_rows) = signal::<String>("6".to_string());
+    let (panel_is_default, set_panel_is_default) = signal(false);
+
+    // Load HMI panels on mount
+    Effect::new(move |_| {
+        ws.get_hmi_panels(robot_connection_id);
+        ws.get_io_port_configs(robot_connection_id);
+    });
+
+    let hmi_panels = ws.hmi_panels;
+
+    // Reset form when closing
+    let reset_panel_form = move || {
+        set_panel_name.set("New Panel".to_string());
+        set_panel_description.set(String::new());
+        set_panel_columns.set("8".to_string());
+        set_panel_rows.set("6".to_string());
+        set_panel_is_default.set(false);
+        set_editing_panel_id.set(None);
+    };
+
+    view! {
+        <div class="mt-4">
+            <div class="flex items-center justify-between mb-2">
+                <h4 class="text-[10px] font-semibold text-[#888888] uppercase tracking-wide flex items-center">
+                    <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/>
+                    </svg>
+                    "HMI Panels"
+                </h4>
+                <button
+                    class="text-[8px] px-2 py-0.5 bg-[#00d9ff20] border border-[#00d9ff40] text-[#00d9ff] rounded hover:bg-[#00d9ff30]"
+                    on:click=move |_| {
+                        reset_panel_form();
+                        set_show_panel_form.set(true);
+                    }
+                >
+                    "+ Add Panel"
+                </button>
+            </div>
+
+            // Panel list
+            <div class="space-y-1.5">
+                <For
+                    each=move || hmi_panels.get()
+                    key=|panel| panel.id
+                    children=move |panel| {
+                        let panel_id = panel.id;
+                        let panel_name_display = panel.name.clone();
+                        let is_selected = move || selected_panel_id.get() == Some(panel_id);
+
+                        view! {
+                            <div
+                                class=move || {
+                                    if is_selected() {
+                                        "bg-[#00d9ff10] border border-[#00d9ff40] rounded p-2 cursor-pointer"
+                                    } else {
+                                        "bg-[#111111] border border-[#ffffff08] rounded p-2 cursor-pointer hover:bg-[#ffffff05]"
+                                    }
+                                }
+                                on:click=move |_| {
+                                    if is_selected() {
+                                        set_selected_panel_id.set(None);
+                                    } else {
+                                        set_selected_panel_id.set(Some(panel_id));
+                                    }
+                                }
+                            >
+                                <div class="flex items-center justify-between">
+                                    <div class="flex-1 min-w-0">
+                                        <div class="flex items-center gap-1.5">
+                                            <span class="text-[9px] text-white font-medium">{panel_name_display.clone()}</span>
+                                            {move || {
+                                                let panels = hmi_panels.get();
+                                                if let Some(p) = panels.iter().find(|p| p.id == panel_id) {
+                                                    if p.is_default {
+                                                        view! {
+                                                            <span class="text-[8px] px-1.5 py-0.5 bg-[#fbbf2420] border border-[#fbbf2440] text-[#fbbf24] rounded">"DEFAULT"</span>
+                                                        }.into_any()
+                                                    } else {
+                                                        view! { <span></span> }.into_any()
+                                                    }
+                                                } else {
+                                                    view! { <span></span> }.into_any()
+                                                }
+                                            }}
+                                        </div>
+                                    </div>
+                                    <div class="flex gap-1 ml-2">
+                                        <button
+                                            class="text-[8px] px-1.5 py-0.5 text-[#00d9ff] hover:bg-[#00d9ff10] rounded"
+                                            title="Edit"
+                                            on:click=move |ev| {
+                                                ev.stop_propagation();
+                                                let panels = hmi_panels.get();
+                                                if let Some(p) = panels.iter().find(|p| p.id == panel_id) {
+                                                    set_editing_panel_id.set(Some(panel_id));
+                                                    set_panel_name.set(p.name.clone());
+                                                    set_panel_description.set(p.description.clone().unwrap_or_default());
+                                                    set_panel_columns.set(p.grid_columns.to_string());
+                                                    set_panel_rows.set(p.grid_rows.to_string());
+                                                    set_panel_is_default.set(p.is_default);
+                                                    set_show_panel_form.set(true);
+                                                }
+                                            }
+                                        >
+                                            "✎"
+                                        </button>
+                                        <button
+                                            class="text-[8px] px-1.5 py-0.5 text-[#ff4444] hover:bg-[#ff444410] rounded"
+                                            title="Delete"
+                                            on:click=move |ev| {
+                                                ev.stop_propagation();
+                                                set_panel_to_delete.set(Some((panel_id, panel_name_display.clone())));
+                                                set_show_delete_confirm.set(true);
+                                            }
+                                        >
+                                            "×"
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    }
+                />
+                {move || if hmi_panels.get().is_empty() {
+                    view! {
+                        <div class="text-[8px] text-[#555555] text-center py-4 bg-[#111111] border border-[#ffffff08] rounded">
+                            "No HMI panels configured"<br/>
+                            "Click + Add Panel to create one"
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <div></div> }.into_any()
+                }}
+            </div>
+
+            // Port Configuration Section (shown when a panel is selected)
+            <Show when=move || selected_panel_id.get().is_some()>
+                <PanelPortConfiguration
+                    panel_id=selected_panel_id
+                    robot_connection_id=robot_connection_id
+                />
+            </Show>
+
+            // Panel Form Modal
+            <Show when=move || show_panel_form.get()>
+                <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div class="bg-[#0a0a0a] border border-[#ffffff20] rounded-lg p-6 w-[400px]">
+                        <h3 class="text-[12px] font-semibold text-white mb-4">
+                            {move || if editing_panel_id.get().is_some() { "Edit HMI Panel" } else { "Create HMI Panel" }}
+                        </h3>
+                        <div class="space-y-3">
+                            <div>
+                                <label class="block text-[9px] text-[#888888] mb-1">"Panel Name"</label>
+                                <input
+                                    type="text"
+                                    class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                    prop:value=move || panel_name.get()
+                                    on:input=move |ev| set_panel_name.set(event_target_value(&ev))
+                                    placeholder="e.g., Gripper Control"
+                                />
+                            </div>
+                            <div>
+                                <label class="block text-[9px] text-[#888888] mb-1">"Description"</label>
+                                <input
+                                    type="text"
+                                    class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                    prop:value=move || panel_description.get()
+                                    on:input=move |ev| set_panel_description.set(event_target_value(&ev))
+                                    placeholder="Optional description"
+                                />
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-[9px] text-[#888888] mb-1">"Grid Columns"</label>
+                                    <input
+                                        type="number"
+                                        class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
+                                        prop:value=move || panel_columns.get()
+                                        on:input=move |ev| set_panel_columns.set(event_target_value(&ev))
+                                        min="1"
+                                        max="16"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-[9px] text-[#888888] mb-1">"Grid Rows"</label>
+                                    <input
+                                        type="number"
+                                        class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
+                                        prop:value=move || panel_rows.get()
+                                        on:input=move |ev| set_panel_rows.set(event_target_value(&ev))
+                                        min="1"
+                                        max="12"
+                                    />
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <input
+                                    type="checkbox"
+                                    id="panel_is_default"
+                                    class="w-3 h-3 accent-[#00d9ff]"
+                                    prop:checked=move || panel_is_default.get()
+                                    on:change=move |ev| set_panel_is_default.set(event_target_checked(&ev))
+                                />
+                                <label for="panel_is_default" class="text-[9px] text-[#888888]">"Set as default panel"</label>
+                            </div>
+                        </div>
+                        <div class="flex justify-end gap-2 mt-4">
+                            <button
+                                class="text-[9px] px-3 py-1.5 bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] rounded hover:text-white"
+                                on:click=move |_| {
+                                    set_show_panel_form.set(false);
+                                    reset_panel_form();
+                                }
+                            >
+                                "Cancel"
+                            </button>
+                            <button
+                                class="text-[9px] px-3 py-1.5 bg-[#00d9ff20] border border-[#00d9ff40] text-[#00d9ff] rounded hover:bg-[#00d9ff30]"
+                                on:click=move |_| {
+                                    let panel = HmiPanel {
+                                        id: editing_panel_id.get().unwrap_or(0),
+                                        robot_connection_id,
+                                        name: panel_name.get(),
+                                        description: if panel_description.get().is_empty() { None } else { Some(panel_description.get()) },
+                                        grid_columns: panel_columns.get().parse().unwrap_or(8),
+                                        grid_rows: panel_rows.get().parse().unwrap_or(6),
+                                        background_color: "#1a1a1a".to_string(),
+                                        is_default: panel_is_default.get(),
+                                    };
+                                    ws.save_hmi_panel(panel);
+                                    set_show_panel_form.set(false);
+                                    reset_panel_form();
+                                }
+                            >
+                                {move || if editing_panel_id.get().is_some() { "Save Changes" } else { "Create Panel" }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </Show>
+
+            // Delete Confirmation Modal
+            <Show when=move || show_delete_confirm.get()>
+                <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div class="bg-[#0a0a0a] border border-[#ff444440] rounded-lg p-6 w-[350px]">
+                        <h3 class="text-[12px] font-semibold text-[#ff4444] mb-3">"Delete HMI Panel?"</h3>
+                        <p class="text-[10px] text-[#888888] mb-4">
+                            "Are you sure you want to delete "
+                            <span class="text-white font-medium">
+                                {move || panel_to_delete.get().map(|(_, name)| name).unwrap_or_default()}
+                            </span>
+                            "? This action cannot be undone."
+                        </p>
+                        <div class="flex justify-end gap-2">
+                            <button
+                                class="text-[9px] px-3 py-1.5 bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] rounded hover:text-white"
+                                on:click=move |_| {
+                                    set_show_delete_confirm.set(false);
+                                    set_panel_to_delete.set(None);
+                                }
+                            >
+                                "Cancel"
+                            </button>
+                            <button
+                                class="text-[9px] px-3 py-1.5 bg-[#ff4444] text-white rounded hover:bg-[#ff5555]"
+                                on:click=move |_| {
+                                    if let Some((panel_id, _)) = panel_to_delete.get() {
+                                        ws.delete_hmi_panel(panel_id);
+                                        if selected_panel_id.get() == Some(panel_id) {
+                                            set_selected_panel_id.set(None);
+                                        }
+                                    }
+                                    set_show_delete_confirm.set(false);
+                                    set_panel_to_delete.set(None);
+                                }
+                            >
+                                "Delete"
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </Show>
+        </div>
+    }
+}
+
+/// Port configuration section for an HMI panel.
+/// Allows adding, editing, and removing I/O ports from the panel.
+#[component]
+fn PanelPortConfiguration(
+    panel_id: ReadSignal<Option<i64>>,
+    robot_connection_id: i64,
+) -> impl IntoView {
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
+    let io_port_configs = ws.io_port_configs;
+    let hmi_panels = ws.hmi_panels;
+
+    // Modal state for adding/editing ports
+    let (show_port_form, set_show_port_form) = signal(false);
+    let (editing_port, set_editing_port) = signal::<Option<IoPortConfig>>(None);
+
+    // Port form fields
+    let (port_io_type, set_port_io_type) = signal::<String>("DIN".to_string());
+    let (port_io_index, set_port_io_index) = signal::<String>("1".to_string());
+    let (port_display_name, set_port_display_name) = signal::<String>(String::new());
+    let (port_widget_type, set_port_widget_type) = signal::<String>("Auto".to_string());
+    let (port_grid_col, set_port_grid_col) = signal::<String>("0".to_string());
+    let (port_grid_row, set_port_grid_row) = signal::<String>("0".to_string());
+    let (port_on_color, set_port_on_color) = signal::<String>("#00ff88".to_string());
+    let (port_off_color, set_port_off_color) = signal::<String>("#333333".to_string());
+
+    // Current HMI panel with ports (from server)
+    let current_hmi_panel = ws.current_hmi_panel;
+
+    // Load panel ports when panel changes
+    Effect::new(move |_| {
+        if let Some(pid) = panel_id.get() {
+            ws.get_hmi_panel_with_ports(pid);
+        }
+    });
+
+    // Get the selected panel's details
+    let selected_panel = move || {
+        panel_id.get().and_then(|pid| {
+            hmi_panels.get().into_iter().find(|p| p.id == pid)
+        })
+    };
+
+    // Get ports assigned to this panel - use current_hmi_panel which has the complete port list
+    let panel_ports = move || {
+        let pid = panel_id.get();
+        if pid.is_none() { return Vec::new(); }
+        let pid = pid.unwrap();
+
+        // Use current_hmi_panel if it matches the selected panel
+        if let Some(ref panel_data) = current_hmi_panel.get() {
+            if panel_data.panel.id == pid {
+                return panel_data.ports.clone();
+            }
+        }
+
+        // Fallback to filtering from global io_port_configs
+        io_port_configs.get().into_iter()
+            .filter(|p| p.hmi_panel_id == Some(pid))
+            .collect::<Vec<_>>()
+    };
+
+    let reset_port_form = move || {
+        // Find the next available port index for DIN (default type)
+        let existing_din_ports: Vec<u16> = io_port_configs.get()
+            .into_iter()
+            .filter(|p| matches!(p.io_type, IoType::DIN))
+            .map(|p| p.io_index)
+            .collect();
+        let next_index = (1u16..=1024)
+            .find(|i| !existing_din_ports.contains(i))
+            .unwrap_or(1);
+
+        set_port_io_type.set("DIN".to_string());
+        set_port_io_index.set(next_index.to_string());
+        set_port_display_name.set(String::new());
+        set_port_widget_type.set("Auto".to_string());
+        set_port_grid_col.set("0".to_string());
+        set_port_grid_row.set("0".to_string());
+        set_port_on_color.set("#00ff88".to_string());
+        set_port_off_color.set("#333333".to_string());
+        set_editing_port.set(None);
+    };
+
+    view! {
+        <div class="mt-3 bg-[#0d0d0d] border border-[#ffffff08] rounded p-3">
+            <div class="flex items-center justify-between mb-2">
+                <h5 class="text-[9px] font-semibold text-[#00d9ff] uppercase tracking-wide">
+                    "Panel Layout"
+                    <span class="text-[#666666] font-normal ml-1">
+                        {move || selected_panel().map(|p| format!("({}×{})", p.grid_columns, p.grid_rows)).unwrap_or_default()}
+                    </span>
+                </h5>
+                <button
+                    class="text-[8px] px-2 py-0.5 bg-[#22c55e20] border border-[#22c55e40] text-[#22c55e] rounded hover:bg-[#22c55e30]"
+                    on:click=move |_| {
+                        reset_port_form();
+                        set_show_port_form.set(true);
+                    }
+                >
+                    "+ Add I/O Port"
+                </button>
+            </div>
+
+            // Visual grid preview
+            {move || {
+                let panel = selected_panel();
+                if panel.is_none() { return view! { <div></div> }.into_any(); }
+                let panel = panel.unwrap();
+                let ports = panel_ports();
+
+                let grid_style = format!(
+                    "display: grid; grid-template-columns: repeat({}, 1fr); grid-template-rows: repeat({}, minmax(40px, 1fr)); gap: 4px;",
+                    panel.grid_columns, panel.grid_rows
+                );
+
+                view! {
+                    <div class="bg-[#0a0a0a] rounded border border-[#ffffff08] p-2 mb-3" style=grid_style>
+                        {(0..panel.grid_rows).flat_map(|row| {
+                            let ports_for_row = ports.clone();
+                            (0..panel.grid_columns).map(move |col| {
+                                let port_at_cell = ports_for_row.iter().find(|p| {
+                                    p.hmi_x == Some(col) && p.hmi_y == Some(row)
+                                }).cloned();
+
+                                view! {
+                                    <div
+                                        class="min-h-[40px] rounded border border-dashed border-[#ffffff10] flex items-center justify-center text-[8px] text-[#444444] hover:border-[#00d9ff30] hover:bg-[#00d9ff05] cursor-pointer transition-colors"
+                                        on:click=move |_| {
+                                            if let Some(ref port) = port_at_cell {
+                                                // Edit existing port
+                                                set_editing_port.set(Some(port.clone()));
+                                                set_port_io_type.set(format!("{:?}", port.io_type));
+                                                set_port_io_index.set(port.io_index.to_string());
+                                                set_port_display_name.set(port.display_name.clone());
+                                                set_port_widget_type.set(format!("{:?}", port.widget_type));
+                                                set_port_grid_col.set(col.to_string());
+                                                set_port_grid_row.set(row.to_string());
+                                                set_port_on_color.set(port.color_on.clone());
+                                                set_port_off_color.set(port.color_off.clone());
+                                                set_show_port_form.set(true);
+                                            } else {
+                                                // Add new port at this cell
+                                                reset_port_form();
+                                                set_port_grid_col.set(col.to_string());
+                                                set_port_grid_row.set(row.to_string());
+                                                set_show_port_form.set(true);
+                                            }
+                                        }
+                                    >
+                                        {match &port_at_cell {
+                                            Some(port) => {
+                                                let name = port.display_name.clone();
+                                                let widget = format!("{:?}", port.widget_type);
+                                                view! {
+                                                    <div class="text-center p-1">
+                                                        <div class="text-[#00d9ff] font-medium truncate">{name}</div>
+                                                        <div class="text-[7px] text-[#555555]">{widget}</div>
+                                                    </div>
+                                                }.into_any()
+                                            }
+                                            None => view! { <span>"+"</span> }.into_any()
+                                        }}
+                                    </div>
+                                }
+                            }).collect::<Vec<_>>()
+                        }).collect::<Vec<_>>()}
+                    </div>
+                }.into_any()
+            }}
+
+            // Port list (text summary)
+            <div class="text-[8px] text-[#666666]">
+                {move || {
+                    let ports = panel_ports();
+                    if ports.is_empty() {
+                        "No I/O ports configured. Click cells above or '+ Add I/O Port' to add.".to_string()
+                    } else {
+                        format!("{} port(s) configured", ports.len())
+                    }
+                }}
+            </div>
+        </div>
+
+        // Port Form Modal
+        <Show when=move || show_port_form.get()>
+            <PortFormModal
+                robot_connection_id=robot_connection_id
+                panel_id=panel_id
+                editing_port=editing_port
+                port_io_type=port_io_type
+                set_port_io_type=set_port_io_type
+                port_io_index=port_io_index
+                set_port_io_index=set_port_io_index
+                port_display_name=port_display_name
+                set_port_display_name=set_port_display_name
+                port_widget_type=port_widget_type
+                set_port_widget_type=set_port_widget_type
+                port_grid_col=port_grid_col
+                set_port_grid_col=set_port_grid_col
+                port_grid_row=port_grid_row
+                set_port_grid_row=set_port_grid_row
+                port_on_color=port_on_color
+                set_port_on_color=set_port_on_color
+                port_off_color=port_off_color
+                set_port_off_color=set_port_off_color
+                set_show_port_form=set_show_port_form
+                reset_port_form=reset_port_form
+            />
+        </Show>
+    }
+}
+
+
+/// Modal form for adding/editing an I/O port on a panel.
+#[component]
+fn PortFormModal(
+    robot_connection_id: i64,
+    panel_id: ReadSignal<Option<i64>>,
+    editing_port: ReadSignal<Option<IoPortConfig>>,
+    port_io_type: ReadSignal<String>,
+    set_port_io_type: WriteSignal<String>,
+    port_io_index: ReadSignal<String>,
+    set_port_io_index: WriteSignal<String>,
+    port_display_name: ReadSignal<String>,
+    set_port_display_name: WriteSignal<String>,
+    port_widget_type: ReadSignal<String>,
+    set_port_widget_type: WriteSignal<String>,
+    port_grid_col: ReadSignal<String>,
+    set_port_grid_col: WriteSignal<String>,
+    port_grid_row: ReadSignal<String>,
+    set_port_grid_row: WriteSignal<String>,
+    port_on_color: ReadSignal<String>,
+    set_port_on_color: WriteSignal<String>,
+    port_off_color: ReadSignal<String>,
+    set_port_off_color: WriteSignal<String>,
+    set_show_port_form: WriteSignal<bool>,
+    reset_port_form: impl Fn() + Copy + Send + 'static,
+) -> impl IntoView {
+    let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
+
+    // Parse IoType from string
+    let parse_io_type = move |s: &str| -> IoType {
+        match s {
+            "DIN" => IoType::DIN,
+            "DOUT" => IoType::DOUT,
+            "AIN" => IoType::AIN,
+            "AOUT" => IoType::AOUT,
+            "GIN" => IoType::GIN,
+            "GOUT" => IoType::GOUT,
+            _ => IoType::DIN,
+        }
+    };
+
+    // Parse WidgetType from string
+    let parse_widget_type = move |s: &str| -> WidgetType {
+        match s {
+            "Auto" => WidgetType::Auto,
+            "Button" => WidgetType::Button,
+            "Toggle" => WidgetType::Toggle,
+            "Led" => WidgetType::Led,
+            "Gauge" => WidgetType::Gauge,
+            "Slider" => WidgetType::Slider,
+            "Bar" => WidgetType::Bar,
+            "Numeric" => WidgetType::Numeric,
+            "MultiState" => WidgetType::MultiState,
+            _ => WidgetType::Auto,
+        }
+    };
+
+    view! {
+        <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div class="bg-[#0a0a0a] border border-[#ffffff20] rounded-lg p-6 w-[450px] max-h-[80vh] overflow-y-auto">
+                <h3 class="text-[12px] font-semibold text-white mb-4">
+                    {move || if editing_port.get().is_some() { "Edit I/O Port" } else { "Add I/O Port" }}
+                </h3>
+                <div class="space-y-3">
+                    // I/O Type and Index row
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-[9px] text-[#888888] mb-1">"I/O Type"</label>
+                            <select
+                                class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                                prop:value=move || port_io_type.get()
+                                on:change=move |ev| set_port_io_type.set(event_target_value(&ev))
+                            >
+                                <option value="DIN" selected=move || port_io_type.get() == "DIN">"DIN (Digital Input)"</option>
+                                <option value="DOUT" selected=move || port_io_type.get() == "DOUT">"DOUT (Digital Output)"</option>
+                                <option value="AIN" selected=move || port_io_type.get() == "AIN">"AIN (Analog Input)"</option>
+                                <option value="AOUT" selected=move || port_io_type.get() == "AOUT">"AOUT (Analog Output)"</option>
+                                <option value="GIN" selected=move || port_io_type.get() == "GIN">"GIN (Group Input)"</option>
+                                <option value="GOUT" selected=move || port_io_type.get() == "GOUT">"GOUT (Group Output)"</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[9px] text-[#888888] mb-1">"Port Index"</label>
+                            <input
+                                type="number"
+                                class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
+                                prop:value=move || port_io_index.get()
+                                on:input=move |ev| set_port_io_index.set(event_target_value(&ev))
+                                min="1"
+                                max="1024"
+                            />
+                        </div>
+                    </div>
+
+                    // Display name
+                    <div>
+                        <label class="block text-[9px] text-[#888888] mb-1">"Display Name (optional)"</label>
+                        <input
+                            type="text"
+                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                            prop:value=move || port_display_name.get()
+                            on:input=move |ev| set_port_display_name.set(event_target_value(&ev))
+                            placeholder="e.g., Gripper Open"
+                        />
+                    </div>
+
+                    // Widget type
+                    <div>
+                        <label class="block text-[9px] text-[#888888] mb-1">"Widget Type"</label>
+                        <select
+                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none"
+                            prop:value=move || port_widget_type.get()
+                            on:change=move |ev| set_port_widget_type.set(event_target_value(&ev))
+                        >
+                            <option value="Auto">"Auto (based on I/O type)"</option>
+                            <option value="Led">"LED Indicator"</option>
+                            <option value="Button">"Push Button"</option>
+                            <option value="Toggle">"Toggle Switch"</option>
+                            <option value="Gauge">"Gauge (circular)"</option>
+                            <option value="Bar">"Bar (linear)"</option>
+                            <option value="Slider">"Slider (adjustable)"</option>
+                            <option value="Numeric">"Numeric Display"</option>
+                            <option value="MultiState">"Multi-State"</option>
+                        </select>
+                    </div>
+
+                    // Grid position
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-[9px] text-[#888888] mb-1">"Grid Column"</label>
+                            <input
+                                type="number"
+                                class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
+                                prop:value=move || port_grid_col.get()
+                                on:input=move |ev| set_port_grid_col.set(event_target_value(&ev))
+                                min="0"
+                            />
+                        </div>
+                        <div>
+                            <label class="block text-[9px] text-[#888888] mb-1">"Grid Row"</label>
+                            <input
+                                type="number"
+                                class="w-full bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
+                                prop:value=move || port_grid_row.get()
+                                on:input=move |ev| set_port_grid_row.set(event_target_value(&ev))
+                                min="0"
+                            />
+                        </div>
+                    </div>
+
+                    // Colors
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-[9px] text-[#888888] mb-1">"On/Active Color"</label>
+                            <div class="flex gap-2">
+                                <input
+                                    type="color"
+                                    class="w-8 h-8 rounded cursor-pointer bg-transparent"
+                                    prop:value=move || port_on_color.get()
+                                    on:input=move |ev| set_port_on_color.set(event_target_value(&ev))
+                                />
+                                <input
+                                    type="text"
+                                    class="flex-1 bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
+                                    prop:value=move || port_on_color.get()
+                                    on:input=move |ev| set_port_on_color.set(event_target_value(&ev))
+                                />
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-[9px] text-[#888888] mb-1">"Off/Inactive Color"</label>
+                            <div class="flex gap-2">
+                                <input
+                                    type="color"
+                                    class="w-8 h-8 rounded cursor-pointer bg-transparent"
+                                    prop:value=move || port_off_color.get()
+                                    on:input=move |ev| set_port_off_color.set(event_target_value(&ev))
+                                />
+                                <input
+                                    type="text"
+                                    class="flex-1 bg-[#111111] border border-[#ffffff08] rounded px-2 py-1.5 text-[10px] text-white focus:border-[#00d9ff] focus:outline-none font-mono"
+                                    prop:value=move || port_off_color.get()
+                                    on:input=move |ev| set_port_off_color.set(event_target_value(&ev))
+                                />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                // Actions
+                <div class="flex justify-between mt-4 pt-3 border-t border-[#ffffff08]">
+                    // Delete button (only when editing)
+                    {move || if editing_port.get().is_some() {
+                        view! {
+                            <button
+                                class="text-[9px] px-3 py-1.5 text-[#ff4444] hover:bg-[#ff444410] rounded"
+                                on:click=move |_| {
+                                    if let Some(port) = editing_port.get() {
+                                        ws.delete_io_port_config(robot_connection_id, port.io_type.clone(), port.io_index);
+                                        // Refresh port configs
+                                        ws.get_io_port_configs(robot_connection_id);
+                                        if let Some(pid) = panel_id.get() {
+                                            ws.get_hmi_panel_with_ports(pid);
+                                        }
+                                    }
+                                    set_show_port_form.set(false);
+                                    reset_port_form();
+                                }
+                            >
+                                "Delete Port"
+                            </button>
+                        }.into_any()
+                    } else {
+                        view! { <div></div> }.into_any()
+                    }}
+
+                    <div class="flex gap-2">
+                        <button
+                            class="text-[9px] px-3 py-1.5 bg-[#1a1a1a] border border-[#ffffff08] text-[#888888] rounded hover:text-white"
+                            on:click=move |_| {
+                                set_show_port_form.set(false);
+                                reset_port_form();
+                            }
+                        >
+                            "Cancel"
+                        </button>
+                        <button
+                            class="text-[9px] px-3 py-1.5 bg-[#00d9ff20] border border-[#00d9ff40] text-[#00d9ff] rounded hover:bg-[#00d9ff30]"
+                            on:click=move |_| {
+                                let io_type = parse_io_type(&port_io_type.get());
+                                let io_idx = port_io_index.get().parse().unwrap_or(1);
+                                let name = if port_display_name.get().is_empty() {
+                                    format!("{}[{}]", io_type, io_idx)
+                                } else {
+                                    port_display_name.get()
+                                };
+                                let config = IoPortConfig {
+                                    io_type,
+                                    io_index: io_idx,
+                                    display_name: name,
+                                    description: None,
+                                    category: None,
+                                    widget_type: parse_widget_type(&port_widget_type.get()),
+                                    color_on: port_on_color.get(),
+                                    color_off: port_off_color.get(),
+                                    icon: None,
+                                    min_value: None,
+                                    max_value: None,
+                                    unit: None,
+                                    decimal_places: 2,
+                                    warning_low: None,
+                                    warning_high: None,
+                                    alarm_low: None,
+                                    alarm_high: None,
+                                    warning_enabled: false,
+                                    alarm_enabled: false,
+                                    hmi_enabled: true,
+                                    hmi_x: port_grid_col.get().parse().ok(),
+                                    hmi_y: port_grid_row.get().parse().ok(),
+                                    hmi_width: 1,
+                                    hmi_height: 1,
+                                    hmi_panel_id: panel_id.get(),
+                                    is_visible: true,
+                                    display_order: None,
+                                };
+                                ws.save_io_port_config(robot_connection_id, config);
+                                // Refresh port configs
+                                ws.get_io_port_configs(robot_connection_id);
+                                if let Some(pid) = panel_id.get() {
+                                    ws.get_hmi_panel_with_ports(pid);
+                                }
+                                set_show_port_form.set(false);
+                                reset_port_form();
+                            }
+                        >
+                            {move || if editing_port.get().is_some() { "Save Changes" } else { "Add Port" }}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
