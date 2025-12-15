@@ -12,6 +12,7 @@ use fanuc_rmi::packets::{SendPacket, Instruction};
 use fanuc_rmi::instructions::FrcLinearMotion;
 use fanuc_rmi::{TermType, SpeedType, Configuration, Position};
 use std::collections::{VecDeque, HashMap};
+use tracing::info;
 
 /// Maximum instructions to send ahead (conservative: use 5 of 8 available slots).
 pub const MAX_BUFFER: usize = 5;
@@ -135,18 +136,54 @@ impl ProgramExecutor {
         // Build pending queue with all instructions
         let total = instructions.len();
         self.pending_queue.clear();
+
+        // Add approach move (start position) if defined
+        // Line 0 is used for approach move so program instructions start at line 1
+        if let (Some(start_x), Some(start_y), Some(start_z)) = (program.start_x, program.start_y, program.start_z) {
+            let approach_packet = self.build_approach_retreat_packet(
+                &program,
+                start_x, start_y, start_z,
+                0, // Line 0 for approach
+                false, // Not last instruction - use CNT
+            );
+            self.pending_queue.push_back((0, approach_packet));
+            info!("Added approach move to ({:.2}, {:.2}, {:.2}) at speed {:.0}",
+                  start_x, start_y, start_z, program.move_speed.unwrap_or(100.0));
+        }
+
+        // Add program instructions (lines 1 through N)
+        let has_retreat = program.end_x.is_some() && program.end_y.is_some() && program.end_z.is_some();
         for (i, instr) in instructions.iter().enumerate() {
             let line_number = i + 1;
-            let is_last = i == total - 1;
-            let packet = self.build_motion_packet(instr, is_last);
+            // If there's a retreat move, the last program instruction is NOT the last overall
+            let is_last_overall = !has_retreat && (i == total - 1);
+            let packet = self.build_motion_packet(instr, is_last_overall);
             self.pending_queue.push_back((line_number, packet));
         }
+
+        // Add retreat move (end position) if defined
+        // Use line total+1 for retreat move
+        if let (Some(end_x), Some(end_y), Some(end_z)) = (program.end_x, program.end_y, program.end_z) {
+            let retreat_packet = self.build_approach_retreat_packet(
+                &program,
+                end_x, end_y, end_z,
+                total + 1, // Line after last instruction
+                true, // Last instruction - use FINE
+            );
+            self.pending_queue.push_back((total + 1, retreat_packet));
+            info!("Added retreat move to ({:.2}, {:.2}, {:.2}) at speed {:.0}",
+                  end_x, end_y, end_z, program.move_speed.unwrap_or(100.0));
+        }
+
+        // Calculate total lines including approach/retreat
+        let has_approach = program.start_x.is_some() && program.start_y.is_some() && program.start_z.is_some();
+        let total_with_extras = instructions.len() + (if has_approach { 1 } else { 0 }) + (if has_retreat { 1 } else { 0 });
 
         self.loaded_program = Some(program);
         self.all_instructions = instructions.clone();
         self.state = ExecutionState::Loaded {
             program_id,
-            total_lines: instructions.len(),
+            total_lines: total_with_extras,
         };
         self.in_flight_by_request.clear();
         self.in_flight_by_sequence.clear();
@@ -176,9 +213,15 @@ impl ProgramExecutor {
         self.loaded_program.as_ref()
     }
 
-    /// Get the total number of instructions.
+    /// Get the total number of instructions (including approach/retreat moves).
     pub fn total_instructions(&self) -> usize {
-        self.all_instructions.len()
+        match &self.state {
+            ExecutionState::Loaded { total_lines, .. } => *total_lines,
+            ExecutionState::Running { total_lines, .. } => *total_lines,
+            ExecutionState::Paused { total_lines, .. } => *total_lines,
+            ExecutionState::Completed { total_lines, .. } => *total_lines,
+            _ => self.all_instructions.len(),
+        }
     }
 
     /// Get the highest completed line number.
@@ -393,6 +436,78 @@ impl ProgramExecutor {
 
         let motion = FrcLinearMotion::new(
             instruction.line_number as u32,
+            configuration,
+            position,
+            speed_type,
+            speed,
+            term_type,
+            term_value,
+        );
+
+        SendPacket::Instruction(Instruction::FrcLinearMotion(motion))
+    }
+
+    /// Build an approach or retreat motion packet (for start/end positions).
+    ///
+    /// Uses the program's move_speed and default orientation (w, p, r).
+    fn build_approach_retreat_packet(
+        &self,
+        program: &Program,
+        x: f64,
+        y: f64,
+        z: f64,
+        line_number: usize,
+        is_last: bool,
+    ) -> SendPacket {
+        // Use program defaults for orientation
+        let w = program.default_w;
+        let p = program.default_p;
+        let r = program.default_r;
+
+        // Use move_speed or default to 100 mm/s
+        let speed = program.move_speed.unwrap_or(100.0);
+
+        // Always use mmSec for approach/retreat moves
+        let speed_type = SpeedType::MMSec;
+
+        // Use FINE for last move (retreat), CNT for approach
+        let (term_type, term_value) = if is_last {
+            (TermType::FINE, 0)
+        } else {
+            // Use program's default term_value for approach, default to 100 for CNT
+            let tv = program.default_term_value.unwrap_or(100);
+            (TermType::CNT, tv)
+        };
+
+        let position = Position {
+            x,
+            y,
+            z,
+            w,
+            p,
+            r,
+            ext1: 0.0,
+            ext2: 0.0,
+            ext3: 0.0,
+        };
+
+        // Build configuration with uframe/utool and robot arm configuration defaults
+        let uframe = self.defaults.uframe.unwrap_or(0) as i8;
+        let utool = self.defaults.utool.unwrap_or(0) as i8;
+        let configuration = Configuration {
+            u_tool_number: utool,
+            u_frame_number: uframe,
+            front: self.defaults.front.unwrap_or(1) as i8,
+            up: self.defaults.up.unwrap_or(1) as i8,
+            left: self.defaults.left.unwrap_or(0) as i8,
+            flip: self.defaults.flip.unwrap_or(0) as i8,
+            turn4: self.defaults.turn4.unwrap_or(0) as i8,
+            turn5: self.defaults.turn5.unwrap_or(0) as i8,
+            turn6: self.defaults.turn6.unwrap_or(0) as i8,
+        };
+
+        let motion = FrcLinearMotion::new(
+            line_number as u32,
             configuration,
             position,
             speed_type,

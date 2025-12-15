@@ -90,10 +90,12 @@ pub async fn handle_request(
             programs::upload_csv(db, program_id, &csv_content, start_position).await
         }
         ClientRequest::UpdateProgramSettings {
-            program_id, start_x, start_y, start_z, end_x, end_y, end_z, move_speed
+            program_id, start_x, start_y, start_z, end_x, end_y, end_z, move_speed,
+            default_term_type, default_term_value
         } => {
             programs::update_program_settings(
-                db, program_id, start_x, start_y, start_z, end_x, end_y, end_z, move_speed
+                db, program_id, start_x, start_y, start_z, end_x, end_y, end_z, move_speed,
+                default_term_type, default_term_value
             ).await
         }
 

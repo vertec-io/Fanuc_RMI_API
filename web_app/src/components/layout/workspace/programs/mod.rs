@@ -435,6 +435,9 @@ fn ProgramDetails(
     let (end_y, set_end_y) = signal(String::new());
     let (end_z, set_end_z) = signal(String::new());
     let (move_speed, set_move_speed) = signal(String::new());
+    // Termination settings
+    let (term_type, set_term_type) = signal(String::from("CNT"));
+    let (term_value, set_term_value) = signal(String::from("100"));
     let (settings_modified, set_settings_modified) = signal(false);
 
     // Track current program ID to detect changes
@@ -456,6 +459,8 @@ fn ProgramDetails(
                 set_end_y.set(prog.end_y.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_end_z.set(prog.end_z.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_move_speed.set(prog.move_speed.map(|v| format!("{:.0}", v)).unwrap_or_else(|| "100".to_string()));
+                set_term_type.set(prog.default_term_type.clone());
+                set_term_value.set(prog.default_term_value.map(|v| v.to_string()).unwrap_or_else(|| "100".to_string()));
                 set_settings_modified.set(false);
             } else if !settings_modified.get() {
                 // Same program but data updated (e.g., CSV upload) - only update if user hasn't modified settings
@@ -466,6 +471,8 @@ fn ProgramDetails(
                 set_end_y.set(prog.end_y.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_end_z.set(prog.end_z.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_move_speed.set(prog.move_speed.map(|v| format!("{:.0}", v)).unwrap_or_else(|| "100".to_string()));
+                set_term_type.set(prog.default_term_type.clone());
+                set_term_value.set(prog.default_term_value.map(|v| v.to_string()).unwrap_or_else(|| "100".to_string()));
             }
         }
     });
@@ -645,22 +652,52 @@ fn ProgramDetails(
                                 </div>
                             </div>
 
-                            // Motion Settings - Move Speed + Save Button
-                            <div class="px-3 pb-3 border-b border-[#ffffff08] flex items-end gap-3">
-                                <div class="flex-1">
+                            // Motion Settings - Move Speed, Termination Type, Term Value + Save Button
+                            <div class="px-3 pb-3 border-b border-[#ffffff08] flex items-end gap-3 flex-wrap">
+                                <div>
                                     <div class="flex items-center gap-2 mb-1">
                                         <div class="text-[8px] text-[#555555] uppercase">"Move Speed"</div>
-                                        <div class="text-[7px] text-[#444444]">"(mm/s for approach/retreat)"</div>
+                                        <div class="text-[7px] text-[#444444]">"(mm/s)"</div>
                                     </div>
                                     <input
-                                        type="number"
-                                        step="10"
-                                        min="1"
-                                        class="w-32 bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                        type="text"
+                                        class="w-20 bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
                                         placeholder="100"
                                         prop:value=move || move_speed.get()
                                         on:input=move |ev| {
                                             set_move_speed.set(event_target_value(&ev));
+                                            set_settings_modified.set(true);
+                                        }
+                                    />
+                                </div>
+                                <div>
+                                    <div class="flex items-center gap-2 mb-1">
+                                        <div class="text-[8px] text-[#555555] uppercase">"Term Type"</div>
+                                    </div>
+                                    <select
+                                        class="w-20 bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white"
+                                        prop:value=move || term_type.get()
+                                        on:change=move |ev| {
+                                            set_term_type.set(event_target_value(&ev));
+                                            set_settings_modified.set(true);
+                                        }
+                                    >
+                                        <option value="CNT">"CNT"</option>
+                                        <option value="FINE">"FINE"</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <div class="flex items-center gap-2 mb-1">
+                                        <div class="text-[8px] text-[#555555] uppercase">"Term Value"</div>
+                                        <div class="text-[7px] text-[#444444]">"(0-100)"</div>
+                                    </div>
+                                    <input
+                                        type="text"
+                                        class="w-16 bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                        placeholder="100"
+                                        prop:value=move || term_value.get()
+                                        on:input=move |ev| {
+                                            set_term_value.set(event_target_value(&ev));
                                             set_settings_modified.set(true);
                                         }
                                     />
@@ -678,6 +715,8 @@ fn ProgramDetails(
                                                 end_y.get().parse().ok(),
                                                 end_z.get().parse().ok(),
                                                 move_speed.get().parse().ok(),
+                                                Some(term_type.get()),
+                                                term_value.get().parse().ok(),
                                             );
                                             set_settings_modified.set(false);
                                             // Refresh program to get updated timestamps

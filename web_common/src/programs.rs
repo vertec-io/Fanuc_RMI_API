@@ -28,6 +28,10 @@ pub struct ProgramDetail {
     pub name: String,
     pub description: Option<String>,
     pub instructions: Vec<InstructionDto>,
+    // Program defaults for motion
+    pub default_term_type: String,
+    /// Default term_value for CNT blending (0-100). 100 = maximum smoothness.
+    pub default_term_value: Option<u8>,
     // Start position (where robot moves before toolpath)
     pub start_x: Option<f64>,
     pub start_y: Option<f64>,
@@ -55,6 +59,8 @@ pub struct InstructionDto {
     pub r: Option<f64>,
     pub speed: Option<f64>,
     pub term_type: Option<String>,
+    /// Term value for CNT blending (0-100). 100 = maximum smoothness.
+    pub term_value: Option<u8>,
     pub uframe: Option<i32>,
     pub utool: Option<i32>,
 }

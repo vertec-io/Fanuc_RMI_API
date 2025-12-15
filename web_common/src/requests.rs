@@ -21,7 +21,7 @@ pub enum ClientRequest {
     #[serde(rename = "delete_program")]
     DeleteProgram { id: i64 },
 
-    /// Update program settings (start/end positions, move speed).
+    /// Update program settings (start/end positions, move speed, termination defaults).
     #[serde(rename = "update_program_settings")]
     UpdateProgramSettings {
         program_id: i64,
@@ -32,6 +32,10 @@ pub enum ClientRequest {
         end_y: Option<f64>,
         end_z: Option<f64>,
         move_speed: Option<f64>,
+        /// Default termination type (CNT or FINE)
+        default_term_type: Option<String>,
+        /// Default term value for CNT blending (0-100)
+        default_term_value: Option<u8>,
     },
 
     /// Upload CSV content to a program.

@@ -48,6 +48,7 @@ pub async fn get_program(db: Arc<Mutex<Database>>, id: i64) -> ServerResponse {
                     r: i.r,
                     speed: i.speed,
                     term_type: i.term_type.clone(),
+                    term_value: i.term_value,
                     uframe: i.uframe,
                     utool: i.utool,
                 }
@@ -58,6 +59,8 @@ pub async fn get_program(db: Arc<Mutex<Database>>, id: i64) -> ServerResponse {
                     name: program.name,
                     description: program.description,
                     instructions: instruction_dtos,
+                    default_term_type: program.default_term_type,
+                    default_term_value: program.default_term_value,
                     start_x: program.start_x,
                     start_y: program.start_y,
                     start_z: program.start_z,
@@ -243,7 +246,7 @@ pub async fn upload_csv(
     }
 }
 
-/// Update program settings (start/end positions, move speed).
+/// Update program settings (start/end positions, move speed, termination defaults).
 #[allow(clippy::too_many_arguments)]
 pub async fn update_program_settings(
     db: Arc<Mutex<Database>>,
@@ -255,6 +258,8 @@ pub async fn update_program_settings(
     end_y: Option<f64>,
     end_z: Option<f64>,
     move_speed: Option<f64>,
+    default_term_type: Option<String>,
+    default_term_value: Option<u8>,
 ) -> ServerResponse {
     let db = db.lock().await;
 
@@ -265,7 +270,11 @@ pub async fn update_program_settings(
         Err(e) => return ServerResponse::Error { message: format!("Failed to get program: {}", e) },
     };
 
-    // Update program with new position settings
+    // Use new values if provided, otherwise preserve existing
+    let term_type = default_term_type.as_deref().unwrap_or(&prog.default_term_type);
+    let term_value = default_term_value.or(prog.default_term_value);
+
+    // Update program with new settings
     if let Err(e) = db.update_program(
         program_id,
         &prog.name,
@@ -274,8 +283,8 @@ pub async fn update_program_settings(
         prog.default_p,
         prog.default_r,
         prog.default_speed,
-        &prog.default_term_type,
-        prog.default_term_value,
+        term_type,
+        term_value,
         prog.default_uframe,
         prog.default_utool,
         start_x,
@@ -289,8 +298,8 @@ pub async fn update_program_settings(
         return ServerResponse::Error { message: format!("Failed to update program: {}", e) };
     }
 
-    info!("Updated program {} settings: start=({:?},{:?},{:?}), end=({:?},{:?},{:?}), speed={:?}",
-          program_id, start_x, start_y, start_z, end_x, end_y, end_z, move_speed);
+    info!("Updated program {} settings: start=({:?},{:?},{:?}), end=({:?},{:?},{:?}), speed={:?}, term_type={}, term_value={:?}",
+          program_id, start_x, start_y, start_z, end_x, end_y, end_z, move_speed, term_type, term_value);
 
     ServerResponse::Success {
         message: "Program settings updated".to_string()
