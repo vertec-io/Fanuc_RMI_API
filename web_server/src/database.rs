@@ -23,6 +23,9 @@ pub struct Program {
     pub default_r: f64,
     pub default_speed: Option<f64>,
     pub default_term_type: String,
+    /// Default term_value for CNT moves (0-100). 100 = maximum smoothness.
+    /// If not specified, defaults to 100 for CNT, 0 for FINE.
+    pub default_term_value: Option<u8>,
     pub default_uframe: Option<i32>,
     pub default_utool: Option<i32>,
     // Start position (where robot moves before toolpath)
@@ -58,6 +61,9 @@ pub struct ProgramInstruction {
     pub speed: Option<f64>,
     pub speed_type: Option<String>,  // mmSec, InchMin, Time, mSec
     pub term_type: Option<String>,
+    /// Term value for CNT blending (0-100). 100 = maximum smoothness.
+    /// If None, uses program default_term_value.
+    pub term_value: Option<u8>,
     pub uframe: Option<i32>,
     pub utool: Option<i32>,
 }
@@ -278,6 +284,34 @@ impl Database {
             tracing::info!("Migration: Added column speed_type to program_instructions");
         }
 
+        // Migration: Add term_value column to program_instructions if it doesn't exist
+        let column_exists = self
+            .conn
+            .prepare("SELECT term_value FROM program_instructions LIMIT 1")
+            .is_ok();
+
+        if !column_exists {
+            self.conn.execute(
+                "ALTER TABLE program_instructions ADD COLUMN term_value INTEGER",
+                [],
+            )?;
+            tracing::info!("Migration: Added column term_value to program_instructions");
+        }
+
+        // Migration: Add default_term_value column to programs if it doesn't exist
+        let column_exists = self
+            .conn
+            .prepare("SELECT default_term_value FROM programs LIMIT 1")
+            .is_ok();
+
+        if !column_exists {
+            self.conn.execute(
+                "ALTER TABLE programs ADD COLUMN default_term_value INTEGER DEFAULT 100",
+                [],
+            )?;
+            tracing::info!("Migration: Added column default_term_value to programs");
+        }
+
         Ok(())
     }
 
@@ -293,6 +327,7 @@ impl Database {
                 default_r REAL DEFAULT 0.0,
                 default_speed REAL,
                 default_term_type TEXT DEFAULT 'CNT',
+                default_term_value INTEGER DEFAULT 100,
                 default_uframe INTEGER,
                 default_utool INTEGER,
                 start_x REAL,
@@ -321,6 +356,7 @@ impl Database {
                 ext3 REAL,
                 speed REAL,
                 term_type TEXT,
+                term_value INTEGER,
                 uframe INTEGER,
                 utool INTEGER,
                 FOREIGN KEY (program_id) REFERENCES programs(id) ON DELETE CASCADE
@@ -418,7 +454,7 @@ impl Database {
     pub fn get_program(&self, id: i64) -> Result<Option<Program>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, default_w, default_p, default_r,
-                    default_speed, default_term_type, default_uframe, default_utool,
+                    default_speed, default_term_type, default_term_value, default_uframe, default_utool,
                     start_x, start_y, start_z, end_x, end_y, end_z,
                     COALESCE(move_speed, 100.0), created_at, updated_at
              FROM programs WHERE id = ?1"
@@ -435,17 +471,18 @@ impl Database {
                 default_r: row.get(5)?,
                 default_speed: row.get(6)?,
                 default_term_type: row.get(7)?,
-                default_uframe: row.get(8)?,
-                default_utool: row.get(9)?,
-                start_x: row.get(10)?,
-                start_y: row.get(11)?,
-                start_z: row.get(12)?,
-                end_x: row.get(13)?,
-                end_y: row.get(14)?,
-                end_z: row.get(15)?,
-                move_speed: row.get(16)?,
-                created_at: row.get(17)?,
-                updated_at: row.get(18)?,
+                default_term_value: row.get::<_, Option<i32>>(8)?.map(|v| v as u8),
+                default_uframe: row.get(9)?,
+                default_utool: row.get(10)?,
+                start_x: row.get(11)?,
+                start_y: row.get(12)?,
+                start_z: row.get(13)?,
+                end_x: row.get(14)?,
+                end_y: row.get(15)?,
+                end_z: row.get(16)?,
+                move_speed: row.get(17)?,
+                created_at: row.get(18)?,
+                updated_at: row.get(19)?,
             }))
         } else {
             Ok(None)
@@ -456,7 +493,7 @@ impl Database {
     pub fn list_programs(&self) -> Result<Vec<Program>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, default_w, default_p, default_r,
-                    default_speed, default_term_type, default_uframe, default_utool,
+                    default_speed, default_term_type, default_term_value, default_uframe, default_utool,
                     start_x, start_y, start_z, end_x, end_y, end_z,
                     COALESCE(move_speed, 100.0), created_at, updated_at
              FROM programs ORDER BY name"
@@ -472,17 +509,18 @@ impl Database {
                 default_r: row.get(5)?,
                 default_speed: row.get(6)?,
                 default_term_type: row.get(7)?,
-                default_uframe: row.get(8)?,
-                default_utool: row.get(9)?,
-                start_x: row.get(10)?,
-                start_y: row.get(11)?,
-                start_z: row.get(12)?,
-                end_x: row.get(13)?,
-                end_y: row.get(14)?,
-                end_z: row.get(15)?,
-                move_speed: row.get(16)?,
-                created_at: row.get(17)?,
-                updated_at: row.get(18)?,
+                default_term_value: row.get::<_, Option<i32>>(8)?.map(|v| v as u8),
+                default_uframe: row.get(9)?,
+                default_utool: row.get(10)?,
+                start_x: row.get(11)?,
+                start_y: row.get(12)?,
+                start_z: row.get(13)?,
+                end_x: row.get(14)?,
+                end_y: row.get(15)?,
+                end_z: row.get(16)?,
+                move_speed: row.get(17)?,
+                created_at: row.get(18)?,
+                updated_at: row.get(19)?,
             })
         })?;
 
@@ -494,6 +532,7 @@ impl Database {
     pub fn update_program(&self, id: i64, name: &str, description: Option<&str>,
                           default_w: f64, default_p: f64, default_r: f64,
                           default_speed: Option<f64>, default_term_type: &str,
+                          default_term_value: Option<u8>,
                           default_uframe: Option<i32>, default_utool: Option<i32>,
                           start_x: Option<f64>, start_y: Option<f64>, start_z: Option<f64>,
                           end_x: Option<f64>, end_y: Option<f64>, end_z: Option<f64>,
@@ -501,12 +540,14 @@ impl Database {
         self.conn.execute(
             "UPDATE programs SET
                 name = ?1, description = ?2, default_w = ?3, default_p = ?4, default_r = ?5,
-                default_speed = ?6, default_term_type = ?7, default_uframe = ?8, default_utool = ?9,
-                start_x = ?10, start_y = ?11, start_z = ?12, end_x = ?13, end_y = ?14, end_z = ?15,
-                move_speed = ?16, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?17",
+                default_speed = ?6, default_term_type = ?7, default_term_value = ?8,
+                default_uframe = ?9, default_utool = ?10,
+                start_x = ?11, start_y = ?12, start_z = ?13, end_x = ?14, end_y = ?15, end_z = ?16,
+                move_speed = ?17, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?18",
             params![name, description, default_w, default_p, default_r,
-                    default_speed, default_term_type, default_uframe, default_utool,
+                    default_speed, default_term_type, default_term_value.map(|v| v as i32),
+                    default_uframe, default_utool,
                     start_x, start_y, start_z, end_x, end_y, end_z, move_speed, id],
         )?;
         Ok(())
@@ -525,14 +566,15 @@ impl Database {
     pub fn add_instruction(&self, program_id: i64, instruction: &ProgramInstruction) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO program_instructions
-                (program_id, line_number, x, y, z, w, p, r, ext1, ext2, ext3, speed, speed_type, term_type, uframe, utool)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                (program_id, line_number, x, y, z, w, p, r, ext1, ext2, ext3, speed, speed_type, term_type, term_value, uframe, utool)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 program_id, instruction.line_number,
                 instruction.x, instruction.y, instruction.z,
                 instruction.w, instruction.p, instruction.r,
                 instruction.ext1, instruction.ext2, instruction.ext3,
                 instruction.speed, instruction.speed_type, instruction.term_type,
+                instruction.term_value.map(|v| v as i32),
                 instruction.uframe, instruction.utool
             ],
         )?;
@@ -542,7 +584,7 @@ impl Database {
     /// Get all instructions for a program, ordered by line number.
     pub fn get_instructions(&self, program_id: i64) -> Result<Vec<ProgramInstruction>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, program_id, line_number, x, y, z, w, p, r, ext1, ext2, ext3, speed, speed_type, term_type, uframe, utool
+            "SELECT id, program_id, line_number, x, y, z, w, p, r, ext1, ext2, ext3, speed, speed_type, term_type, term_value, uframe, utool
              FROM program_instructions WHERE program_id = ?1 ORDER BY line_number"
         )?;
 
@@ -563,8 +605,9 @@ impl Database {
                 speed: row.get(12)?,
                 speed_type: row.get(13)?,
                 term_type: row.get(14)?,
-                uframe: row.get(15)?,
-                utool: row.get(16)?,
+                term_value: row.get::<_, Option<i32>>(15)?.map(|v| v as u8),
+                uframe: row.get(16)?,
+                utool: row.get(17)?,
             })
         })?;
 

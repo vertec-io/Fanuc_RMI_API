@@ -124,7 +124,8 @@ pub async fn upload_csv(
         ext3: 0.0,
         speed: 100.0,     // Default speed if not specified in CSV
         speed_type: "mmSec".to_string(),  // Default speed type
-        term_type: "FINE".to_string(),  // Safe default
+        term_type: "CNT".to_string(),  // Default to CNT for smooth motion
+        term_value: Some(100),  // Default to 100 for maximum smoothness
         uframe: None,     // NULL - use active configuration at execution time
         utool: None,      // NULL - use active configuration at execution time
         // Arm configuration is NEVER stored, always from active config at execution time
@@ -177,6 +178,7 @@ pub async fn upload_csv(
             speed: instr.speed,
             speed_type: instr.speed_type.clone(),
             term_type: instr.term_type.clone(),
+            term_value: instr.term_value,
             uframe: instr.uframe,
             utool: instr.utool,
         };
@@ -222,6 +224,7 @@ pub async fn upload_csv(
             defaults.r,
             Some(defaults.speed),
             &defaults.term_type,
+            defaults.term_value,  // Default term_value for CNT blending
             None,  // uframe - NULL, applied at execution time
             None,  // utool - NULL, applied at execution time
             start_x,
@@ -272,6 +275,7 @@ pub async fn update_program_settings(
         prog.default_r,
         prog.default_speed,
         &prog.default_term_type,
+        prog.default_term_value,
         prog.default_uframe,
         prog.default_utool,
         start_x,

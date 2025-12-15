@@ -491,6 +491,8 @@ pub fn CSVUploadModal(
                                         process_file(file);
                                     }
                                 }
+                                // Reset input value to allow re-selecting the same file
+                                input.set_value("");
                             }
                         />
                     </label>

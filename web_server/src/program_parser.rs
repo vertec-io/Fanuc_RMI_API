@@ -112,6 +112,9 @@ pub struct ProgramDefaults {
     pub speed: f64,
     pub speed_type: String,  // mmSec, InchMin, Time, mSec
     pub term_type: String,
+    /// Default term_value for CNT blending (0-100). 100 = maximum smoothness.
+    /// If None, defaults to 100 for CNT, 0 for FINE.
+    pub term_value: Option<u8>,
     pub uframe: Option<i32>,
     pub utool: Option<i32>,
     // Robot arm configuration defaults
@@ -136,6 +139,7 @@ impl Default for ProgramDefaults {
             speed: 100.0,
             speed_type: "mmSec".to_string(),
             term_type: "CNT".to_string(),
+            term_value: Some(100),  // Default to 100 for smooth CNT blending
             uframe: None,
             utool: None,
             front: None,
@@ -152,24 +156,48 @@ impl Default for ProgramDefaults {
 /// Valid termination types for motion commands.
 const VALID_TERM_TYPES: &[&str] = &["FINE", "CNT"];
 
+/// Result of normalizing a term_type value.
+/// Contains the normalized term_type and optionally extracted term_value.
+struct NormalizedTermType {
+    term_type: String,
+    /// Extracted term_value from strings like "CNT100" (0-100).
+    /// None if not specified in the string.
+    term_value: Option<u8>,
+}
+
 /// Normalize and validate term_type value.
 /// Accepts: FINE, CNT, or CNT with a value (e.g., CNT100, CNT50).
-/// Returns the normalized term_type (CNT100 -> CNT) or None if invalid.
-fn normalize_term_type(term_type: &str) -> Option<String> {
+/// Returns the normalized term_type and extracted term_value, or None if invalid.
+fn normalize_term_type(term_type: &str) -> Option<NormalizedTermType> {
     let tt_upper = term_type.to_uppercase();
 
     // Check exact matches first
-    if VALID_TERM_TYPES.contains(&tt_upper.as_str()) {
-        return Some(tt_upper);
+    if tt_upper == "FINE" {
+        return Some(NormalizedTermType {
+            term_type: "FINE".to_string(),
+            term_value: None,  // FINE doesn't use term_value
+        });
+    }
+
+    if tt_upper == "CNT" {
+        return Some(NormalizedTermType {
+            term_type: "CNT".to_string(),
+            term_value: None,  // No value specified, will use default
+        });
     }
 
     // Check for CNT with a value (e.g., CNT100, CNT50)
     // FANUC uses CNT followed by a number for blending percentage
     if tt_upper.starts_with("CNT") {
         let rest = &tt_upper[3..];
-        // If it's CNT followed by a valid number (0-100), normalize to CNT
-        if rest.parse::<i32>().is_ok() {
-            return Some("CNT".to_string());
+        // If it's CNT followed by a valid number (0-100), extract the value
+        if let Ok(value) = rest.parse::<i32>() {
+            if (0..=100).contains(&value) {
+                return Some(NormalizedTermType {
+                    term_type: "CNT".to_string(),
+                    term_value: Some(value as u8),
+                });
+            }
         }
     }
 
@@ -258,7 +286,7 @@ pub fn parse_csv<R: Read>(reader: R, _defaults: &ProgramDefaults) -> Result<Pars
     let mut line_number = 1usize;
 
     // Optional columns that need consistency tracking
-    let optional_columns = ["w", "p", "r", "ext1", "ext2", "ext3", "speed_type", "term_type", "uframe", "utool"];
+    let optional_columns = ["w", "p", "r", "ext1", "ext2", "ext3", "speed_type", "term_type", "term_value", "uframe", "utool"];
 
     for result in csv_reader.records() {
         let record = match result {
@@ -393,7 +421,39 @@ pub fn parse_csv<R: Read>(reader: R, _defaults: &ProgramDefaults) -> Result<Pars
         let ext2 = get_f64("ext2", &mut errors);
         let ext3 = get_f64("ext3", &mut errors);
         let speed_type = get_str("speed_type");
-        let term_type = get_str("term_type");
+        let term_type_raw = get_str("term_type");
+        // Parse term_value column (0-100)
+        let term_value_raw: Option<u8> = if let Some(&idx) = col_map.get("term_value") {
+            if let Some(val) = record.get(idx) {
+                if val.is_empty() {
+                    None
+                } else {
+                    match val.parse::<i32>() {
+                        Ok(v) if (0..=100).contains(&v) => Some(v as u8),
+                        Ok(v) => {
+                            errors.push(ValidationError {
+                                line: csv_line,
+                                column: "term_value".to_string(),
+                                message: format!("term_value must be 0-100, got: {}", v),
+                            });
+                            None
+                        }
+                        Err(_) => {
+                            errors.push(ValidationError {
+                                line: csv_line,
+                                column: "term_value".to_string(),
+                                message: format!("Invalid integer: '{}'", val),
+                            });
+                            None
+                        }
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let uframe = get_i32("uframe", &mut errors);
         let utool = get_i32("utool", &mut errors);
 
@@ -408,7 +468,8 @@ pub fn parse_csv<R: Read>(reader: R, _defaults: &ProgramDefaults) -> Result<Pars
                     "ext2" => ext2.is_some(),
                     "ext3" => ext3.is_some(),
                     "speed_type" => speed_type.is_some(),
-                    "term_type" => term_type.is_some(),
+                    "term_type" => term_type_raw.is_some(),
+                    "term_value" => term_value_raw.is_some(),
                     "uframe" => uframe.is_some(),
                     "utool" => utool.is_some(),
                     _ => false,
@@ -437,19 +498,22 @@ pub fn parse_csv<R: Read>(reader: R, _defaults: &ProgramDefaults) -> Result<Pars
 
         // Validate and normalize term_type if present
         // Accepts FINE, CNT, or CNT with value (e.g., CNT100) - normalized to CNT
-        let term_type = if let Some(ref tt) = term_type {
+        // Also extracts term_value from strings like "CNT100" if not specified in term_value column
+        let (term_type, term_value) = if let Some(ref tt) = term_type_raw {
             if let Some(normalized) = normalize_term_type(tt) {
-                Some(normalized)
+                // If term_value was specified in the column, use that; otherwise use extracted value
+                let final_term_value = term_value_raw.or(normalized.term_value);
+                (Some(normalized.term_type), final_term_value)
             } else {
                 errors.push(ValidationError {
                     line: csv_line,
                     column: "term_type".to_string(),
                     message: format!("Invalid term_type '{}'. Must be FINE or CNT (CNT100, CNT50, etc. also accepted)", tt),
                 });
-                None
+                (None, term_value_raw)
             }
         } else {
-            None
+            (None, term_value_raw)
         };
 
         // Validate uframe >= 0
@@ -492,6 +556,7 @@ pub fn parse_csv<R: Read>(reader: R, _defaults: &ProgramDefaults) -> Result<Pars
                 speed: Some(speed),
                 speed_type,
                 term_type,
+                term_value,
                 uframe,
                 utool,
             });

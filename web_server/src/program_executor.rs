@@ -119,6 +119,7 @@ impl ProgramExecutor {
             speed: program.default_speed.unwrap_or(100.0),
             speed_type: default_speed_type.to_string(),
             term_type: program.default_term_type.clone(),
+            term_value: program.default_term_value,
             uframe: program.default_uframe,
             utool: program.default_utool,
             // Use active configuration for arm configuration
@@ -339,7 +340,7 @@ impl ProgramExecutor {
             _ => SpeedType::MMSec,  // Fallback to mmSec if invalid
         };
 
-        // Use FINE for last instruction, otherwise CNT
+        // Use FINE for last instruction, otherwise use instruction's term_type or program default
         let term_type = if is_last {
             TermType::FINE
         } else {
@@ -348,6 +349,20 @@ impl ProgramExecutor {
                 _ => TermType::CNT,
             }
         };
+
+        // Determine term_value:
+        // 1. Use instruction's term_value if specified
+        // 2. Fall back to program's default_term_value
+        // 3. Fall back to sensible default: 100 for CNT (max smoothness), 0 for FINE
+        let term_value = instruction.term_value
+            .or(self.defaults.term_value)
+            .unwrap_or_else(|| {
+                match term_type {
+                    TermType::CNT => 100,  // Maximum smoothness for CNT
+                    TermType::FINE => 0,   // FINE doesn't use term_value
+                    TermType::CR => 0,     // CR uses different semantics
+                }
+            });
 
         let position = Position {
             x: instruction.x,
@@ -383,7 +398,7 @@ impl ProgramExecutor {
             speed_type,
             speed,
             term_type,
-            0, // term_value
+            term_value,
         );
 
         SendPacket::Instruction(Instruction::FrcLinearMotion(motion))
