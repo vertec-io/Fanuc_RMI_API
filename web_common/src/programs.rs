@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Optional start position for program execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StartPosition {
     pub x: f64,
     pub y: f64,

@@ -29,6 +29,7 @@ mod programs;
 mod robots;
 mod settings;
 mod models;
+mod hmi;
 
 pub use requests::*;
 pub use responses::*;
@@ -36,6 +37,7 @@ pub use programs::*;
 pub use robots::*;
 pub use settings::*;
 pub use models::*;
+pub use hmi::*;
 
 // Re-export fanuc_rmi DTO types that are used in the API
 pub use fanuc_rmi::dto::{FrameData, Configuration, Position};

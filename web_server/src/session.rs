@@ -164,6 +164,10 @@ pub struct Client {
     pub sender: WsSender,
     /// The robot connection ID this client is subscribed to (if any)
     pub subscribed_robot: Option<i64>,
+    /// Parent session ID if this is a linked child (e.g., pop-out HMI window)
+    pub parent_session: Option<Uuid>,
+    /// Child session IDs linked to this session
+    pub child_sessions: HashSet<Uuid>,
 }
 
 impl Client {
@@ -172,6 +176,8 @@ impl Client {
             id: Uuid::new_v4(),
             sender,
             subscribed_robot: None,
+            parent_session: None,
+            child_sessions: HashSet::new(),
         }
     }
 
@@ -323,6 +329,99 @@ impl ClientManager {
         } else {
             None
         }
+    }
+
+    // ========== Session Linking Methods (for HMI pop-out windows) ==========
+
+    /// Link a child session to a parent session.
+    /// The child inherits the parent's control authority.
+    pub async fn link_child_session(&self, parent_id: Uuid, child_id: Uuid) -> Result<(), String> {
+        let mut clients = self.clients.write().await;
+
+        // Verify both sessions exist
+        if !clients.contains_key(&parent_id) {
+            return Err(format!("Parent session {} not found", parent_id));
+        }
+        if !clients.contains_key(&child_id) {
+            return Err(format!("Child session {} not found", child_id));
+        }
+
+        // Check if child is already linked to another parent
+        if let Some(child) = clients.get(&child_id) {
+            if child.parent_session.is_some() {
+                return Err("Child session is already linked to a parent".to_string());
+            }
+        }
+
+        // Get parent's robot subscription first
+        let parent_robot = clients.get(&parent_id).and_then(|p| p.subscribed_robot);
+
+        // Link child to parent and inherit robot subscription
+        if let Some(child) = clients.get_mut(&child_id) {
+            child.parent_session = Some(parent_id);
+            child.subscribed_robot = parent_robot;
+        }
+
+        // Add child to parent's child list
+        if let Some(parent) = clients.get_mut(&parent_id) {
+            parent.child_sessions.insert(child_id);
+        }
+
+        info!("Session {} linked as child of {}", child_id, parent_id);
+        Ok(())
+    }
+
+    /// Unlink a child session from its parent.
+    pub async fn unlink_child_session(&self, child_id: Uuid) -> Option<Uuid> {
+        let mut clients = self.clients.write().await;
+
+        let parent_id = clients.get(&child_id)?.parent_session?;
+
+        // Remove from parent's child list
+        if let Some(parent) = clients.get_mut(&parent_id) {
+            parent.child_sessions.remove(&child_id);
+        }
+
+        // Clear child's parent reference
+        if let Some(child) = clients.get_mut(&child_id) {
+            child.parent_session = None;
+        }
+
+        info!("Session {} unlinked from parent {}", child_id, parent_id);
+        Some(parent_id)
+    }
+
+    /// Check if a client has control (either directly or through parent).
+    pub async fn has_control_or_inherited(&self, client_id: Uuid) -> bool {
+        // Check direct control first
+        if self.has_control(client_id).await {
+            return true;
+        }
+
+        // Check if parent has control
+        let clients = self.clients.read().await;
+        if let Some(client) = clients.get(&client_id) {
+            if let Some(parent_id) = client.parent_session {
+                drop(clients); // Release read lock before checking control
+                return self.has_control(parent_id).await;
+            }
+        }
+
+        false
+    }
+
+    /// Get all child sessions for a parent.
+    pub async fn get_child_sessions(&self, parent_id: Uuid) -> Vec<Uuid> {
+        let clients = self.clients.read().await;
+        clients.get(&parent_id)
+            .map(|c| c.child_sessions.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Get the parent session for a child.
+    pub async fn get_parent_session(&self, child_id: Uuid) -> Option<Uuid> {
+        let clients = self.clients.read().await;
+        clients.get(&child_id)?.parent_session
     }
 }
 

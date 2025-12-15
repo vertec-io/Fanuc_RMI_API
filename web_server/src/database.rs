@@ -128,7 +128,7 @@ pub struct RobotConfiguration {
     pub updated_at: String,
 }
 
-/// I/O display configuration for a robot.
+/// I/O display configuration for a robot (legacy - use IoPortConfig instead).
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct IoDisplayConfig {
@@ -139,6 +139,53 @@ pub struct IoDisplayConfig {
     pub display_name: Option<String>,
     pub is_visible: bool,
     pub display_order: Option<i32>,
+}
+
+/// Extended I/O port configuration for HMI panels.
+#[derive(Debug, Clone)]
+pub struct DbIoPortConfig {
+    pub id: i64,
+    pub robot_connection_id: i64,
+    pub io_type: String,
+    pub io_index: i32,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub widget_type: String,
+    pub color_on: String,
+    pub color_off: String,
+    pub icon: Option<String>,
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub unit: Option<String>,
+    pub decimal_places: i32,
+    pub warning_low: Option<f64>,
+    pub warning_high: Option<f64>,
+    pub alarm_low: Option<f64>,
+    pub alarm_high: Option<f64>,
+    pub warning_enabled: bool,
+    pub alarm_enabled: bool,
+    pub hmi_enabled: bool,
+    pub hmi_x: Option<i32>,
+    pub hmi_y: Option<i32>,
+    pub hmi_width: i32,
+    pub hmi_height: i32,
+    pub hmi_panel_id: Option<i64>,
+    pub is_visible: bool,
+    pub display_order: Option<i32>,
+}
+
+/// HMI Panel configuration stored in database.
+#[derive(Debug, Clone)]
+pub struct DbHmiPanel {
+    pub id: i64,
+    pub robot_connection_id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub grid_columns: i32,
+    pub grid_rows: i32,
+    pub background_color: String,
+    pub is_default: bool,
 }
 
 /// Server setting key-value pair.
@@ -276,6 +323,102 @@ impl Database {
                 [],
             )?;
             tracing::info!("Migration: Added column speed_type to program_instructions");
+        }
+
+        // Migration: Create HMI panels table
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS hmi_panels (
+                id INTEGER PRIMARY KEY,
+                robot_connection_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                grid_columns INTEGER NOT NULL DEFAULT 8,
+                grid_rows INTEGER NOT NULL DEFAULT 6,
+                background_color TEXT NOT NULL DEFAULT '#1a1a1a',
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (robot_connection_id) REFERENCES robot_connections(id) ON DELETE CASCADE
+            );"
+        )?;
+
+        // Migration: Create io_port_config table (extended I/O configuration)
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS io_port_config (
+                id INTEGER PRIMARY KEY,
+                robot_connection_id INTEGER NOT NULL,
+                io_type TEXT NOT NULL,      -- 'DIN', 'DOUT', 'AIN', 'AOUT', 'GIN', 'GOUT'
+                io_index INTEGER NOT NULL,
+
+                -- Identity & Description
+                display_name TEXT NOT NULL DEFAULT '',
+                description TEXT,
+                category TEXT,
+
+                -- Display Configuration
+                widget_type TEXT NOT NULL DEFAULT 'auto',
+                color_on TEXT NOT NULL DEFAULT '#00ff88',
+                color_off TEXT NOT NULL DEFAULT '#333333',
+                icon TEXT,
+
+                -- Value Constraints (for analog/group)
+                min_value REAL,
+                max_value REAL,
+                unit TEXT,
+                decimal_places INTEGER NOT NULL DEFAULT 2,
+
+                -- Warning/Alarm Thresholds
+                warning_low REAL,
+                warning_high REAL,
+                alarm_low REAL,
+                alarm_high REAL,
+                warning_enabled INTEGER NOT NULL DEFAULT 0,
+                alarm_enabled INTEGER NOT NULL DEFAULT 0,
+
+                -- HMI Panel Layout
+                hmi_enabled INTEGER NOT NULL DEFAULT 0,
+                hmi_x INTEGER,
+                hmi_y INTEGER,
+                hmi_width INTEGER NOT NULL DEFAULT 1,
+                hmi_height INTEGER NOT NULL DEFAULT 1,
+                hmi_panel_id INTEGER,
+
+                -- Standard I/O View
+                is_visible INTEGER NOT NULL DEFAULT 1,
+                display_order INTEGER,
+
+                FOREIGN KEY (robot_connection_id) REFERENCES robot_connections(id) ON DELETE CASCADE,
+                FOREIGN KEY (hmi_panel_id) REFERENCES hmi_panels(id) ON DELETE SET NULL,
+                UNIQUE(robot_connection_id, io_type, io_index)
+            );"
+        )?;
+
+        // Migration: Copy existing io_display_config data to io_port_config if table has data
+        let has_old_data: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM io_display_config LIMIT 1)",
+            [],
+            |row| row.get(0)
+        ).unwrap_or(false);
+
+        if has_old_data {
+            let new_table_empty: bool = self.conn.query_row(
+                "SELECT NOT EXISTS(SELECT 1 FROM io_port_config LIMIT 1)",
+                [],
+                |row| row.get(0)
+            ).unwrap_or(true);
+
+            if new_table_empty {
+                self.conn.execute_batch(
+                    "INSERT INTO io_port_config (
+                        robot_connection_id, io_type, io_index, display_name, is_visible, display_order
+                    )
+                    SELECT
+                        robot_connection_id, io_type, io_index,
+                        COALESCE(display_name, ''), is_visible, display_order
+                    FROM io_display_config;"
+                )?;
+                tracing::info!("Migration: Copied io_display_config data to io_port_config");
+            }
         }
 
         Ok(())
@@ -856,6 +999,225 @@ impl Database {
             params![robot_connection_id, io_type, io_index, display_name, is_visible as i64, display_order],
         )?;
         Ok(())
+    }
+
+    // ========== Extended I/O Port Config Operations ==========
+
+    /// Get all I/O port configs for a robot.
+    pub fn get_io_port_configs(&self, robot_connection_id: i64) -> Result<Vec<DbIoPortConfig>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, robot_connection_id, io_type, io_index, display_name, description, category,
+                    widget_type, color_on, color_off, icon, min_value, max_value, unit, decimal_places,
+                    warning_low, warning_high, alarm_low, alarm_high, warning_enabled, alarm_enabled,
+                    hmi_enabled, hmi_x, hmi_y, hmi_width, hmi_height, hmi_panel_id, is_visible, display_order
+             FROM io_port_config WHERE robot_connection_id = ?1 ORDER BY io_type, display_order, io_index"
+        )?;
+
+        let rows = stmt.query_map(params![robot_connection_id], |row| {
+            Ok(DbIoPortConfig {
+                id: row.get(0)?,
+                robot_connection_id: row.get(1)?,
+                io_type: row.get(2)?,
+                io_index: row.get(3)?,
+                display_name: row.get(4)?,
+                description: row.get(5)?,
+                category: row.get(6)?,
+                widget_type: row.get(7)?,
+                color_on: row.get(8)?,
+                color_off: row.get(9)?,
+                icon: row.get(10)?,
+                min_value: row.get(11)?,
+                max_value: row.get(12)?,
+                unit: row.get(13)?,
+                decimal_places: row.get(14)?,
+                warning_low: row.get(15)?,
+                warning_high: row.get(16)?,
+                alarm_low: row.get(17)?,
+                alarm_high: row.get(18)?,
+                warning_enabled: row.get::<_, i64>(19)? != 0,
+                alarm_enabled: row.get::<_, i64>(20)? != 0,
+                hmi_enabled: row.get::<_, i64>(21)? != 0,
+                hmi_x: row.get(22)?,
+                hmi_y: row.get(23)?,
+                hmi_width: row.get(24)?,
+                hmi_height: row.get(25)?,
+                hmi_panel_id: row.get(26)?,
+                is_visible: row.get::<_, i64>(27)? != 0,
+                display_order: row.get(28)?,
+            })
+        })?;
+
+        rows.collect()
+    }
+
+    /// Upsert an I/O port config.
+    pub fn upsert_io_port_config(&self, robot_connection_id: i64, config: &DbIoPortConfig) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO io_port_config (
+                robot_connection_id, io_type, io_index, display_name, description, category,
+                widget_type, color_on, color_off, icon, min_value, max_value, unit, decimal_places,
+                warning_low, warning_high, alarm_low, alarm_high, warning_enabled, alarm_enabled,
+                hmi_enabled, hmi_x, hmi_y, hmi_width, hmi_height, hmi_panel_id, is_visible, display_order
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
+            ON CONFLICT(robot_connection_id, io_type, io_index) DO UPDATE SET
+                display_name = excluded.display_name, description = excluded.description, category = excluded.category,
+                widget_type = excluded.widget_type, color_on = excluded.color_on, color_off = excluded.color_off,
+                icon = excluded.icon, min_value = excluded.min_value, max_value = excluded.max_value,
+                unit = excluded.unit, decimal_places = excluded.decimal_places,
+                warning_low = excluded.warning_low, warning_high = excluded.warning_high,
+                alarm_low = excluded.alarm_low, alarm_high = excluded.alarm_high,
+                warning_enabled = excluded.warning_enabled, alarm_enabled = excluded.alarm_enabled,
+                hmi_enabled = excluded.hmi_enabled, hmi_x = excluded.hmi_x, hmi_y = excluded.hmi_y,
+                hmi_width = excluded.hmi_width, hmi_height = excluded.hmi_height, hmi_panel_id = excluded.hmi_panel_id,
+                is_visible = excluded.is_visible, display_order = excluded.display_order",
+            params![
+                robot_connection_id, config.io_type, config.io_index, config.display_name,
+                config.description, config.category, config.widget_type, config.color_on, config.color_off,
+                config.icon, config.min_value, config.max_value, config.unit, config.decimal_places,
+                config.warning_low, config.warning_high, config.alarm_low, config.alarm_high,
+                config.warning_enabled as i64, config.alarm_enabled as i64,
+                config.hmi_enabled as i64, config.hmi_x, config.hmi_y, config.hmi_width, config.hmi_height,
+                config.hmi_panel_id, config.is_visible as i64, config.display_order
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Delete an I/O port config.
+    pub fn delete_io_port_config(&self, robot_connection_id: i64, io_type: &str, io_index: i32) -> Result<bool> {
+        let count = self.conn.execute(
+            "DELETE FROM io_port_config WHERE robot_connection_id = ?1 AND io_type = ?2 AND io_index = ?3",
+            params![robot_connection_id, io_type, io_index],
+        )?;
+        Ok(count > 0)
+    }
+
+    // ========== HMI Panel Operations ==========
+
+    /// Get all HMI panels for a robot.
+    pub fn get_hmi_panels(&self, robot_connection_id: i64) -> Result<Vec<DbHmiPanel>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, robot_connection_id, name, description, grid_columns, grid_rows, background_color, is_default
+             FROM hmi_panels WHERE robot_connection_id = ?1 ORDER BY name"
+        )?;
+
+        let rows = stmt.query_map(params![robot_connection_id], |row| {
+            Ok(DbHmiPanel {
+                id: row.get(0)?,
+                robot_connection_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                grid_columns: row.get(4)?,
+                grid_rows: row.get(5)?,
+                background_color: row.get(6)?,
+                is_default: row.get::<_, i64>(7)? != 0,
+            })
+        })?;
+
+        rows.collect()
+    }
+
+    /// Get a single HMI panel by ID.
+    pub fn get_hmi_panel_by_id(&self, panel_id: i64) -> Result<Option<DbHmiPanel>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, robot_connection_id, name, description, grid_columns, grid_rows, background_color, is_default
+             FROM hmi_panels WHERE id = ?1"
+        )?;
+
+        let mut rows = stmt.query_map(params![panel_id], |row| {
+            Ok(DbHmiPanel {
+                id: row.get(0)?,
+                robot_connection_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                grid_columns: row.get(4)?,
+                grid_rows: row.get(5)?,
+                background_color: row.get(6)?,
+                is_default: row.get::<_, i64>(7)? != 0,
+            })
+        })?;
+
+        match rows.next() {
+            Some(Ok(panel)) => Ok(Some(panel)),
+            Some(Err(e)) => Err(e),
+            None => Ok(None),
+        }
+    }
+
+    /// Create or update an HMI panel.
+    pub fn upsert_hmi_panel(&self, panel: &DbHmiPanel) -> Result<i64> {
+        if panel.id > 0 {
+            // Update existing
+            self.conn.execute(
+                "UPDATE hmi_panels SET name = ?1, description = ?2, grid_columns = ?3, grid_rows = ?4,
+                 background_color = ?5, is_default = ?6 WHERE id = ?7",
+                params![panel.name, panel.description, panel.grid_columns, panel.grid_rows,
+                        panel.background_color, panel.is_default as i64, panel.id],
+            )?;
+            Ok(panel.id)
+        } else {
+            // Insert new
+            self.conn.execute(
+                "INSERT INTO hmi_panels (robot_connection_id, name, description, grid_columns, grid_rows, background_color, is_default)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![panel.robot_connection_id, panel.name, panel.description, panel.grid_columns,
+                        panel.grid_rows, panel.background_color, panel.is_default as i64],
+            )?;
+            Ok(self.conn.last_insert_rowid())
+        }
+    }
+
+    /// Delete an HMI panel.
+    pub fn delete_hmi_panel(&self, panel_id: i64) -> Result<bool> {
+        let count = self.conn.execute("DELETE FROM hmi_panels WHERE id = ?1", params![panel_id])?;
+        Ok(count > 0)
+    }
+
+    /// Get I/O port configs for a specific HMI panel.
+    pub fn get_io_port_configs_for_panel(&self, hmi_panel_id: i64) -> Result<Vec<DbIoPortConfig>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, robot_connection_id, io_type, io_index, display_name, description, category,
+                    widget_type, color_on, color_off, icon, min_value, max_value, unit, decimal_places,
+                    warning_low, warning_high, alarm_low, alarm_high, warning_enabled, alarm_enabled,
+                    hmi_enabled, hmi_x, hmi_y, hmi_width, hmi_height, hmi_panel_id, is_visible, display_order
+             FROM io_port_config WHERE hmi_panel_id = ?1 AND hmi_enabled = 1 ORDER BY hmi_y, hmi_x"
+        )?;
+
+        let rows = stmt.query_map(params![hmi_panel_id], |row| {
+            Ok(DbIoPortConfig {
+                id: row.get(0)?,
+                robot_connection_id: row.get(1)?,
+                io_type: row.get(2)?,
+                io_index: row.get(3)?,
+                display_name: row.get(4)?,
+                description: row.get(5)?,
+                category: row.get(6)?,
+                widget_type: row.get(7)?,
+                color_on: row.get(8)?,
+                color_off: row.get(9)?,
+                icon: row.get(10)?,
+                min_value: row.get(11)?,
+                max_value: row.get(12)?,
+                unit: row.get(13)?,
+                decimal_places: row.get(14)?,
+                warning_low: row.get(15)?,
+                warning_high: row.get(16)?,
+                alarm_low: row.get(17)?,
+                alarm_high: row.get(18)?,
+                warning_enabled: row.get::<_, i64>(19)? != 0,
+                alarm_enabled: row.get::<_, i64>(20)? != 0,
+                hmi_enabled: row.get::<_, i64>(21)? != 0,
+                hmi_x: row.get(22)?,
+                hmi_y: row.get(23)?,
+                hmi_width: row.get(24)?,
+                hmi_height: row.get(25)?,
+                hmi_panel_id: row.get(26)?,
+                is_visible: row.get::<_, i64>(27)? != 0,
+                display_order: row.get(28)?,
+            })
+        })?;
+
+        rows.collect()
     }
 
     // ========== Server Settings Operations ==========

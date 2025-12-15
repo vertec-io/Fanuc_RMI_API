@@ -5,6 +5,7 @@ use fanuc_rmi::dto::FrameData;
 use crate::{
     ProgramInfo, ProgramDetail, RobotSettingsDto, RobotConnectionDto,
     RobotConfigurationDto, ChangeLogEntryDto, IoDisplayConfigDto,
+    IoPortConfig, HmiPanel, HmiPanelWithPorts,
 };
 
 /// Server responses to client.
@@ -235,5 +236,61 @@ pub enum ServerResponse {
         has_control: bool,
         holder_id: Option<String>,
     },
-}
 
+    // ========== Extended I/O Port Configuration (HMI System) ==========
+
+    /// All I/O port configurations for a robot.
+    #[serde(rename = "io_port_configs")]
+    IoPortConfigs { configs: Vec<IoPortConfig> },
+
+    /// Single I/O port configuration saved/updated.
+    #[serde(rename = "io_port_config_saved")]
+    IoPortConfigSaved { config: IoPortConfig },
+
+    /// I/O port configuration deleted.
+    #[serde(rename = "io_port_config_deleted")]
+    IoPortConfigDeleted {
+        io_type: crate::IoType,
+        io_index: u16,
+    },
+
+    // ========== HMI Panel Responses ==========
+
+    /// All HMI panels for a robot.
+    #[serde(rename = "hmi_panels")]
+    HmiPanels { panels: Vec<HmiPanel> },
+
+    /// HMI panel with its configured ports.
+    #[serde(rename = "hmi_panel_with_ports")]
+    HmiPanelWithPorts { panel: HmiPanelWithPorts },
+
+    /// HMI panel saved/updated.
+    #[serde(rename = "hmi_panel_saved")]
+    HmiPanelSaved { panel: HmiPanel },
+
+    /// HMI panel deleted.
+    #[serde(rename = "hmi_panel_deleted")]
+    HmiPanelDeleted { panel_id: i64 },
+
+    // ========== Session Linking (for HMI pop-out windows) ==========
+
+    /// Session info response.
+    #[serde(rename = "session_info")]
+    SessionInfo {
+        session_id: String,
+        robot_connection_id: Option<i64>,
+        has_control: bool,
+        parent_session_id: Option<String>,
+        child_session_ids: Vec<String>,
+    },
+
+    /// Child session linked successfully.
+    #[serde(rename = "session_linked")]
+    SessionLinked {
+        parent_session_id: String,
+    },
+
+    /// Child session unlinked.
+    #[serde(rename = "session_unlinked")]
+    SessionUnlinked,
+}

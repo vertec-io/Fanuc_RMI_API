@@ -12,17 +12,20 @@
 //! - `io`: Digital I/O management (DIN/DOUT/AIN/AOUT/GIN/GOUT)
 //! - `io_config`: I/O display configuration management
 //! - `robot_control`: Robot control commands (abort/reset/initialize)
+//! - `hmi`: HMI panel and extended I/O configuration management
 
 pub mod configurations;
 pub mod connection;
 pub mod control;
 pub mod execution;
 pub mod frame_tool;
+pub mod hmi;
 pub mod io;
 pub mod io_config;
 pub mod programs;
 pub mod robot_connections;
 pub mod robot_control;
+pub mod session;
 pub mod settings;
 
 use crate::api_types::*;
@@ -477,6 +480,45 @@ pub async fn handle_request(
                 return e;
             }
             configurations::save_current_configuration(db, robot_connection, client_manager, configuration_name).await
+        }
+
+        // ========== Extended I/O Port Configuration (HMI System) ==========
+        ClientRequest::GetIoPortConfigs { robot_connection_id } => {
+            hmi::get_io_port_configs(db, robot_connection_id).await
+        }
+        ClientRequest::SaveIoPortConfig { robot_connection_id, config } => {
+            hmi::save_io_port_config(db, robot_connection_id, config).await
+        }
+        ClientRequest::SaveIoPortConfigs { robot_connection_id, configs } => {
+            hmi::save_io_port_configs(db, robot_connection_id, configs).await
+        }
+        ClientRequest::DeleteIoPortConfig { robot_connection_id, io_type, io_index } => {
+            hmi::delete_io_port_config(db, robot_connection_id, io_type, io_index).await
+        }
+
+        // ========== HMI Panel Management ==========
+        ClientRequest::GetHmiPanels { robot_connection_id } => {
+            hmi::get_hmi_panels(db, robot_connection_id).await
+        }
+        ClientRequest::GetHmiPanelWithPorts { panel_id } => {
+            hmi::get_hmi_panel_with_ports(db, panel_id).await
+        }
+        ClientRequest::SaveHmiPanel { panel } => {
+            hmi::save_hmi_panel(db, panel).await
+        }
+        ClientRequest::DeleteHmiPanel { panel_id } => {
+            hmi::delete_hmi_panel(db, panel_id).await
+        }
+
+        // ========== Session Linking (for HMI pop-out windows) ==========
+        ClientRequest::LinkChildSession { parent_session_id } => {
+            session::link_child_session(client_manager, client_id, parent_session_id).await
+        }
+        ClientRequest::UnlinkChildSession => {
+            session::unlink_child_session(client_manager, client_id).await
+        }
+        ClientRequest::GetSessionInfo => {
+            session::get_session_info(client_manager, client_id).await
         }
     }
 }

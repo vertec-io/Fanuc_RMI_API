@@ -45,7 +45,7 @@ pub struct RobotConfigurationDto {
 }
 
 /// New robot configuration DTO (for creating configurations without ID).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NewRobotConfigurationDto {
     pub name: String,
     pub is_default: bool,

@@ -2,10 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 use fanuc_rmi::dto::FrameData;
-use crate::{StartPosition, NewRobotConfigurationDto};
+use crate::{StartPosition, NewRobotConfigurationDto, IoPortConfig, IoType, HmiPanel};
 
 /// Client requests to the server.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum ClientRequest {
     // Program Management
@@ -320,5 +320,65 @@ pub enum ClientRequest {
 
     #[serde(rename = "get_control_status")]
     GetControlStatus,
-}
 
+    // ========== Extended I/O Port Configuration (HMI System) ==========
+
+    /// Get all I/O port configurations for a robot.
+    #[serde(rename = "get_io_port_configs")]
+    GetIoPortConfigs { robot_connection_id: i64 },
+
+    /// Save/update an I/O port configuration.
+    #[serde(rename = "save_io_port_config")]
+    SaveIoPortConfig {
+        robot_connection_id: i64,
+        config: IoPortConfig,
+    },
+
+    /// Save multiple I/O port configurations.
+    #[serde(rename = "save_io_port_configs")]
+    SaveIoPortConfigs {
+        robot_connection_id: i64,
+        configs: Vec<IoPortConfig>,
+    },
+
+    /// Delete an I/O port configuration.
+    #[serde(rename = "delete_io_port_config")]
+    DeleteIoPortConfig {
+        robot_connection_id: i64,
+        io_type: IoType,
+        io_index: u16,
+    },
+
+    // ========== HMI Panel Management ==========
+
+    /// Get all HMI panels for a robot.
+    #[serde(rename = "get_hmi_panels")]
+    GetHmiPanels { robot_connection_id: i64 },
+
+    /// Get an HMI panel with its configured ports.
+    #[serde(rename = "get_hmi_panel_with_ports")]
+    GetHmiPanelWithPorts { panel_id: i64 },
+
+    /// Save/update an HMI panel.
+    #[serde(rename = "save_hmi_panel")]
+    SaveHmiPanel { panel: HmiPanel },
+
+    /// Delete an HMI panel.
+    #[serde(rename = "delete_hmi_panel")]
+    DeleteHmiPanel { panel_id: i64 },
+
+    // ========== Session Linking (for HMI pop-out windows) ==========
+
+    /// Link this session as a child of a parent session.
+    /// Child sessions inherit the parent's control authority.
+    #[serde(rename = "link_child_session")]
+    LinkChildSession { parent_session_id: String },
+
+    /// Unlink this session from its parent.
+    #[serde(rename = "unlink_child_session")]
+    UnlinkChildSession,
+
+    /// Get session info (for child windows to query parent state).
+    #[serde(rename = "get_session_info")]
+    GetSessionInfo,
+}
