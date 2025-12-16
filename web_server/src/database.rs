@@ -28,14 +28,20 @@ pub struct Program {
     pub default_term_value: Option<u8>,
     pub default_uframe: Option<i32>,
     pub default_utool: Option<i32>,
-    // Start position (where robot moves before toolpath)
+    // Start position (approach move before toolpath)
     pub start_x: Option<f64>,
     pub start_y: Option<f64>,
     pub start_z: Option<f64>,
-    // End position (where robot moves after toolpath)
+    pub start_w: Option<f64>,
+    pub start_p: Option<f64>,
+    pub start_r: Option<f64>,
+    // End position (retreat move after toolpath)
     pub end_x: Option<f64>,
     pub end_y: Option<f64>,
     pub end_z: Option<f64>,
+    pub end_w: Option<f64>,
+    pub end_p: Option<f64>,
+    pub end_r: Option<f64>,
     // Speed for moving to start/end positions
     pub move_speed: Option<f64>,
     pub created_at: String,
@@ -332,12 +338,20 @@ impl Database {
                 default_term_value INTEGER DEFAULT 100,
                 default_uframe INTEGER,
                 default_utool INTEGER,
+                -- Start position (approach move before toolpath)
                 start_x REAL,
                 start_y REAL,
                 start_z REAL,
+                start_w REAL,
+                start_p REAL,
+                start_r REAL,
+                -- End position (retreat move after toolpath)
                 end_x REAL,
                 end_y REAL,
                 end_z REAL,
+                end_w REAL,
+                end_p REAL,
+                end_r REAL,
                 move_speed REAL DEFAULT 100.0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -458,7 +472,8 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, default_w, default_p, default_r,
                     default_speed, default_term_type, default_term_value, default_uframe, default_utool,
-                    start_x, start_y, start_z, end_x, end_y, end_z,
+                    start_x, start_y, start_z, start_w, start_p, start_r,
+                    end_x, end_y, end_z, end_w, end_p, end_r,
                     COALESCE(move_speed, 100.0), created_at, updated_at
              FROM programs WHERE id = ?1"
         )?;
@@ -480,12 +495,18 @@ impl Database {
                 start_x: row.get(11)?,
                 start_y: row.get(12)?,
                 start_z: row.get(13)?,
-                end_x: row.get(14)?,
-                end_y: row.get(15)?,
-                end_z: row.get(16)?,
-                move_speed: row.get(17)?,
-                created_at: row.get(18)?,
-                updated_at: row.get(19)?,
+                start_w: row.get(14)?,
+                start_p: row.get(15)?,
+                start_r: row.get(16)?,
+                end_x: row.get(17)?,
+                end_y: row.get(18)?,
+                end_z: row.get(19)?,
+                end_w: row.get(20)?,
+                end_p: row.get(21)?,
+                end_r: row.get(22)?,
+                move_speed: row.get(23)?,
+                created_at: row.get(24)?,
+                updated_at: row.get(25)?,
             }))
         } else {
             Ok(None)
@@ -497,7 +518,8 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, default_w, default_p, default_r,
                     default_speed, default_term_type, default_term_value, default_uframe, default_utool,
-                    start_x, start_y, start_z, end_x, end_y, end_z,
+                    start_x, start_y, start_z, start_w, start_p, start_r,
+                    end_x, end_y, end_z, end_w, end_p, end_r,
                     COALESCE(move_speed, 100.0), created_at, updated_at
              FROM programs ORDER BY name"
         )?;
@@ -518,12 +540,18 @@ impl Database {
                 start_x: row.get(11)?,
                 start_y: row.get(12)?,
                 start_z: row.get(13)?,
-                end_x: row.get(14)?,
-                end_y: row.get(15)?,
-                end_z: row.get(16)?,
-                move_speed: row.get(17)?,
-                created_at: row.get(18)?,
-                updated_at: row.get(19)?,
+                start_w: row.get(14)?,
+                start_p: row.get(15)?,
+                start_r: row.get(16)?,
+                end_x: row.get(17)?,
+                end_y: row.get(18)?,
+                end_z: row.get(19)?,
+                end_w: row.get(20)?,
+                end_p: row.get(21)?,
+                end_r: row.get(22)?,
+                move_speed: row.get(23)?,
+                created_at: row.get(24)?,
+                updated_at: row.get(25)?,
             })
         })?;
 
@@ -538,20 +566,25 @@ impl Database {
                           default_term_value: Option<u8>,
                           default_uframe: Option<i32>, default_utool: Option<i32>,
                           start_x: Option<f64>, start_y: Option<f64>, start_z: Option<f64>,
+                          start_w: Option<f64>, start_p: Option<f64>, start_r: Option<f64>,
                           end_x: Option<f64>, end_y: Option<f64>, end_z: Option<f64>,
+                          end_w: Option<f64>, end_p: Option<f64>, end_r: Option<f64>,
                           move_speed: Option<f64>) -> Result<()> {
         self.conn.execute(
             "UPDATE programs SET
                 name = ?1, description = ?2, default_w = ?3, default_p = ?4, default_r = ?5,
                 default_speed = ?6, default_term_type = ?7, default_term_value = ?8,
                 default_uframe = ?9, default_utool = ?10,
-                start_x = ?11, start_y = ?12, start_z = ?13, end_x = ?14, end_y = ?15, end_z = ?16,
-                move_speed = ?17, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?18",
+                start_x = ?11, start_y = ?12, start_z = ?13, start_w = ?14, start_p = ?15, start_r = ?16,
+                end_x = ?17, end_y = ?18, end_z = ?19, end_w = ?20, end_p = ?21, end_r = ?22,
+                move_speed = ?23, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?24",
             params![name, description, default_w, default_p, default_r,
                     default_speed, default_term_type, default_term_value.map(|v| v as i32),
                     default_uframe, default_utool,
-                    start_x, start_y, start_z, end_x, end_y, end_z, move_speed, id],
+                    start_x, start_y, start_z, start_w, start_p, start_r,
+                    end_x, end_y, end_z, end_w, end_p, end_r,
+                    move_speed, id],
         )?;
         Ok(())
     }

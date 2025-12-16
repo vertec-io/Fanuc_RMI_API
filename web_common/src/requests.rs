@@ -25,12 +25,20 @@ pub enum ClientRequest {
     #[serde(rename = "update_program_settings")]
     UpdateProgramSettings {
         program_id: i64,
+        // Start position (approach move before toolpath)
         start_x: Option<f64>,
         start_y: Option<f64>,
         start_z: Option<f64>,
+        start_w: Option<f64>,
+        start_p: Option<f64>,
+        start_r: Option<f64>,
+        // End position (retreat move after toolpath)
         end_x: Option<f64>,
         end_y: Option<f64>,
         end_z: Option<f64>,
+        end_w: Option<f64>,
+        end_p: Option<f64>,
+        end_r: Option<f64>,
         move_speed: Option<f64>,
         /// Default termination type (CNT or FINE)
         default_term_type: Option<String>,

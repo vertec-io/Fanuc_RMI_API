@@ -64,9 +64,15 @@ pub async fn get_program(db: Arc<Mutex<Database>>, id: i64) -> ServerResponse {
                     start_x: program.start_x,
                     start_y: program.start_y,
                     start_z: program.start_z,
+                    start_w: program.start_w,
+                    start_p: program.start_p,
+                    start_r: program.start_r,
                     end_x: program.end_x,
                     end_y: program.end_y,
                     end_z: program.end_z,
+                    end_w: program.end_w,
+                    end_p: program.end_p,
+                    end_r: program.end_r,
                     move_speed: program.move_speed,
                     created_at: program.created_at,
                     updated_at: program.updated_at,
@@ -192,20 +198,32 @@ pub async fn upload_csv(
         }
     }
 
-    // Auto-populate start position from first instruction if not provided
-    let (start_x, start_y, start_z) = if let Some(start) = start_position {
-        (Some(start.x), Some(start.y), Some(start.z))
+    // Auto-populate start position (X, Y, Z, W, P, R) from first instruction if not provided
+    let (start_x, start_y, start_z, start_w, start_p, start_r) = if let Some(start) = start_position {
+        (Some(start.x), Some(start.y), Some(start.z), None, None, None)
     } else if let Some(first) = instructions.first() {
-        (Some(first.x), Some(first.y), Some(first.z))
+        (Some(first.x), Some(first.y), Some(first.z), first.w, first.p, first.r)
     } else {
-        (None, None, None)
+        (None, None, None, None, None, None)
     };
 
-    // Auto-populate end position from last instruction
-    let (end_x, end_y, end_z) = if let Some(last) = instructions.last() {
-        (Some(last.x), Some(last.y), Some(last.z))
+    // Auto-populate end position (X, Y, Z, W, P, R) from last instruction
+    let (end_x, end_y, end_z, end_w, end_p, end_r) = if let Some(last) = instructions.last() {
+        (Some(last.x), Some(last.y), Some(last.z), last.w, last.p, last.r)
     } else {
-        (None, None, None)
+        (None, None, None, None, None, None)
+    };
+
+    // Extract default orientation (W, P, R) from first instruction if available
+    // This is used as program defaults and for any instruction missing orientation
+    let (default_w, default_p, default_r) = if let Some(first) = instructions.first() {
+        (
+            first.w.unwrap_or(defaults.w),
+            first.p.unwrap_or(defaults.p),
+            first.r.unwrap_or(defaults.r),
+        )
+    } else {
+        (defaults.w, defaults.p, defaults.r)
     };
 
     // Get the current program to preserve move_speed if already set
@@ -215,16 +233,16 @@ pub async fn upload_csv(
         .and_then(|p| p.move_speed)
         .or(Some(100.0));
 
-    // Update program with positions
+    // Update program with positions and orientation from first/last instructions
     // Robot-specific config (uframe, utool) is NULL - applied at execution time
     if let Ok(Some(prog)) = db.get_program(program_id) {
         let _ = db.update_program(
             program_id,
             &prog.name,
             prog.description.as_deref(),
-            defaults.w,
-            defaults.p,
-            defaults.r,
+            default_w,
+            default_p,
+            default_r,
             Some(defaults.speed),
             &defaults.term_type,
             defaults.term_value,  // Default term_value for CNT blending
@@ -233,9 +251,15 @@ pub async fn upload_csv(
             start_x,
             start_y,
             start_z,
+            start_w,
+            start_p,
+            start_r,
             end_x,
             end_y,
             end_z,
+            end_w,
+            end_p,
+            end_r,
             current_move_speed,
         );
     }
@@ -246,7 +270,7 @@ pub async fn upload_csv(
     }
 }
 
-/// Update program settings (start/end positions, move speed, termination defaults).
+/// Update program settings (start/end positions with orientation, move speed, termination defaults).
 #[allow(clippy::too_many_arguments)]
 pub async fn update_program_settings(
     db: Arc<Mutex<Database>>,
@@ -254,9 +278,15 @@ pub async fn update_program_settings(
     start_x: Option<f64>,
     start_y: Option<f64>,
     start_z: Option<f64>,
+    start_w: Option<f64>,
+    start_p: Option<f64>,
+    start_r: Option<f64>,
     end_x: Option<f64>,
     end_y: Option<f64>,
     end_z: Option<f64>,
+    end_w: Option<f64>,
+    end_p: Option<f64>,
+    end_r: Option<f64>,
     move_speed: Option<f64>,
     default_term_type: Option<String>,
     default_term_value: Option<u8>,
@@ -290,16 +320,22 @@ pub async fn update_program_settings(
         start_x,
         start_y,
         start_z,
+        start_w,
+        start_p,
+        start_r,
         end_x,
         end_y,
         end_z,
+        end_w,
+        end_p,
+        end_r,
         move_speed,
     ) {
         return ServerResponse::Error { message: format!("Failed to update program: {}", e) };
     }
 
-    info!("Updated program {} settings: start=({:?},{:?},{:?}), end=({:?},{:?},{:?}), speed={:?}, term_type={}, term_value={:?}",
-          program_id, start_x, start_y, start_z, end_x, end_y, end_z, move_speed, term_type, term_value);
+    info!("Updated program {} settings: start=({:?},{:?},{:?},{:?},{:?},{:?}), end=({:?},{:?},{:?},{:?},{:?},{:?}), speed={:?}, term_type={}, term_value={:?}",
+          program_id, start_x, start_y, start_z, start_w, start_p, start_r, end_x, end_y, end_z, end_w, end_p, end_r, move_speed, term_type, term_value);
 
     ServerResponse::Success {
         message: "Program settings updated".to_string()

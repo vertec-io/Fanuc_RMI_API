@@ -151,12 +151,17 @@ impl ProgramExecutor {
             let approach_packet = self.build_approach_retreat_packet(
                 &program,
                 start_x, start_y, start_z,
+                program.start_w, program.start_p, program.start_r,
                 0, // Line 0 for approach
                 false, // Not last instruction - use CNT
             );
             self.pending_queue.push_back((0, approach_packet));
-            info!("Added approach move to ({:.2}, {:.2}, {:.2}) at speed {:.0}",
-                  start_x, start_y, start_z, program.move_speed.unwrap_or(100.0));
+            info!("Added approach move to ({:.2}, {:.2}, {:.2}, {:.2}, {:.2}, {:.2}) at speed {:.0}",
+                  start_x, start_y, start_z,
+                  program.start_w.unwrap_or(program.default_w),
+                  program.start_p.unwrap_or(program.default_p),
+                  program.start_r.unwrap_or(program.default_r),
+                  program.move_speed.unwrap_or(100.0));
         }
 
         // Add program instructions (lines 1 through N)
@@ -175,12 +180,17 @@ impl ProgramExecutor {
             let retreat_packet = self.build_approach_retreat_packet(
                 &program,
                 end_x, end_y, end_z,
+                program.end_w, program.end_p, program.end_r,
                 total + 1, // Line after last instruction
                 true, // Last instruction - use FINE
             );
             self.pending_queue.push_back((total + 1, retreat_packet));
-            info!("Added retreat move to ({:.2}, {:.2}, {:.2}) at speed {:.0}",
-                  end_x, end_y, end_z, program.move_speed.unwrap_or(100.0));
+            info!("Added retreat move to ({:.2}, {:.2}, {:.2}, {:.2}, {:.2}, {:.2}) at speed {:.0}",
+                  end_x, end_y, end_z,
+                  program.end_w.unwrap_or(program.default_w),
+                  program.end_p.unwrap_or(program.default_p),
+                  program.end_r.unwrap_or(program.default_r),
+                  program.move_speed.unwrap_or(100.0));
         }
 
         // Calculate total lines including approach/retreat
@@ -458,20 +468,25 @@ impl ProgramExecutor {
 
     /// Build an approach or retreat motion packet (for start/end positions).
     ///
-    /// Uses the program's move_speed and default orientation (w, p, r).
+    /// Uses the program's move_speed. Orientation (W, P, R) uses provided values if set,
+    /// otherwise falls back to program defaults.
+    #[allow(clippy::too_many_arguments)]
     fn build_approach_retreat_packet(
         &self,
         program: &Program,
         x: f64,
         y: f64,
         z: f64,
+        w: Option<f64>,
+        p: Option<f64>,
+        r: Option<f64>,
         line_number: usize,
         is_last: bool,
     ) -> SendPacket {
-        // Use program defaults for orientation
-        let w = program.default_w;
-        let p = program.default_p;
-        let r = program.default_r;
+        // Use provided orientation or fall back to program defaults
+        let w = w.unwrap_or(program.default_w);
+        let p = p.unwrap_or(program.default_p);
+        let r = r.unwrap_or(program.default_r);
 
         // Use move_speed or default to 100 mm/s
         let speed = program.move_speed.unwrap_or(100.0);

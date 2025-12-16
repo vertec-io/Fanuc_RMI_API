@@ -739,8 +739,8 @@ async fn handle_secondary_client(
 
                                 let response = CommandResponse::FrcReadUFrameData(FrcReadUFrameDataResponse {
                                     error_id: 0,
-                                    frame_number: cmd.frame_number as i16,
-                                    group: cmd.group as u16,
+                                    frame_number: cmd.frame_number as u8,
+                                    group: cmd.group,
                                     frame: FrameData {
                                         x: frame.x,
                                         y: frame.y,
@@ -777,8 +777,8 @@ async fn handle_secondary_client(
 
                                 let response = CommandResponse::FrcReadUToolData(FrcReadUToolDataResponse {
                                     error_id: 0,
-                                    tool_number: cmd.tool_number as i16,
-                                    group: cmd.group as u16,
+                                    tool_number: cmd.tool_number as u8,
+                                    group: cmd.group,
                                     frame: FrameData {
                                         x: tool.x,
                                         y: tool.y,
@@ -813,7 +813,7 @@ async fn handle_secondary_client(
                             }
                             let response = CommandResponse::FrcWriteUFrameData(FrcWriteUFrameDataResponse {
                                 error_id: 0,
-                                group: cmd.group as u16,
+                                group: cmd.group,
                             });
                             serialize_response(response)
                         }
@@ -839,7 +839,7 @@ async fn handle_secondary_client(
                             }
                             let response = CommandResponse::FrcWriteUToolData(FrcWriteUToolDataResponse {
                                 error_id: 0,
-                                group: cmd.group as u16,
+                                group: cmd.group,
                             });
                             serialize_response(response)
                         }

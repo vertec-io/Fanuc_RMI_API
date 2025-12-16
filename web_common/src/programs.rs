@@ -32,14 +32,20 @@ pub struct ProgramDetail {
     pub default_term_type: String,
     /// Default term_value for CNT blending (0-100). 100 = maximum smoothness.
     pub default_term_value: Option<u8>,
-    // Start position (where robot moves before toolpath)
+    // Start position (approach move before toolpath)
     pub start_x: Option<f64>,
     pub start_y: Option<f64>,
     pub start_z: Option<f64>,
-    // End position (where robot moves after toolpath)
+    pub start_w: Option<f64>,
+    pub start_p: Option<f64>,
+    pub start_r: Option<f64>,
+    // End position (retreat move after toolpath)
     pub end_x: Option<f64>,
     pub end_y: Option<f64>,
     pub end_z: Option<f64>,
+    pub end_w: Option<f64>,
+    pub end_p: Option<f64>,
+    pub end_r: Option<f64>,
     // Speed for moving to start/end positions
     pub move_speed: Option<f64>,
     // Timestamps

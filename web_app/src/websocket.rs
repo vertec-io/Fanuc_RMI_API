@@ -1239,7 +1239,7 @@ impl WebSocketManager {
         self.send_api_request(ClientRequest::DeleteProgram { id });
     }
 
-    /// Update program settings (start/end positions, move speed, termination defaults).
+    /// Update program settings (start/end positions with orientation, move speed, termination defaults).
     #[allow(clippy::too_many_arguments)]
     pub fn update_program_settings(
         &self,
@@ -1247,9 +1247,15 @@ impl WebSocketManager {
         start_x: Option<f64>,
         start_y: Option<f64>,
         start_z: Option<f64>,
+        start_w: Option<f64>,
+        start_p: Option<f64>,
+        start_r: Option<f64>,
         end_x: Option<f64>,
         end_y: Option<f64>,
         end_z: Option<f64>,
+        end_w: Option<f64>,
+        end_p: Option<f64>,
+        end_r: Option<f64>,
         move_speed: Option<f64>,
         default_term_type: Option<String>,
         default_term_value: Option<u8>,
@@ -1259,9 +1265,15 @@ impl WebSocketManager {
             start_x,
             start_y,
             start_z,
+            start_w,
+            start_p,
+            start_r,
             end_x,
             end_y,
             end_z,
+            end_w,
+            end_p,
+            end_r,
             move_speed,
             default_term_type,
             default_term_value,

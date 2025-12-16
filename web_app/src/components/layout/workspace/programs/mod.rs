@@ -427,13 +427,19 @@ fn ProgramDetails(
 ) -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
 
-    // Editable position signals
+    // Editable position signals - X, Y, Z, W, P, R for start and end
     let (start_x, set_start_x) = signal(String::new());
     let (start_y, set_start_y) = signal(String::new());
     let (start_z, set_start_z) = signal(String::new());
+    let (start_w, set_start_w) = signal(String::new());
+    let (start_p, set_start_p) = signal(String::new());
+    let (start_r, set_start_r) = signal(String::new());
     let (end_x, set_end_x) = signal(String::new());
     let (end_y, set_end_y) = signal(String::new());
     let (end_z, set_end_z) = signal(String::new());
+    let (end_w, set_end_w) = signal(String::new());
+    let (end_p, set_end_p) = signal(String::new());
+    let (end_r, set_end_r) = signal(String::new());
     let (move_speed, set_move_speed) = signal(String::new());
     // Termination settings
     let (term_type, set_term_type) = signal(String::from("CNT"));
@@ -455,9 +461,15 @@ fn ProgramDetails(
                 set_start_x.set(prog.start_x.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_start_y.set(prog.start_y.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_start_z.set(prog.start_z.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_start_w.set(prog.start_w.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_start_p.set(prog.start_p.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_start_r.set(prog.start_r.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_end_x.set(prog.end_x.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_end_y.set(prog.end_y.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_end_z.set(prog.end_z.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_end_w.set(prog.end_w.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_end_p.set(prog.end_p.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_end_r.set(prog.end_r.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_move_speed.set(prog.move_speed.map(|v| format!("{:.0}", v)).unwrap_or_else(|| "100".to_string()));
                 set_term_type.set(prog.default_term_type.clone());
                 set_term_value.set(prog.default_term_value.map(|v| v.to_string()).unwrap_or_else(|| "100".to_string()));
@@ -467,9 +479,15 @@ fn ProgramDetails(
                 set_start_x.set(prog.start_x.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_start_y.set(prog.start_y.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_start_z.set(prog.start_z.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_start_w.set(prog.start_w.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_start_p.set(prog.start_p.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_start_r.set(prog.start_r.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_end_x.set(prog.end_x.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_end_y.set(prog.end_y.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_end_z.set(prog.end_z.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_end_w.set(prog.end_w.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_end_p.set(prog.end_p.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                set_end_r.set(prog.end_r.map(|v| format!("{:.2}", v)).unwrap_or_default());
                 set_move_speed.set(prog.move_speed.map(|v| format!("{:.0}", v)).unwrap_or_else(|| "100".to_string()));
                 set_term_type.set(prog.default_term_type.clone());
                 set_term_value.set(prog.default_term_value.map(|v| v.to_string()).unwrap_or_else(|| "100".to_string()));
@@ -554,12 +572,11 @@ fn ProgramDetails(
                                     <div class="text-[8px] text-[#555555] uppercase">"Start Position"</div>
                                     <div class="text-[7px] text-[#444444]">"(approach before toolpath)"</div>
                                 </div>
-                                <div class="grid grid-cols-3 gap-2">
+                                <div class="grid grid-cols-6 gap-2">
                                     <div>
                                         <label class="text-[7px] text-[#444444]">"X"</label>
                                         <input
-                                            type="number"
-                                            step="0.1"
+                                            type="text"
                                             class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
                                             placeholder="X"
                                             prop:value=move || start_x.get()
@@ -572,8 +589,7 @@ fn ProgramDetails(
                                     <div>
                                         <label class="text-[7px] text-[#444444]">"Y"</label>
                                         <input
-                                            type="number"
-                                            step="0.1"
+                                            type="text"
                                             class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
                                             placeholder="Y"
                                             prop:value=move || start_y.get()
@@ -586,13 +602,51 @@ fn ProgramDetails(
                                     <div>
                                         <label class="text-[7px] text-[#444444]">"Z"</label>
                                         <input
-                                            type="number"
-                                            step="0.1"
+                                            type="text"
                                             class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
                                             placeholder="Z"
                                             prop:value=move || start_z.get()
                                             on:input=move |ev| {
                                                 set_start_z.set(event_target_value(&ev));
+                                                set_settings_modified.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="text-[7px] text-[#444444]">"W"</label>
+                                        <input
+                                            type="text"
+                                            class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                            placeholder="W"
+                                            prop:value=move || start_w.get()
+                                            on:input=move |ev| {
+                                                set_start_w.set(event_target_value(&ev));
+                                                set_settings_modified.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="text-[7px] text-[#444444]">"P"</label>
+                                        <input
+                                            type="text"
+                                            class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                            placeholder="P"
+                                            prop:value=move || start_p.get()
+                                            on:input=move |ev| {
+                                                set_start_p.set(event_target_value(&ev));
+                                                set_settings_modified.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="text-[7px] text-[#444444]">"R"</label>
+                                        <input
+                                            type="text"
+                                            class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                            placeholder="R"
+                                            prop:value=move || start_r.get()
+                                            on:input=move |ev| {
+                                                set_start_r.set(event_target_value(&ev));
                                                 set_settings_modified.set(true);
                                             }
                                         />
@@ -606,12 +660,11 @@ fn ProgramDetails(
                                     <div class="text-[8px] text-[#555555] uppercase">"End Position"</div>
                                     <div class="text-[7px] text-[#444444]">"(retreat after toolpath)"</div>
                                 </div>
-                                <div class="grid grid-cols-3 gap-2">
+                                <div class="grid grid-cols-6 gap-2">
                                     <div>
                                         <label class="text-[7px] text-[#444444]">"X"</label>
                                         <input
-                                            type="number"
-                                            step="0.1"
+                                            type="text"
                                             class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
                                             placeholder="X"
                                             prop:value=move || end_x.get()
@@ -624,8 +677,7 @@ fn ProgramDetails(
                                     <div>
                                         <label class="text-[7px] text-[#444444]">"Y"</label>
                                         <input
-                                            type="number"
-                                            step="0.1"
+                                            type="text"
                                             class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
                                             placeholder="Y"
                                             prop:value=move || end_y.get()
@@ -638,13 +690,51 @@ fn ProgramDetails(
                                     <div>
                                         <label class="text-[7px] text-[#444444]">"Z"</label>
                                         <input
-                                            type="number"
-                                            step="0.1"
+                                            type="text"
                                             class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
                                             placeholder="Z"
                                             prop:value=move || end_z.get()
                                             on:input=move |ev| {
                                                 set_end_z.set(event_target_value(&ev));
+                                                set_settings_modified.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="text-[7px] text-[#444444]">"W"</label>
+                                        <input
+                                            type="text"
+                                            class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                            placeholder="W"
+                                            prop:value=move || end_w.get()
+                                            on:input=move |ev| {
+                                                set_end_w.set(event_target_value(&ev));
+                                                set_settings_modified.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="text-[7px] text-[#444444]">"P"</label>
+                                        <input
+                                            type="text"
+                                            class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                            placeholder="P"
+                                            prop:value=move || end_p.get()
+                                            on:input=move |ev| {
+                                                set_end_p.set(event_target_value(&ev));
+                                                set_settings_modified.set(true);
+                                            }
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="text-[7px] text-[#444444]">"R"</label>
+                                        <input
+                                            type="text"
+                                            class="w-full bg-[#111111] border border-[#ffffff10] rounded px-2 py-1 text-[10px] text-white font-mono"
+                                            placeholder="R"
+                                            prop:value=move || end_r.get()
+                                            on:input=move |ev| {
+                                                set_end_r.set(event_target_value(&ev));
                                                 set_settings_modified.set(true);
                                             }
                                         />
@@ -711,9 +801,15 @@ fn ProgramDetails(
                                                 start_x.get().parse().ok(),
                                                 start_y.get().parse().ok(),
                                                 start_z.get().parse().ok(),
+                                                start_w.get().parse().ok(),
+                                                start_p.get().parse().ok(),
+                                                start_r.get().parse().ok(),
                                                 end_x.get().parse().ok(),
                                                 end_y.get().parse().ok(),
                                                 end_z.get().parse().ok(),
+                                                end_w.get().parse().ok(),
+                                                end_p.get().parse().ok(),
+                                                end_r.get().parse().ok(),
                                                 move_speed.get().parse().ok(),
                                                 Some(term_type.get()),
                                                 term_value.get().parse().ok(),

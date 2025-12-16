@@ -298,9 +298,8 @@ pub async fn read_tool_data(
                     message: format!("Robot error: {}", resp.error_id),
                 };
             }
-            // Cast back to u8 - we know it's valid since we requested a valid tool number
             ServerResponse::ToolDataResponse {
-                tool_number: resp.tool_number as u8,
+                tool_number: resp.tool_number,
                 data: resp.frame.into(),
             }
         }
