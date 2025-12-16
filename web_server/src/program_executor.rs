@@ -109,7 +109,14 @@ impl ProgramExecutor {
             return Err("Program has no instructions".to_string());
         }
 
-        // Set defaults from program, with active configuration for arm configuration
+        // Set defaults from program, with active configuration for arm configuration and frame/tool
+        // Priority for uframe/utool:
+        // 1. Program default (if specified)
+        // 2. Active robot configuration (if available)
+        // 3. Fallback to 1 (FANUC uses 1-based indexing)
+        let active_uframe = active_config.map(|c| c.u_frame_number);
+        let active_utool = active_config.map(|c| c.u_tool_number);
+
         self.defaults = ProgramDefaults {
             w: program.default_w,
             p: program.default_p,
@@ -121,8 +128,9 @@ impl ProgramExecutor {
             speed_type: default_speed_type.to_string(),
             term_type: program.default_term_type.clone(),
             term_value: program.default_term_value,
-            uframe: program.default_uframe,
-            utool: program.default_utool,
+            // Use program defaults, fall back to active robot configuration, then to 1
+            uframe: program.default_uframe.or(active_uframe),
+            utool: program.default_utool.or(active_utool),
             // Use active configuration for arm configuration
             front: active_config.map(|c| c.front),
             up: active_config.map(|c| c.up),
@@ -420,8 +428,9 @@ impl ProgramExecutor {
         };
 
         // Build configuration with uframe/utool and robot arm configuration defaults
-        let uframe = instruction.uframe.unwrap_or(self.defaults.uframe.unwrap_or(0)) as i8;
-        let utool = instruction.utool.unwrap_or(self.defaults.utool.unwrap_or(0)) as i8;
+        // FANUC uses 1-based indexing for frames/tools, so default to 1 (not 0)
+        let uframe = instruction.uframe.unwrap_or(self.defaults.uframe.unwrap_or(1)) as i8;
+        let utool = instruction.utool.unwrap_or(self.defaults.utool.unwrap_or(1)) as i8;
         let configuration = Configuration {
             u_tool_number: utool,
             u_frame_number: uframe,
@@ -492,8 +501,9 @@ impl ProgramExecutor {
         };
 
         // Build configuration with uframe/utool and robot arm configuration defaults
-        let uframe = self.defaults.uframe.unwrap_or(0) as i8;
-        let utool = self.defaults.utool.unwrap_or(0) as i8;
+        // FANUC uses 1-based indexing for frames/tools, so default to 1 (not 0)
+        let uframe = self.defaults.uframe.unwrap_or(1) as i8;
+        let utool = self.defaults.utool.unwrap_or(1) as i8;
         let configuration = Configuration {
             u_tool_number: utool,
             u_frame_number: uframe,

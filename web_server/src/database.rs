@@ -225,10 +225,12 @@ impl Database {
                 robot_connection_id INTEGER NOT NULL,
                 name TEXT NOT NULL,
                 is_default INTEGER NOT NULL DEFAULT 0,
-                u_frame_number INTEGER NOT NULL DEFAULT 0,
-                u_tool_number INTEGER NOT NULL DEFAULT 0,
-                front INTEGER NOT NULL DEFAULT 0,
-                up INTEGER NOT NULL DEFAULT 0,
+                -- FANUC uses 1-based indexing for frames and tools
+                u_frame_number INTEGER NOT NULL DEFAULT 1,
+                u_tool_number INTEGER NOT NULL DEFAULT 1,
+                -- Arm configuration defaults
+                front INTEGER NOT NULL DEFAULT 1,
+                up INTEGER NOT NULL DEFAULT 1,
                 left INTEGER NOT NULL DEFAULT 0,
                 flip INTEGER NOT NULL DEFAULT 0,
                 turn4 INTEGER NOT NULL DEFAULT 0,
@@ -370,8 +372,9 @@ impl Database {
                 default_r REAL DEFAULT 0.0,
                 default_speed REAL DEFAULT 100.0,
                 default_term_type TEXT DEFAULT 'CNT',
-                default_uframe INTEGER DEFAULT 0,
-                default_utool INTEGER DEFAULT 0
+                -- FANUC uses 1-based indexing for frames and tools
+                default_uframe INTEGER DEFAULT 1,
+                default_utool INTEGER DEFAULT 1
             );
 
             CREATE TABLE IF NOT EXISTS robot_connections (

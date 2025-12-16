@@ -29,10 +29,12 @@ pub struct FrcReadUToolDataResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     /// Note: Manual says "UToolNumber" but real robot sends "ToolNumber"
+    /// Using i16 because robot may return values > 127 in error states
     #[serde(rename = "ToolNumber")]
-    pub tool_number: u8,
+    pub tool_number: i16,
     #[serde(rename = "Frame")]
     pub frame: FrameData,
+    /// Using u16 because robot may return unexpected values in error states
     #[serde(rename = "Group")]
-    pub group: u8,
+    pub group: u16,
 }

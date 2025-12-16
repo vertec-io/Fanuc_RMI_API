@@ -31,6 +31,7 @@ impl FrcWriteUToolData{
 pub struct FrcWriteUToolDataResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
+    /// Using u16 because robot may return unexpected values in error states
     #[serde(rename = "Group")]
-    pub group: u8,
+    pub group: u16,
 }

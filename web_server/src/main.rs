@@ -78,7 +78,8 @@ impl Default for ActiveConfiguration {
             loaded_from_name: None,
             changes_count: 0,
             change_log: Vec::new(),
-            u_frame_number: 0,
+            // FANUC uses 1-based indexing for frames and tools
+            u_frame_number: 1,
             u_tool_number: 1,
             front: 1,  // Front
             up: 1,     // Up

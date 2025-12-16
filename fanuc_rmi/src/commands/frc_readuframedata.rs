@@ -29,10 +29,12 @@ pub struct FrcReadUFrameDataResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     /// Note: Manual says "UFrameNumber" but real robot sends "FrameNumber"
+    /// Using i16 because robot may return values > 127 in error states (e.g., 128)
     #[serde(rename = "FrameNumber")]
-    pub frame_number: i8,
+    pub frame_number: i16,
+    /// Using u16 because robot may return unexpected values in error states (e.g., 12)
     #[serde(rename = "Group")]
-    pub group: u8,
+    pub group: u16,
     #[serde(rename = "Frame")]
     pub frame: FrameData,
 }

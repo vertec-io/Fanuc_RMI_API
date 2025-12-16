@@ -581,7 +581,14 @@ pub fn CSVUploadModal(
                                 if let Some(content) = csv_content.get() {
                                     set_is_uploading.set(true);
                                     ws.upload_csv(program_id, content, None);
-                                    on_uploaded();
+                                    // Small delay to ensure server processes the upload before we refresh
+                                    // This ensures the program's start/end positions are updated from CSV
+                                    // TODO: Proper async flow - wait for server Success response
+                                    let on_uploaded = on_uploaded.clone();
+                                    leptos::leptos_dom::helpers::set_timeout(
+                                        move || { on_uploaded(); },
+                                        std::time::Duration::from_millis(250)
+                                    );
                                 }
                             }
                         }

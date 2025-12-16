@@ -121,7 +121,7 @@ pub enum CommandResponse {
     FrcReadUToolData(FrcReadUToolDataResponse),
 
     #[serde(rename = "FRC_WriteUToolData")]
-    FrcWriteUToolData(FrcWriteUToolData),
+    FrcWriteUToolData(FrcWriteUToolDataResponse),
 
     #[serde(rename = "FRC_ReadDIN")]
     FrcReadDIN(FrcReadDINResponse),
@@ -182,7 +182,7 @@ impl_extract_inner!(CommandResponse, FrcGetStatus, FrcGetStatusResponse);
 impl_extract_inner!(CommandResponse, FrcReadUFrameData, FrcReadUFrameDataResponse);
 impl_extract_inner!(CommandResponse, FrcWriteUFrameData, FrcWriteUFrameDataResponse);
 impl_extract_inner!(CommandResponse, FrcReadUToolData, FrcReadUToolDataResponse);
-impl_extract_inner!(CommandResponse, FrcWriteUToolData, FrcWriteUToolData);
+impl_extract_inner!(CommandResponse, FrcWriteUToolData, FrcWriteUToolDataResponse);
 impl_extract_inner!(CommandResponse, FrcReadDIN, FrcReadDINResponse);
 impl_extract_inner!(CommandResponse, FrcWriteDOUT, FrcWriteDOUTResponse);
 impl_extract_inner!(CommandResponse, FrcReadAIN, FrcReadAINResponse);

@@ -739,8 +739,8 @@ async fn handle_secondary_client(
 
                                 let response = CommandResponse::FrcReadUFrameData(FrcReadUFrameDataResponse {
                                     error_id: 0,
-                                    frame_number: cmd.frame_number,
-                                    group: cmd.group,
+                                    frame_number: cmd.frame_number as i16,
+                                    group: cmd.group as u16,
                                     frame: FrameData {
                                         x: frame.x,
                                         y: frame.y,
@@ -777,8 +777,8 @@ async fn handle_secondary_client(
 
                                 let response = CommandResponse::FrcReadUToolData(FrcReadUToolDataResponse {
                                     error_id: 0,
-                                    tool_number: cmd.tool_number as u8,
-                                    group: cmd.group,
+                                    tool_number: cmd.tool_number as i16,
+                                    group: cmd.group as u16,
                                     frame: FrameData {
                                         x: tool.x,
                                         y: tool.y,
@@ -813,7 +813,7 @@ async fn handle_secondary_client(
                             }
                             let response = CommandResponse::FrcWriteUFrameData(FrcWriteUFrameDataResponse {
                                 error_id: 0,
-                                group: cmd.group,
+                                group: cmd.group as u16,
                             });
                             serialize_response(response)
                         }
@@ -837,7 +837,10 @@ async fn handle_secondary_client(
                                 };
                                 println!("📝 FRC_WriteUToolData: UTool {} updated", tool_num);
                             }
-                            let response = CommandResponse::FrcWriteUToolData(cmd);
+                            let response = CommandResponse::FrcWriteUToolData(FrcWriteUToolDataResponse {
+                                error_id: 0,
+                                group: cmd.group as u16,
+                            });
                             serialize_response(response)
                         }
                         Some("FRC_ReadDIN") => {
