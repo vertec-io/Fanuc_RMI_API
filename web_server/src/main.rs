@@ -225,11 +225,53 @@ impl RobotConnection {
         }
     }
 
+    /// Disconnect from the robot.
+    ///
+    /// This is a synchronous method that schedules an async disconnect.
+    /// For proper cleanup, use `disconnect_async()` which waits for FRC_Disconnect acknowledgment.
     pub fn disconnect(&mut self) {
         if let Some(ref driver) = self.driver {
             info!("Disconnecting from robot at {}:{}", self.robot_addr, self.robot_port);
-            // The driver will clean up its connections when dropped
-            drop(driver.clone());
+            // Send FRC_Disconnect but don't wait for response
+            // (synchronous context, can't await)
+            let _ = driver.send_packet(
+                fanuc_rmi::packets::SendPacket::Communication(
+                    fanuc_rmi::packets::Communication::FrcDisconnect {}
+                ),
+                fanuc_rmi::packets::PacketPriority::Standard,
+            );
+        }
+        self.driver = None;
+        self.connected = false;
+        self.tp_program_initialized = false;
+    }
+
+    /// Async disconnect from the robot.
+    ///
+    /// Sends FRC_Disconnect and waits for acknowledgment before dropping the driver.
+    /// This is the preferred method when called from an async context.
+    pub async fn disconnect_async(&mut self) {
+        if let Some(ref driver) = self.driver {
+            info!("Disconnecting from robot at {}:{} (async)", self.robot_addr, self.robot_port);
+            // Send FRC_Disconnect and wait for response (with timeout)
+            match tokio::time::timeout(
+                tokio::time::Duration::from_secs(2),
+                driver.disconnect()
+            ).await {
+                Ok(Ok(response)) => {
+                    if response.error_id == 0 {
+                        info!("✓ Robot acknowledged disconnect");
+                    } else {
+                        warn!("Robot disconnect returned error: {}", response.error_id);
+                    }
+                }
+                Ok(Err(e)) => {
+                    warn!("Failed to send disconnect: {}", e);
+                }
+                Err(_) => {
+                    warn!("Timeout waiting for disconnect acknowledgment");
+                }
+            }
         }
         self.driver = None;
         self.connected = false;

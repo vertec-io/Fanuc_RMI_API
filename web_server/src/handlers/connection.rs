@@ -79,13 +79,15 @@ pub async fn connect_robot(
 }
 
 /// Disconnect from the robot.
+///
+/// This sends FRC_Disconnect to the robot and waits for acknowledgment before dropping the driver.
 /// Note: This does NOT clear saved_connection or active_configuration, so reconnection can work properly.
 pub async fn disconnect_robot(
     robot_connection: Option<Arc<RwLock<RobotConnection>>>,
 ) -> ServerResponse {
     if let Some(conn) = robot_connection {
         let mut conn = conn.write().await;
-        conn.disconnect();
+        conn.disconnect_async().await;
         // DO NOT clear saved_connection - keep it so reconnection works
         // DO NOT reset active_configuration - keep it so reconnection works
         info!("Disconnected from robot");

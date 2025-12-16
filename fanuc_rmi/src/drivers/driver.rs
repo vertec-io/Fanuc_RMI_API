@@ -669,8 +669,11 @@ impl FanucDriver {
             return Err(msg);
         }
 
-        if status.tp_mode != 1 {
-            let msg = "Controller not in AUTO mode (teach pendant may be enabled)".to_string();
+        // Per FANUC documentation B-84184EN/02:
+        // TPMode: if it is 0, the teach pendant is disabled. If it is 1, the teach pendant is enabled.
+        // The Remote Motion interface only works when the teach pendant is disabled.
+        if status.tp_mode != 0 {
+            let msg = "Teach pendant is enabled (tp_mode=1). RMI requires teach pendant to be disabled (tp_mode=0). Switch to AUTO mode.".to_string();
             self.log_error(&msg).await;
             return Err(msg);
         }

@@ -575,10 +575,12 @@ async fn handle_secondary_client(
                             let next_seq = state.expected_next_sequence_id;
                             let override_val = executor_control.get_speed_override();
                             let paused = if executor_control.is_paused() { 1 } else { 0 };
+                            // Per FANUC documentation B-84184EN/02:
+                            // TPMode: 0 = teach pendant disabled (RMI works), 1 = teach pendant enabled (RMI blocked)
                             let response = CommandResponse::FrcGetStatus(FrcGetStatusResponse {
                                 error_id: 0,
                                 servo_ready: 1,
-                                tp_mode: 1,
+                                tp_mode: 0, // 0 = TP disabled, RMI can work
                                 rmi_motion_status: paused, // 0=running, 1=paused
                                 program_status: 0,
                                 single_step_mode: 0,
