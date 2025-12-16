@@ -540,7 +540,7 @@ pub fn FloatingJogControls() -> impl IntoView {
 
     // Size state for resizing - generous default size for comfortable use
     let (width, set_width) = signal(420i32);
-    let (height, set_height) = signal(275i32);
+    let (height, set_height) = signal(430i32);
 
     view! {
         <Show when=should_show>

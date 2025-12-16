@@ -69,6 +69,8 @@ pub struct ActiveConfiguration {
     pub default_cartesian_jog_step: f64,
     pub default_joint_jog_speed: f64,
     pub default_joint_jog_step: f64,
+    pub default_rotation_jog_speed: f64,
+    pub default_rotation_jog_step: f64,
 }
 
 impl Default for ActiveConfiguration {
@@ -93,6 +95,8 @@ impl Default for ActiveConfiguration {
             default_cartesian_jog_step: 1.0,
             default_joint_jog_speed: 10.0,
             default_joint_jog_step: 1.0,
+            default_rotation_jog_speed: 5.0,
+            default_rotation_jog_step: 1.0,
         }
     }
 }
@@ -119,6 +123,8 @@ impl ActiveConfiguration {
             default_cartesian_jog_step: connection.default_cartesian_jog_step,
             default_joint_jog_speed: connection.default_joint_jog_speed,
             default_joint_jog_step: connection.default_joint_jog_step,
+            default_rotation_jog_speed: connection.default_rotation_jog_speed,
+            default_rotation_jog_step: connection.default_rotation_jog_step,
         }
     }
 
@@ -140,6 +146,8 @@ pub struct RobotConnection {
     pub active_cartesian_jog_step: f64,
     pub active_joint_jog_speed: f64,
     pub active_joint_jog_step: f64,
+    pub active_rotation_jog_speed: f64,
+    pub active_rotation_jog_step: f64,
     /// Whether the TP program is initialized (FRC_Initialize was successful)
     /// This must be true to send motion commands. It becomes false after:
     /// - FRC_Abort is called
@@ -161,6 +169,8 @@ impl RobotConnection {
             active_cartesian_jog_step: 1.0,
             active_joint_jog_speed: 10.0,
             active_joint_jog_step: 1.0,
+            active_rotation_jog_speed: 5.0,  // Default: 5 deg/s
+            active_rotation_jog_step: 1.0,   // Default: 1 degree
             tp_program_initialized: false,
         }
     }
@@ -672,6 +682,8 @@ async fn handle_connection(
             cartesian_jog_step: conn.active_cartesian_jog_step,
             joint_jog_speed: conn.active_joint_jog_speed,
             joint_jog_step: conn.active_joint_jog_step,
+            rotation_jog_speed: conn.active_rotation_jog_speed,
+            rotation_jog_step: conn.active_rotation_jog_step,
         };
         let json = serde_json::to_string(&jog_response).unwrap_or_default();
         let mut sender = ws_sender.lock().await;

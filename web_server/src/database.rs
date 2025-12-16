@@ -112,6 +112,8 @@ pub struct RobotConnection {
     pub default_cartesian_jog_step: f64,
     pub default_joint_jog_speed: f64,
     pub default_joint_jog_step: f64,
+    pub default_rotation_jog_speed: f64,
+    pub default_rotation_jog_step: f64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -199,6 +201,8 @@ impl Database {
             ("default_cartesian_jog_step", "REAL"),
             ("default_joint_jog_speed", "REAL"),
             ("default_joint_jog_step", "REAL"),
+            ("default_rotation_jog_speed", "REAL"),
+            ("default_rotation_jog_step", "REAL"),
         ];
 
         for (column_name, column_type) in columns_to_add {
@@ -721,19 +725,23 @@ impl Database {
         default_cartesian_jog_step: f64,
         default_joint_jog_speed: f64,
         default_joint_jog_step: f64,
+        default_rotation_jog_speed: f64,
+        default_rotation_jog_step: f64,
     ) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO robot_connections (
                 name, description, ip_address, port,
                 default_speed, default_speed_type, default_term_type, default_w, default_p, default_r,
                 default_cartesian_jog_speed, default_cartesian_jog_step,
-                default_joint_jog_speed, default_joint_jog_step
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                default_joint_jog_speed, default_joint_jog_step,
+                default_rotation_jog_speed, default_rotation_jog_step
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 name, description, ip_address, port,
                 default_speed, default_speed_type, default_term_type, default_w, default_p, default_r,
                 default_cartesian_jog_speed, default_cartesian_jog_step,
-                default_joint_jog_speed, default_joint_jog_step
+                default_joint_jog_speed, default_joint_jog_step,
+                default_rotation_jog_speed, default_rotation_jog_step
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -754,6 +762,8 @@ impl Database {
                     COALESCE(default_cartesian_jog_step, 1.0),
                     COALESCE(default_joint_jog_speed, 0.1),
                     COALESCE(default_joint_jog_step, 0.25),
+                    COALESCE(default_rotation_jog_speed, 5.0),
+                    COALESCE(default_rotation_jog_step, 1.0),
                     created_at, updated_at
              FROM robot_connections WHERE id = ?1"
         )?;
@@ -776,8 +786,10 @@ impl Database {
                 default_cartesian_jog_step: row.get(12)?,
                 default_joint_jog_speed: row.get(13)?,
                 default_joint_jog_step: row.get(14)?,
-                created_at: row.get(15)?,
-                updated_at: row.get(16)?,
+                default_rotation_jog_speed: row.get(15)?,
+                default_rotation_jog_step: row.get(16)?,
+                created_at: row.get(17)?,
+                updated_at: row.get(18)?,
             }))
         } else {
             Ok(None)
@@ -799,6 +811,8 @@ impl Database {
                     COALESCE(default_cartesian_jog_step, 1.0),
                     COALESCE(default_joint_jog_speed, 0.1),
                     COALESCE(default_joint_jog_step, 0.25),
+                    COALESCE(default_rotation_jog_speed, 5.0),
+                    COALESCE(default_rotation_jog_step, 1.0),
                     created_at, updated_at
              FROM robot_connections ORDER BY name"
         )?;
@@ -820,8 +834,10 @@ impl Database {
                 default_cartesian_jog_step: row.get(12)?,
                 default_joint_jog_speed: row.get(13)?,
                 default_joint_jog_step: row.get(14)?,
-                created_at: row.get(15)?,
-                updated_at: row.get(16)?,
+                default_rotation_jog_speed: row.get(15)?,
+                default_rotation_jog_step: row.get(16)?,
+                created_at: row.get(17)?,
+                updated_at: row.get(18)?,
             })
         })?;
 
@@ -871,6 +887,8 @@ impl Database {
         cartesian_jog_step: f64,
         joint_jog_speed: f64,
         joint_jog_step: f64,
+        rotation_jog_speed: f64,
+        rotation_jog_step: f64,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE robot_connections SET
@@ -878,9 +896,11 @@ impl Database {
                 default_cartesian_jog_step = ?2,
                 default_joint_jog_speed = ?3,
                 default_joint_jog_step = ?4,
+                default_rotation_jog_speed = ?5,
+                default_rotation_jog_step = ?6,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?5",
-            params![cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, id],
+             WHERE id = ?7",
+            params![cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, rotation_jog_speed, rotation_jog_step, id],
         )?;
         Ok(())
     }

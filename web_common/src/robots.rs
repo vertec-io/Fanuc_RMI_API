@@ -24,6 +24,8 @@ pub struct RobotConnectionDto {
     pub default_cartesian_jog_step: f64,
     pub default_joint_jog_speed: f64,
     pub default_joint_jog_step: f64,
+    pub default_rotation_jog_speed: f64,
+    pub default_rotation_jog_step: f64,
 }
 
 /// Robot configuration DTO (named configurations per robot).

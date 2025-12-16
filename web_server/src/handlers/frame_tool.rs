@@ -155,6 +155,8 @@ pub async fn set_active_frame_tool(
                     default_cartesian_jog_step: config.default_cartesian_jog_step,
                     default_joint_jog_speed: config.default_joint_jog_speed,
                     default_joint_jog_step: config.default_joint_jog_step,
+                    default_rotation_jog_speed: config.default_rotation_jog_speed,
+                    default_rotation_jog_step: config.default_rotation_jog_step,
                 };
                 client_manager.broadcast_all(&config_response).await;
             }

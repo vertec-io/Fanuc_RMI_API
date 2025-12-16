@@ -160,6 +160,8 @@ pub struct ActiveJogSettingsData {
     pub cartesian_jog_step: f64,
     pub joint_jog_speed: f64,
     pub joint_jog_step: f64,
+    pub rotation_jog_speed: f64,
+    pub rotation_jog_step: f64,
 }
 
 /// Unified console message with timestamp and direction
@@ -260,6 +262,8 @@ pub struct ActiveConfigurationData {
     pub default_cartesian_jog_step: f64,
     pub default_joint_jog_speed: f64,
     pub default_joint_jog_step: f64,
+    pub default_rotation_jog_speed: f64,
+    pub default_rotation_jog_step: f64,
 }
 
 impl WebSocketManager {
@@ -976,6 +980,8 @@ impl WebSocketManager {
                             default_cartesian_jog_step,
                             default_joint_jog_speed,
                             default_joint_jog_step,
+                            default_rotation_jog_speed,
+                            default_rotation_jog_step,
                         } => {
                             log::info!("Received active configuration: {:?}", loaded_from_name);
                             set_active_configuration.set(Some(ActiveConfigurationData {
@@ -996,6 +1002,8 @@ impl WebSocketManager {
                                 default_cartesian_jog_step,
                                 default_joint_jog_speed,
                                 default_joint_jog_step,
+                                default_rotation_jog_speed,
+                                default_rotation_jog_step,
                             }));
                         }
                         ServerResponse::ActiveJogSettings {
@@ -1003,14 +1011,18 @@ impl WebSocketManager {
                             cartesian_jog_step,
                             joint_jog_speed,
                             joint_jog_step,
+                            rotation_jog_speed,
+                            rotation_jog_step,
                         } => {
-                            log::info!("Received active jog settings: cart_speed={}, cart_step={}, joint_speed={}, joint_step={}",
-                                cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step);
+                            log::info!("Received active jog settings: cart_speed={}, cart_step={}, joint_speed={}, joint_step={}, rot_speed={}, rot_step={}",
+                                cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, rotation_jog_speed, rotation_jog_step);
                             set_active_jog_settings.set(Some(ActiveJogSettingsData {
                                 cartesian_jog_speed,
                                 cartesian_jog_step,
                                 joint_jog_speed,
                                 joint_jog_step,
+                                rotation_jog_speed,
+                                rotation_jog_step,
                             }));
                         }
                         ServerResponse::RobotConfigurationList { configurations } => {
@@ -1565,6 +1577,8 @@ impl WebSocketManager {
         default_cartesian_jog_step: f64,
         default_joint_jog_speed: f64,
         default_joint_jog_step: f64,
+        default_rotation_jog_speed: f64,
+        default_rotation_jog_step: f64,
         configurations: Vec<NewRobotConfigurationDto>,
     ) {
         self.send_api_request(ClientRequest::CreateRobotWithConfigurations {
@@ -1582,6 +1596,8 @@ impl WebSocketManager {
             default_cartesian_jog_step,
             default_joint_jog_speed,
             default_joint_jog_step,
+            default_rotation_jog_speed,
+            default_rotation_jog_step,
             configurations,
         });
     }
@@ -1634,6 +1650,8 @@ impl WebSocketManager {
         cartesian_jog_step: f64,
         joint_jog_speed: f64,
         joint_jog_step: f64,
+        rotation_jog_speed: f64,
+        rotation_jog_step: f64,
     ) {
         self.send_api_request(ClientRequest::UpdateRobotJogDefaults {
             id,
@@ -1641,6 +1659,8 @@ impl WebSocketManager {
             cartesian_jog_step,
             joint_jog_speed,
             joint_jog_step,
+            rotation_jog_speed,
+            rotation_jog_step,
         });
     }
 
@@ -1651,12 +1671,16 @@ impl WebSocketManager {
         cartesian_jog_step: f64,
         joint_jog_speed: f64,
         joint_jog_step: f64,
+        rotation_jog_speed: f64,
+        rotation_jog_step: f64,
     ) {
         self.send_api_request(ClientRequest::UpdateJogControls {
             cartesian_jog_speed,
             cartesian_jog_step,
             joint_jog_speed,
             joint_jog_step,
+            rotation_jog_speed,
+            rotation_jog_step,
         });
     }
 
@@ -1667,12 +1691,16 @@ impl WebSocketManager {
         cartesian_jog_step: f64,
         joint_jog_speed: f64,
         joint_jog_step: f64,
+        rotation_jog_speed: f64,
+        rotation_jog_step: f64,
     ) {
         self.send_api_request(ClientRequest::ApplyJogSettings {
             cartesian_jog_speed,
             cartesian_jog_step,
             joint_jog_speed,
             joint_jog_step,
+            rotation_jog_speed,
+            rotation_jog_step,
         });
     }
 

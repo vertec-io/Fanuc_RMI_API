@@ -350,6 +350,7 @@ fn JogDefaultsPanel() -> impl IntoView {
     let ws = use_context::<WebSocketManager>().expect("WebSocketManager context");
     let robot_connected = ws.robot_connected;
     let active_configuration = ws.active_configuration;
+    let active_jog_settings = ws.active_jog_settings;
     let program_running = ws.program_running;
 
     // Derive active connection from robot_connections and active_connection_id
@@ -502,9 +503,13 @@ fn JogDefaultsPanel() -> impl IntoView {
                                 let cst = cart_step.get().parse::<f64>().unwrap_or(1.0);
                                 let js = joint_speed.get().parse::<f64>().unwrap_or(10.0);
                                 let jst = joint_step.get().parse::<f64>().unwrap_or(1.0);
+                                // Use current rotation settings (this panel doesn't edit rotation)
+                                let (rs, rst) = active_jog_settings.get_untracked()
+                                    .map(|s| (s.rotation_jog_speed, s.rotation_jog_step))
+                                    .unwrap_or((5.0, 1.0));
 
                                 // Apply these values to active jog settings (increments changes_count)
-                                ws.apply_jog_settings(cs, cst, js, jst);
+                                ws.apply_jog_settings(cs, cst, js, jst, rs, rst);
 
                                 set_has_changes.set(false);
                             }

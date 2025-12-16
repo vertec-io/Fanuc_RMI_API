@@ -217,6 +217,7 @@ pub async fn handle_request(
             default_speed, default_speed_type, default_term_type, default_w, default_p, default_r,
             default_cartesian_jog_speed, default_cartesian_jog_step,
             default_joint_jog_speed, default_joint_jog_step,
+            default_rotation_jog_speed, default_rotation_jog_step,
             configurations,
         } => {
             robot_connections::create_robot_with_configurations(
@@ -235,6 +236,8 @@ pub async fn handle_request(
                 default_cartesian_jog_step,
                 default_joint_jog_speed,
                 default_joint_jog_step,
+                default_rotation_jog_speed,
+                default_rotation_jog_step,
                 configurations,
             ).await
         }
@@ -253,22 +256,22 @@ pub async fn handle_request(
         ClientRequest::DeleteRobotConnection { id } => {
             robot_connections::delete_robot_connection(db, id).await
         }
-        ClientRequest::UpdateRobotJogDefaults { id, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step } => {
-            robot_connections::update_robot_jog_defaults(db, id, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step).await
+        ClientRequest::UpdateRobotJogDefaults { id, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, rotation_jog_speed, rotation_jog_step } => {
+            robot_connections::update_robot_jog_defaults(db, id, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, rotation_jog_speed, rotation_jog_step).await
         }
-        ClientRequest::UpdateJogControls { cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step } => {
+        ClientRequest::UpdateJogControls { cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, rotation_jog_speed, rotation_jog_step } => {
             // Requires control - changes active jog controls (from Control panel)
             if let Err(e) = require_control(&client_manager, client_id).await {
                 return e;
             }
-            robot_connections::update_jog_controls(robot_connection, client_manager, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step).await
+            robot_connections::update_jog_controls(robot_connection, client_manager, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, rotation_jog_speed, rotation_jog_step).await
         }
-        ClientRequest::ApplyJogSettings { cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step } => {
+        ClientRequest::ApplyJogSettings { cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, rotation_jog_speed, rotation_jog_step } => {
             // Requires control - applies jog defaults (from Configuration panel)
             if let Err(e) = require_control(&client_manager, client_id).await {
                 return e;
             }
-            robot_connections::apply_jog_settings(robot_connection, client_manager, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step).await
+            robot_connections::apply_jog_settings(robot_connection, client_manager, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, rotation_jog_speed, rotation_jog_step).await
         }
 
         // Frame/Tool management

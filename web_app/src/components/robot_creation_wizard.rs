@@ -85,6 +85,8 @@ where
     let (cartesian_jog_step, set_cartesian_jog_step) = signal("1.0".to_string());
     let (joint_jog_speed, set_joint_jog_speed) = signal("0.1".to_string());
     let (joint_jog_step, set_joint_jog_step) = signal("0.25".to_string());
+    let (rotation_jog_speed, set_rotation_jog_speed) = signal("5.0".to_string());
+    let (rotation_jog_step, set_rotation_jog_step) = signal("1.0".to_string());
 
     // Step 4: Default Configuration
     let (config_name, set_config_name) = signal("Default".to_string());
@@ -142,6 +144,13 @@ where
                 }
                 joint_jog_step.get().parse::<f64>()
                     .map_err(|_| "Invalid joint jog step".to_string())?;
+                let rot_speed = rotation_jog_speed.get().parse::<f64>()
+                    .map_err(|_| "Invalid rotation jog speed".to_string())?;
+                if !(0.0..=180.0).contains(&rot_speed) {
+                    return Err("Rotation jog speed must be between 0 and 180".to_string());
+                }
+                rotation_jog_step.get().parse::<f64>()
+                    .map_err(|_| "Invalid rotation jog step".to_string())?;
                 Ok(())
             }
             WizardStep::DefaultConfiguration => {
@@ -232,6 +241,8 @@ where
             cartesian_jog_step.get().parse().unwrap(),
             joint_jog_speed.get().parse().unwrap(),
             joint_jog_step.get().parse().unwrap(),
+            rotation_jog_speed.get().parse().unwrap(),
+            rotation_jog_step.get().parse().unwrap(),
             vec![default_config],
         );
 
@@ -295,6 +306,10 @@ where
                             set_joint_jog_speed=set_joint_jog_speed
                             joint_jog_step=joint_jog_step
                             set_joint_jog_step=set_joint_jog_step
+                            rotation_jog_speed=rotation_jog_speed
+                            set_rotation_jog_speed=set_rotation_jog_speed
+                            rotation_jog_step=rotation_jog_step
+                            set_rotation_jog_step=set_rotation_jog_step
                         />
                     </Show>
 
@@ -616,6 +631,10 @@ fn JogDefaultsStep(
     set_joint_jog_speed: WriteSignal<String>,
     joint_jog_step: ReadSignal<String>,
     set_joint_jog_step: WriteSignal<String>,
+    rotation_jog_speed: ReadSignal<String>,
+    set_rotation_jog_speed: WriteSignal<String>,
+    rotation_jog_step: ReadSignal<String>,
+    set_rotation_jog_step: WriteSignal<String>,
 ) -> impl IntoView {
     view! {
         <div class="space-y-6">
@@ -681,6 +700,39 @@ fn JogDefaultsStep(
                             placeholder="0.25"
                         />
                         <p class="text-xs text-[#666666] mt-1">"Incremental jog angle"</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="border border-[#ffffff08] rounded-lg p-4 bg-[#0a0a0a]">
+                <h4 class="text-sm font-semibold text-white mb-3">"Rotation Jogging (W/P/R)"</h4>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-[#888888] text-xs mb-1.5 font-medium">
+                            "Speed (°/s)" <span class="text-[#ef4444]">"*"</span>
+                        </label>
+                        <input
+                            type="text"
+                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-3 py-2 text-sm text-white focus:border-[#00d9ff] focus:outline-none transition-colors font-mono"
+                            prop:value=move || rotation_jog_speed.get()
+                            on:input=move |ev| set_rotation_jog_speed.set(event_target_value(&ev))
+                            placeholder="5.0"
+                        />
+                        <p class="text-xs text-[#666666] mt-1">"Rotation jog speed"</p>
+                    </div>
+
+                    <div>
+                        <label class="block text-[#888888] text-xs mb-1.5 font-medium">
+                            "Step Size (°)" <span class="text-[#ef4444]">"*"</span>
+                        </label>
+                        <input
+                            type="text"
+                            class="w-full bg-[#111111] border border-[#ffffff08] rounded px-3 py-2 text-sm text-white focus:border-[#00d9ff] focus:outline-none transition-colors font-mono"
+                            prop:value=move || rotation_jog_step.get()
+                            on:input=move |ev| set_rotation_jog_step.set(event_target_value(&ev))
+                            placeholder="1.0"
+                        />
+                        <p class="text-xs text-[#666666] mt-1">"Incremental rotation angle"</p>
                     </div>
                 </div>
             </div>

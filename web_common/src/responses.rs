@@ -152,6 +152,8 @@ pub enum ServerResponse {
         default_cartesian_jog_step: f64,
         default_joint_jog_speed: f64,
         default_joint_jog_step: f64,
+        default_rotation_jog_speed: f64,
+        default_rotation_jog_step: f64,
     },
 
     #[serde(rename = "active_jog_settings")]
@@ -160,6 +162,8 @@ pub enum ServerResponse {
         cartesian_jog_step: f64,
         joint_jog_speed: f64,
         joint_jog_step: f64,
+        rotation_jog_speed: f64,
+        rotation_jog_step: f64,
     },
 
     // Frame/Tool responses

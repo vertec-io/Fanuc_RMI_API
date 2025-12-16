@@ -29,6 +29,8 @@ pub async fn list_robot_connections(db: Arc<Mutex<Database>>) -> ServerResponse 
                 default_cartesian_jog_step: c.default_cartesian_jog_step,
                 default_joint_jog_speed: c.default_joint_jog_speed,
                 default_joint_jog_step: c.default_joint_jog_step,
+                default_rotation_jog_speed: c.default_rotation_jog_speed,
+                default_rotation_jog_step: c.default_rotation_jog_step,
             }).collect();
             ServerResponse::RobotConnections { connections }
         }
@@ -58,6 +60,8 @@ pub async fn get_robot_connection(db: Arc<Mutex<Database>>, id: i64) -> ServerRe
                     default_cartesian_jog_step: c.default_cartesian_jog_step,
                     default_joint_jog_speed: c.default_joint_jog_speed,
                     default_joint_jog_step: c.default_joint_jog_step,
+                    default_rotation_jog_speed: c.default_rotation_jog_speed,
+                    default_rotation_jog_step: c.default_rotation_jog_step,
                 }
             }
         }
@@ -93,6 +97,8 @@ pub async fn create_robot_connection(
         1.0,       // default_cartesian_jog_step (safer default)
         0.1,       // default_joint_jog_speed (safer default)
         0.25,      // default_joint_jog_step (safer default)
+        5.0,       // default_rotation_jog_speed (deg/s)
+        1.0,       // default_rotation_jog_step (degrees)
     ) {
         Ok(id) => {
             info!("Created robot connection: {} (id={})", name, id);
@@ -160,9 +166,11 @@ pub async fn update_robot_jog_defaults(
     cartesian_jog_step: f64,
     joint_jog_speed: f64,
     joint_jog_step: f64,
+    rotation_jog_speed: f64,
+    rotation_jog_step: f64,
 ) -> ServerResponse {
     let db = db.lock().await;
-    match db.update_robot_connection_jog_defaults(id, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step) {
+    match db.update_robot_connection_jog_defaults(id, cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, rotation_jog_speed, rotation_jog_step) {
         Ok(_) => {
             info!("Updated robot jog defaults for id={}", id);
             ServerResponse::Success { message: "Jog defaults updated".to_string() }
@@ -180,6 +188,8 @@ pub async fn update_jog_controls(
     cartesian_jog_step: f64,
     joint_jog_speed: f64,
     joint_jog_step: f64,
+    rotation_jog_speed: f64,
+    rotation_jog_step: f64,
 ) -> ServerResponse {
     let Some(conn) = robot_connection else {
         return ServerResponse::Error {
@@ -194,9 +204,11 @@ pub async fn update_jog_controls(
     conn.active_cartesian_jog_step = cartesian_jog_step;
     conn.active_joint_jog_speed = joint_jog_speed;
     conn.active_joint_jog_step = joint_jog_step;
+    conn.active_rotation_jog_speed = rotation_jog_speed;
+    conn.active_rotation_jog_step = rotation_jog_step;
 
-    info!("Updated jog controls: cart_speed={}, cart_step={}, joint_speed={}, joint_step={}",
-        cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step);
+    info!("Updated jog controls: cart_speed={}, cart_step={}, joint_speed={}, joint_step={}, rot_speed={}, rot_step={}",
+        cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, rotation_jog_speed, rotation_jog_step);
 
     // Broadcast active jog settings to all clients
     if let Some(ref client_manager) = client_manager {
@@ -205,6 +217,8 @@ pub async fn update_jog_controls(
             cartesian_jog_step,
             joint_jog_speed,
             joint_jog_step,
+            rotation_jog_speed,
+            rotation_jog_step,
         };
         client_manager.broadcast_all(&jog_response).await;
     }
@@ -224,6 +238,8 @@ pub async fn apply_jog_settings(
     cartesian_jog_step: f64,
     joint_jog_speed: f64,
     joint_jog_step: f64,
+    rotation_jog_speed: f64,
+    rotation_jog_step: f64,
 ) -> ServerResponse {
     let Some(conn) = robot_connection else {
         return ServerResponse::Error {
@@ -238,6 +254,8 @@ pub async fn apply_jog_settings(
     let old_cart_step = conn.active_configuration.default_cartesian_jog_step;
     let old_joint_speed = conn.active_configuration.default_joint_jog_speed;
     let old_joint_step = conn.active_configuration.default_joint_jog_step;
+    let old_rot_speed = conn.active_configuration.default_rotation_jog_speed;
+    let old_rot_step = conn.active_configuration.default_rotation_jog_step;
 
     // Track changes to changelog
     if old_cart_speed != cartesian_jog_speed {
@@ -268,24 +286,42 @@ pub async fn apply_jog_settings(
             new_value: format!("{:.1}", joint_jog_step),
         });
     }
+    if old_rot_speed != rotation_jog_speed {
+        conn.active_configuration.change_log.push(crate::ChangeLogEntry {
+            field_name: "Rotation Jog Speed".to_string(),
+            old_value: format!("{:.1}", old_rot_speed),
+            new_value: format!("{:.1}", rotation_jog_speed),
+        });
+    }
+    if old_rot_step != rotation_jog_step {
+        conn.active_configuration.change_log.push(crate::ChangeLogEntry {
+            field_name: "Rotation Jog Step".to_string(),
+            old_value: format!("{:.1}", old_rot_step),
+            new_value: format!("{:.1}", rotation_jog_step),
+        });
+    }
 
     // Update active defaults (in active_configuration)
     conn.active_configuration.default_cartesian_jog_speed = cartesian_jog_speed;
     conn.active_configuration.default_cartesian_jog_step = cartesian_jog_step;
     conn.active_configuration.default_joint_jog_speed = joint_jog_speed;
     conn.active_configuration.default_joint_jog_step = joint_jog_step;
+    conn.active_configuration.default_rotation_jog_speed = rotation_jog_speed;
+    conn.active_configuration.default_rotation_jog_step = rotation_jog_step;
 
     // Also update active jog controls (so they match the new defaults)
     conn.active_cartesian_jog_speed = cartesian_jog_speed;
     conn.active_cartesian_jog_step = cartesian_jog_step;
     conn.active_joint_jog_speed = joint_jog_speed;
     conn.active_joint_jog_step = joint_jog_step;
+    conn.active_rotation_jog_speed = rotation_jog_speed;
+    conn.active_rotation_jog_step = rotation_jog_step;
 
     // Increment changes counter
     conn.active_configuration.changes_count += 1;
 
-    info!("Applied jog defaults: cart_speed={}, cart_step={}, joint_speed={}, joint_step={}, changes_count={}",
-        cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, conn.active_configuration.changes_count);
+    info!("Applied jog defaults: cart_speed={}, cart_step={}, joint_speed={}, joint_step={}, rot_speed={}, rot_step={}, changes_count={}",
+        cartesian_jog_speed, cartesian_jog_step, joint_jog_speed, joint_jog_step, rotation_jog_speed, rotation_jog_step, conn.active_configuration.changes_count);
 
     // Broadcast active jog settings to all clients
     if let Some(ref client_manager) = client_manager {
@@ -294,6 +330,8 @@ pub async fn apply_jog_settings(
             cartesian_jog_step,
             joint_jog_speed,
             joint_jog_step,
+            rotation_jog_speed,
+            rotation_jog_step,
         };
         client_manager.broadcast_all(&jog_response).await;
 
@@ -321,6 +359,8 @@ pub async fn apply_jog_settings(
             default_cartesian_jog_step: config.default_cartesian_jog_step,
             default_joint_jog_speed: config.default_joint_jog_speed,
             default_joint_jog_step: config.default_joint_jog_step,
+            default_rotation_jog_speed: config.default_rotation_jog_speed,
+            default_rotation_jog_step: config.default_rotation_jog_step,
         };
         client_manager.broadcast_all(&config_response).await;
     }
@@ -361,6 +401,8 @@ pub async fn create_robot_with_configurations(
     default_cartesian_jog_step: f64,
     default_joint_jog_speed: f64,
     default_joint_jog_step: f64,
+    default_rotation_jog_speed: f64,
+    default_rotation_jog_step: f64,
     configurations: Vec<NewRobotConfigurationDto>,
 ) -> ServerResponse {
     // Validate: at least one configuration required
@@ -402,6 +444,8 @@ pub async fn create_robot_with_configurations(
         default_cartesian_jog_step,
         default_joint_jog_speed,
         default_joint_jog_step,
+        default_rotation_jog_speed,
+        default_rotation_jog_step,
     ) {
         Ok(id) => id,
         Err(e) => {
@@ -488,6 +532,8 @@ pub async fn create_robot_with_configurations(
             default_cartesian_jog_step: connection.default_cartesian_jog_step,
             default_joint_jog_speed: connection.default_joint_jog_speed,
             default_joint_jog_step: connection.default_joint_jog_step,
+            default_rotation_jog_speed: connection.default_rotation_jog_speed,
+            default_rotation_jog_step: connection.default_rotation_jog_step,
         },
         configurations,
     }

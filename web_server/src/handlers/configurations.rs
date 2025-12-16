@@ -213,6 +213,8 @@ pub async fn get_active_configuration(
         default_cartesian_jog_step: config.default_cartesian_jog_step,
         default_joint_jog_speed: config.default_joint_jog_speed,
         default_joint_jog_step: config.default_joint_jog_step,
+        default_rotation_jog_speed: config.default_rotation_jog_speed,
+        default_rotation_jog_step: config.default_rotation_jog_step,
     }
 }
 
@@ -322,6 +324,8 @@ pub async fn load_configuration(
             default_cartesian_jog_step: active_config.default_cartesian_jog_step,
             default_joint_jog_speed: active_config.default_joint_jog_speed,
             default_joint_jog_step: active_config.default_joint_jog_step,
+            default_rotation_jog_speed: active_config.default_rotation_jog_speed,
+            default_rotation_jog_step: active_config.default_rotation_jog_step,
         };
         client_manager.broadcast_all(&config_response).await;
     }
@@ -344,6 +348,8 @@ pub async fn load_configuration(
         default_cartesian_jog_step: active_config.default_cartesian_jog_step,
         default_joint_jog_speed: active_config.default_joint_jog_speed,
         default_joint_jog_step: active_config.default_joint_jog_step,
+        default_rotation_jog_speed: active_config.default_rotation_jog_speed,
+        default_rotation_jog_step: active_config.default_rotation_jog_step,
     }
 }
 
@@ -391,6 +397,8 @@ pub async fn save_current_configuration(
     let default_cartesian_jog_step = conn.active_configuration.default_cartesian_jog_step;
     let default_joint_jog_speed = conn.active_configuration.default_joint_jog_speed;
     let default_joint_jog_step = conn.active_configuration.default_joint_jog_step;
+    let default_rotation_jog_speed = conn.active_configuration.default_rotation_jog_speed;
+    let default_rotation_jog_step = conn.active_configuration.default_rotation_jog_step;
 
     // Determine if we're creating a new configuration or updating existing
     let (config_id, config_name) = if let Some(name) = configuration_name {
@@ -477,6 +485,8 @@ pub async fn save_current_configuration(
         default_cartesian_jog_step,
         default_joint_jog_speed,
         default_joint_jog_step,
+        default_rotation_jog_speed,
+        default_rotation_jog_step,
     ) {
         return ServerResponse::Error {
             message: format!("Failed to save jog settings: {}", e),
@@ -494,6 +504,8 @@ pub async fn save_current_configuration(
         saved_conn.default_cartesian_jog_step = default_cartesian_jog_step;
         saved_conn.default_joint_jog_speed = default_joint_jog_speed;
         saved_conn.default_joint_jog_step = default_joint_jog_step;
+        saved_conn.default_rotation_jog_speed = default_rotation_jog_speed;
+        saved_conn.default_rotation_jog_step = default_rotation_jog_step;
     }
 
     drop(db_guard);
@@ -518,6 +530,8 @@ pub async fn save_current_configuration(
             default_cartesian_jog_step,
             default_joint_jog_speed,
             default_joint_jog_step,
+            default_rotation_jog_speed,
+            default_rotation_jog_step,
         };
         client_manager.broadcast_all(&config_response).await;
     }

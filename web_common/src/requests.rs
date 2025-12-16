@@ -149,6 +149,8 @@ pub enum ClientRequest {
         default_cartesian_jog_step: f64,
         default_joint_jog_speed: f64,
         default_joint_jog_step: f64,
+        default_rotation_jog_speed: f64,
+        default_rotation_jog_step: f64,
         configurations: Vec<NewRobotConfigurationDto>,
     },
 
@@ -179,6 +181,8 @@ pub enum ClientRequest {
         cartesian_jog_step: f64,
         joint_jog_speed: f64,
         joint_jog_step: f64,
+        rotation_jog_speed: f64,
+        rotation_jog_step: f64,
     },
 
     #[serde(rename = "update_jog_controls")]
@@ -187,6 +191,8 @@ pub enum ClientRequest {
         cartesian_jog_step: f64,
         joint_jog_speed: f64,
         joint_jog_step: f64,
+        rotation_jog_speed: f64,
+        rotation_jog_step: f64,
     },
 
     #[serde(rename = "apply_jog_settings")]
@@ -195,6 +201,8 @@ pub enum ClientRequest {
         cartesian_jog_step: f64,
         joint_jog_speed: f64,
         joint_jog_step: f64,
+        rotation_jog_speed: f64,
+        rotation_jog_step: f64,
     },
 
     #[serde(rename = "save_current_configuration")]

@@ -234,6 +234,8 @@ pub async fn connect_to_saved_robot(
                     default_cartesian_jog_step: config.default_cartesian_jog_step,
                     default_joint_jog_speed: config.default_joint_jog_speed,
                     default_joint_jog_step: config.default_joint_jog_step,
+                    default_rotation_jog_speed: config.default_rotation_jog_speed,
+                    default_rotation_jog_step: config.default_rotation_jog_step,
                 };
                 client_manager.broadcast_all(&config_response).await;
 
@@ -243,6 +245,8 @@ pub async fn connect_to_saved_robot(
                     cartesian_jog_step: conn_guard.active_cartesian_jog_step,
                     joint_jog_speed: conn_guard.active_joint_jog_speed,
                     joint_jog_step: conn_guard.active_joint_jog_step,
+                    rotation_jog_speed: conn_guard.active_rotation_jog_speed,
+                    rotation_jog_step: conn_guard.active_rotation_jog_step,
                 };
                 client_manager.broadcast_all(&jog_response).await;
 

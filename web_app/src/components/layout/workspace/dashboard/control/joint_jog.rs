@@ -113,6 +113,8 @@ pub fn JointJogPanel() -> impl IntoView {
                                             settings.cartesian_jog_step,
                                             settings.joint_jog_speed,
                                             new_step,
+                                            settings.rotation_jog_speed,
+                                            settings.rotation_jog_step,
                                         );
                                     }
                                 }
@@ -142,6 +144,8 @@ pub fn JointJogPanel() -> impl IntoView {
                                             settings.cartesian_jog_step,
                                             new_speed,
                                             settings.joint_jog_step,
+                                            settings.rotation_jog_speed,
+                                            settings.rotation_jog_step,
                                         );
                                     }
                                 }
