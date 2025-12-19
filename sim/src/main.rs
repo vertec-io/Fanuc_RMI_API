@@ -9,7 +9,7 @@ use tokio::time::Duration;
 use fanuc_rmi::{
     commands::*,
     packets::{CommandResponse, CommunicationResponse, InstructionResponse, FrcConnectResponse, FrcDisconnectResponse},
-    instructions::{FrcLinearMotion, FrcLinearMotionResponse, FrcLinearRelative, FrcLinearRelativeResponse, FrcJointMotion, FrcJointMotionResponse},
+    instructions::{FrcLinearMotion, FrcLinearMotionResponse, FrcLinearRelative, FrcLinearRelativeResponse, FrcJointMotion, FrcJointMotionResponse, FrcJointRelativeJRep, FrcJointRelativeJRepResponse},
     FrameData, Configuration, Position, JointAngles,
 };
 
@@ -962,7 +962,7 @@ async fn handle_secondary_client(
                     // Validate sequence ID for motion instructions
                     let is_motion_instruction = matches!(
                         request_json["Instruction"].as_str(),
-                        Some("FRC_LinearMotion") | Some("FRC_LinearRelative") | Some("FRC_JointMotion")
+                        Some("FRC_LinearMotion") | Some("FRC_LinearRelative") | Some("FRC_JointMotion") | Some("FRC_JointRelativeJRep")
                     );
 
                     if is_motion_instruction {
@@ -1099,6 +1099,62 @@ async fn handle_secondary_client(
                                 serde_json::json!({"Instruction": "FRC_LinearRelative", "ErrorID": 0, "SequenceID": seq})
                             })
                         }
+                        Some("FRC_JointRelativeJRep") => {
+                            // Parse the JointAngles from the instruction (relative joint motion)
+                            if let Some(joint_angles) = request_json.get("JointAngles") {
+                                let dj1 = joint_angles["J1"].as_f64().unwrap_or(0.0);
+                                let dj2 = joint_angles["J2"].as_f64().unwrap_or(0.0);
+                                let dj3 = joint_angles["J3"].as_f64().unwrap_or(0.0);
+                                let dj4 = joint_angles["J4"].as_f64().unwrap_or(0.0);
+                                let dj5 = joint_angles["J5"].as_f64().unwrap_or(0.0);
+                                let dj6 = joint_angles["J6"].as_f64().unwrap_or(0.0);
+
+                                let speed = request_json.get("Speed").and_then(|v| v.as_f64()).unwrap_or(10.0);
+                                let term_type = request_json.get("TermType").and_then(|v| v.as_str()).unwrap_or("FINE").to_string();
+                                let term_value = request_json.get("TermValue").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                                // Get current joint angles and apply delta
+                                {
+                                    let mut state = robot_state.lock().await;
+                                    let new_j1 = state.joint_angles[0] as f64 + dj1;
+                                    let new_j2 = state.joint_angles[1] as f64 + dj2;
+                                    let new_j3 = state.joint_angles[2] as f64 + dj3;
+                                    let new_j4 = state.joint_angles[3] as f64 + dj4;
+                                    let new_j5 = state.joint_angles[4] as f64 + dj5;
+                                    let new_j6 = state.joint_angles[5] as f64 + dj6;
+
+                                    // Update joint angles immediately (for immediate mode)
+                                    state.joint_angles[0] = new_j1 as f32;
+                                    state.joint_angles[1] = new_j2 as f32;
+                                    state.joint_angles[2] = new_j3 as f32;
+                                    state.joint_angles[3] = new_j4 as f32;
+                                    state.joint_angles[4] = new_j5 as f32;
+                                    state.joint_angles[5] = new_j6 as f32;
+
+                                    // Update Cartesian position using forward kinematics
+                                    let joints_rad = [new_j1, new_j2, new_j3, new_j4, new_j5, new_j6];
+                                    let (pos, ori) = state.kinematics.forward_kinematics(&joints_rad);
+                                        state.cartesian_position[0] = pos[0] as f32;
+                                        state.cartesian_position[1] = pos[1] as f32;
+                                        state.cartesian_position[2] = pos[2] as f32;
+                                        state.cartesian_orientation[0] = ori[0] as f32;
+                                        state.cartesian_orientation[1] = ori[1] as f32;
+                                        state.cartesian_orientation[2] = ori[2] as f32;
+                                };
+
+                                println!("🎯 FRC_JointRelativeJRep: ΔJ1={:+.2}° ΔJ2={:+.2}° ΔJ3={:+.2}° ΔJ4={:+.2}° ΔJ5={:+.2}° ΔJ6={:+.2}° | Speed={:.1}°/s | Term={} CNT={} | seq={}",
+                                    dj1.to_degrees(), dj2.to_degrees(), dj3.to_degrees(), dj4.to_degrees(), dj5.to_degrees(), dj6.to_degrees(), speed, term_type, term_value, seq);
+                            }
+
+                            let response = InstructionResponse::FrcJointRelativeJRep(FrcJointRelativeJRepResponse {
+                                error_id: 0,
+                                sequence_id: seq,
+                            });
+                            serde_json::to_value(&response).unwrap_or_else(|e| {
+                                eprintln!("Failed to serialize FRC_JointRelativeJRep response: {}", e);
+                                serde_json::json!({"Instruction": "FRC_JointRelativeJRep", "ErrorID": 0, "SequenceID": seq})
+                            })
+                        }
                         _ => response_json,
                     };
                     let response = serde_json::to_string(&response_json)? + "\r\n";
@@ -1117,6 +1173,10 @@ async fn handle_secondary_client(
                         sequence_id: motion_response.seq_id,
                     }),
                     "FRC_LinearRelative" => InstructionResponse::FrcLinearRelative(FrcLinearRelativeResponse {
+                        error_id: 0,
+                        sequence_id: motion_response.seq_id,
+                    }),
+                    "FRC_JointRelativeJRep" => InstructionResponse::FrcJointRelativeJRep(FrcJointRelativeJRepResponse {
                         error_id: 0,
                         sequence_id: motion_response.seq_id,
                     }),
