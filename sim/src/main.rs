@@ -577,7 +577,8 @@ async fn handle_secondary_client(
                             let paused = if executor_control.is_paused() { 1 } else { 0 };
                             // Per FANUC documentation B-84184EN/02:
                             // TPMode: 0 = teach pendant disabled (RMI works), 1 = teach pendant enabled (RMI blocked)
-                            // Return the actual active uframe/utool values from state
+                            // NumberUTool: Number of user tools available (10 for CRX-30iA)
+                            // NumberUFrame: Number of user frames available (9 for CRX-30iA)
                             let response = CommandResponse::FrcGetStatus(FrcGetStatusResponse {
                                 error_id: 0,
                                 servo_ready: 1,
@@ -585,8 +586,8 @@ async fn handle_secondary_client(
                                 rmi_motion_status: paused, // 0=running, 1=paused
                                 program_status: 0,
                                 single_step_mode: 0,
-                                number_utool: state.active_utool as i8,
-                                number_uframe: state.active_uframe as i8,
+                                number_utool: 10, // Number of user tools available (CRX-30iA)
+                                number_uframe: 9, // Number of user frames available (CRX-30iA)
                                 next_sequence_id: next_seq,
                                 override_value: override_val as u32,
                             });
