@@ -439,6 +439,116 @@ impl FanucDriver {
         Ok(())
     }
 
+    /// Send a pause command to the FANUC controller
+    ///
+    /// This pauses robot motion. The robot will decelerate and stop at the
+    /// current position. Queued motion instructions are preserved.
+    ///
+    /// Returns the request ID for tracking this request.
+    pub fn send_pause(&self) -> Result<u64, String> {
+        let packet = SendPacket::Command(Command::FrcPause);
+        self.send_packet(packet, PacketPriority::Immediate)
+    }
+
+    /// Send a pause command and wait for the response
+    ///
+    /// This is an async convenience method that sends the pause command and waits
+    /// for the response from the FANUC controller. The robot will decelerate and
+    /// stop at the current position.
+    ///
+    /// **Note:** This method waits for the **next** FrcPauseResponse. Do not call
+    /// this method concurrently for the same command type. For concurrent usage,
+    /// use `send_pause()` and subscribe to `response_tx` manually.
+    ///
+    /// # Returns
+    /// * `Ok(FrcPauseResponse)` - The pause response from the controller
+    /// * `Err(String)` - Error if the command could not be sent or timeout (5 seconds)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use fanuc_rmi::drivers::FanucDriver;
+    /// # async fn example(driver: &FanucDriver) -> Result<(), String> {
+    /// let response = driver.pause().await?;
+    /// if response.error_id == 0 {
+    ///     println!("Pause successful");
+    /// } else {
+    ///     println!("Pause failed with error: {}", response.error_id);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn pause(&self) -> Result<FrcPauseResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+        let _request_id = self.send_pause()?;
+
+        // Wait up to 5 seconds for response
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommandResponse(CommandResponse::FrcPause(pause_response)) = response {
+                    return Ok(pause_response);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for pause response".to_string())?
+    }
+
+    /// Send a continue command to the FANUC controller
+    ///
+    /// This resumes robot motion after a pause. The robot will continue
+    /// executing queued motion instructions from where it stopped.
+    ///
+    /// Returns the request ID for tracking this request.
+    pub fn send_continue(&self) -> Result<u64, String> {
+        let packet = SendPacket::Command(Command::FrcContinue);
+        self.send_packet(packet, PacketPriority::Immediate)
+    }
+
+    /// Send a continue command and wait for the response
+    ///
+    /// This is an async convenience method that sends the continue command and waits
+    /// for the response from the FANUC controller. The robot will resume motion
+    /// from where it was paused.
+    ///
+    /// **Note:** This method waits for the **next** FrcContinueResponse. Do not call
+    /// this method concurrently for the same command type. For concurrent usage,
+    /// use `send_continue()` and subscribe to `response_tx` manually.
+    ///
+    /// # Returns
+    /// * `Ok(FrcContinueResponse)` - The continue response from the controller
+    /// * `Err(String)` - Error if the command could not be sent or timeout (5 seconds)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use fanuc_rmi::drivers::FanucDriver;
+    /// # async fn example(driver: &FanucDriver) -> Result<(), String> {
+    /// let response = driver.continue_motion().await?;
+    /// if response.error_id == 0 {
+    ///     println!("Continue successful");
+    /// } else {
+    ///     println!("Continue failed with error: {}", response.error_id);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn continue_motion(&self) -> Result<FrcContinueResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+        let _request_id = self.send_continue()?;
+
+        // Wait up to 5 seconds for response
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommandResponse(CommandResponse::FrcContinue(continue_response)) = response {
+                    return Ok(continue_response);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for continue response".to_string())?
+    }
+
     /// Send an initialize command to the FANUC controller
     ///
     /// Returns the request ID for tracking this request.
