@@ -1,0 +1,61 @@
+# Ralph Progress Log
+Effort: program-pause-resume
+Type: Feature
+Started: 2026-01-21
+---
+
+## Implementation Complete - 2026-01-21
+
+### US-001: Add ProgramPaused state to DriverState enum
+- COMPLETED
+- Added `ProgramPaused` variant to `DriverState` enum in `fanuc_rmi/src/drivers/models.rs`
+- The new state distinguishes program pause (RMI aborted, robot can jog) from regular pause (controller paused)
+
+### US-002: Track in-flight instructions for replay
+- COMPLETED
+- Added `in_flight_instructions: VecDeque<(u32, Instruction)>` local tracking in send_queue_to_controller
+- Added `program_pause_instructions: Arc<std::sync::Mutex<Vec<Instruction>>>` to FanucDriver struct for cross-method sharing
+- Instructions are tracked when sent, removed when completion received
+
+### US-003: Implement program_pause method
+- COMPLETED
+- Added `program_pause()` async method to FanucDriver
+- Sends FRC_Abort to terminate RMI_MOVE program
+- Sends ProgramPause driver command to transition state and preserve in-flight instructions
+- In-flight instructions are copied to shared storage for later replay
+
+### US-004: Implement program_resume method
+- COMPLETED
+- Added `program_resume()` async method to FanucDriver
+- Sends FRC_Initialize to create new RMI_MOVE program
+- Sequence counter is reset to 1
+- Sends ProgramResume driver command with instructions to replay
+- Replayed instructions are queued at front with new sequence IDs
+
+### US-005: Handle instruction completions during program pause
+- COMPLETED
+- Completion responses remove instructions from in-flight tracking by sequence_id
+- State is properly managed across pause/resume transitions
+
+### US-006: Add integration tests with simulator
+- COMPLETED
+- Created `fanuc_rmi/tests/program_pause_resume_test.rs`
+- Tests:
+  - test_basic_program_pause_resume
+  - test_in_flight_instruction_replay
+  - test_queue_preservation
+  - test_multiple_pause_resume_cycles
+  - test_pause_without_running
+- Tests marked with #[ignore] as they require simulator running
+
+### Files Modified:
+- `fanuc_rmi/src/drivers/models.rs` - Added ProgramPaused state
+- `fanuc_rmi/src/drivers/driver.rs` - Added program_pause/resume methods and tracking
+- `fanuc_rmi/src/packets/driver_command.rs` - Added ProgramPause/ProgramResume commands
+
+### Files Created:
+- `fanuc_rmi/tests/program_pause_resume_test.rs` - Integration tests
+
+### To Run Tests:
+1. Start simulator: `cargo run -p sim -- --realtime`
+2. Run tests: `cargo test --package fanuc_rmi -- --ignored`

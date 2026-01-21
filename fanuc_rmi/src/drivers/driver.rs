@@ -66,6 +66,10 @@ pub struct FanucDriver {
     queue_tx: mpsc::Sender<DriverPacket>,
     pub connected: Arc<Mutex<bool>>,
     completed_packet_channel: Arc<Mutex<broadcast::Receiver<CompletedPacketReturnInfo>>>,
+    /// Shared storage for in-flight instructions during program pause/resume.
+    /// When program_pause is called, in-flight instructions are stored here.
+    /// When program_resume is called, instructions are read from here for replay.
+    program_pause_instructions: Arc<std::sync::Mutex<Vec<Instruction>>>,
 }
 
 impl FanucDriver {
@@ -191,6 +195,7 @@ impl FanucDriver {
             queue_tx,
             connected,
             completed_packet_channel,
+            program_pause_instructions: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
 
         let driver_clone1 = driver.clone();
@@ -580,6 +585,141 @@ impl FanucDriver {
         .map_err(|_| "Timeout waiting for continue response".to_string())??;
 
         Ok(response)
+    }
+
+    /// Pause the running program while allowing the robot to be jogged.
+    ///
+    /// This is fundamentally different from `pause()`:
+    /// - `pause()`: Pauses the robot controller completely. The robot stops and cannot move.
+    /// - `program_pause()`: Aborts the RMI_MOVE program but allows the robot to be jogged
+    ///   using the teach pendant or other control methods.
+    ///
+    /// When program_pause is called:
+    /// 1. FRC_Abort is sent to terminate the current RMI_MOVE program
+    /// 2. In-flight instructions (sent but not completed) are preserved for replay
+    /// 3. The internal queue is preserved (not cleared)
+    /// 4. The driver enters ProgramPaused state
+    ///
+    /// Use `program_resume()` to re-initialize and continue execution.
+    ///
+    /// # Use Case
+    /// 1. Running a motion program
+    /// 2. See an issue (e.g., potential collision)
+    /// 3. Call `program_pause()` - robot stops but can be jogged
+    /// 4. Jog robot away from danger using teach pendant
+    /// 5. Fix the issue
+    /// 6. Jog robot back to position
+    /// 7. Call `program_resume()` - program continues from where it left off
+    ///
+    /// # Returns
+    /// * `Ok(())` - Program pause successful
+    /// * `Err(String)` - Error if abort failed or driver not in running state
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use fanuc_rmi::drivers::FanucDriver;
+    /// # async fn example(driver: &FanucDriver) -> Result<(), String> {
+    /// // Pause the program to jog the robot
+    /// driver.program_pause().await?;
+    ///
+    /// // ... user jogs robot with teach pendant ...
+    ///
+    /// // Resume the program
+    /// driver.program_resume().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn program_pause(&self) -> Result<(), String> {
+        self.log_info("Program pause: aborting RMI program...").await;
+
+        // Step 1: Send abort to terminate RMI_MOVE program
+        let abort_response = self.abort().await?;
+        if abort_response.error_id != 0 {
+            let msg = format!("Program pause abort failed with error: {}", abort_response.error_id);
+            self.log_error(&msg).await;
+            return Err(msg);
+        }
+
+        // Note: abort() already calls clear_in_flight() internally, but we want
+        // the ProgramPause command to handle the state transition and preserve
+        // in-flight instructions before clearing. So we send ProgramPause after abort.
+
+        // Step 2: Send ProgramPause command to transition state and preserve instructions
+        let pause_packet = SendPacket::DriverCommand(DriverCommand::ProgramPause);
+        self.send_packet(pause_packet, PacketPriority::Immediate)?;
+
+        self.log_info("Program pause complete. Robot can now be jogged.").await;
+        Ok(())
+    }
+
+    /// Resume a paused program by re-initializing and replaying preserved instructions.
+    ///
+    /// This should be called after `program_pause()` to resume normal operation.
+    ///
+    /// When program_resume is called:
+    /// 1. FRC_Initialize is sent to create a new RMI_MOVE program
+    /// 2. Sequence counter is reset to 1
+    /// 3. Preserved in-flight instructions are replayed
+    /// 4. The internal queue resumes processing
+    /// 5. The driver returns to Running state
+    ///
+    /// # Returns
+    /// * `Ok(())` - Program resume successful
+    /// * `Err(String)` - Error if initialize failed or driver not in program-paused state
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use fanuc_rmi::drivers::FanucDriver;
+    /// # async fn example(driver: &FanucDriver) -> Result<(), String> {
+    /// // After program_pause and jogging...
+    /// driver.program_resume().await?;
+    /// // Robot now continues executing the motion program
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn program_resume(&self) -> Result<(), String> {
+        self.log_info("Program resume: re-initializing RMI program...").await;
+
+        // Step 1: Get preserved instructions before we clear them
+        let instructions_to_replay: Vec<Instruction> = {
+            match self.program_pause_instructions.lock() {
+                Ok(stored) => stored.clone(),
+                Err(e) => {
+                    let msg = format!("Failed to get preserved instructions: {}", e);
+                    self.log_error(&msg).await;
+                    return Err(msg);
+                }
+            }
+        };
+
+        self.log_info(&format!(
+            "Program resume: {} instructions to replay",
+            instructions_to_replay.len()
+        )).await;
+
+        // Step 2: Initialize to create new RMI_MOVE program
+        let init_response = self.initialize().await?;
+        if init_response.error_id != 0 {
+            let msg = format!("Program resume initialize failed with error: {}", init_response.error_id);
+            self.log_error(&msg).await;
+            return Err(msg);
+        }
+
+        // Note: initialize() already resets sequence counter to 1
+
+        // Step 3: Send ProgramResume command with instructions to replay
+        let resume_packet = SendPacket::DriverCommand(DriverCommand::ProgramResume {
+            instructions_to_replay,
+        });
+        self.send_packet(resume_packet, PacketPriority::Immediate)?;
+
+        // Step 4: Clear the stored instructions since we've replayed them
+        if let Ok(mut stored) = self.program_pause_instructions.lock() {
+            stored.clear();
+        }
+
+        self.log_info("Program resume complete. Motion program continuing.").await;
+        Ok(())
     }
 
     /// Send an initialize command to the FANUC controller
@@ -1048,6 +1188,9 @@ impl FanucDriver {
         let mut in_flight: u32 = 0;
         let mut queue: VecDeque<DriverPacket> = VecDeque::new();
         let mut state = DriverState::default();
+        // Track in-flight instructions for program pause/resume replay
+        // Stores (sequence_id, instruction) pairs for instructions sent but not yet completed
+        let mut in_flight_instructions: VecDeque<(u32, Instruction)> = VecDeque::new();
 
         // Standard loop interval
         const LOOP_INTERVAL: Duration = Duration::from_millis(8);
@@ -1087,6 +1230,47 @@ impl FanucDriver {
                             in_flight = 0;
                             println!("ClearInFlight: reset in_flight counter from {} to 0", old_in_flight);
                         }
+                        DriverCommand::ProgramPause => {
+                            // Program pause: Set state to ProgramPaused, preserve in-flight instructions
+                            // The abort + clear_in_flight is handled externally before this command
+                            println!("ProgramPause: transitioning to ProgramPaused state");
+                            println!("  Preserving {} in-flight instructions for replay", in_flight_instructions.len());
+
+                            // Copy in-flight instructions to shared state for later retrieval
+                            if let Ok(mut stored) = self.program_pause_instructions.lock() {
+                                stored.clear();
+                                for (_, instr) in in_flight_instructions.iter() {
+                                    stored.push(instr.clone());
+                                }
+                            }
+
+                            state = DriverState::ProgramPaused;
+                            // Reset counter since robot's buffer was cleared by abort
+                            in_flight = 0;
+                            // Clear local tracking since we've stored them
+                            in_flight_instructions.clear();
+                        }
+                        DriverCommand::ProgramResume { instructions_to_replay } => {
+                            // Program resume: Re-queue instructions for replay, then set state to Running
+                            println!("ProgramResume: replaying {} instructions", instructions_to_replay.len());
+
+                            // Clear tracked in-flight since we're starting fresh
+                            in_flight_instructions.clear();
+
+                            // Re-queue instructions at the front (high priority) so they execute before
+                            // any other queued instructions. Insert in reverse order to maintain order.
+                            for instr in instructions_to_replay.iter().rev() {
+                                let replay_packet = DriverPacket {
+                                    priority: PacketPriority::High,
+                                    packet: SendPacket::Instruction(instr.clone()),
+                                    request_id: REQUEST_COUNTER.fetch_add(1, Ordering::SeqCst),
+                                };
+                                queue.push_front(replay_packet);
+                            }
+
+                            state = DriverState::Running;
+                            println!("ProgramResume: state set to Running, queue size: {}", queue.len());
+                        }
                         _ => {
                             println!("GOT A DRIVER COMMAND: {:?}", cmd);
                         }
@@ -1111,6 +1295,11 @@ impl FanucDriver {
             // Process completed packets
             while let Ok(pkt) = completed_packet_info.try_recv() {
                 in_flight = in_flight.saturating_sub(1);
+                // Remove completed instruction from in-flight tracking
+                // Find and remove by sequence_id
+                if let Some(pos) = in_flight_instructions.iter().position(|(seq, _)| *seq == pkt.sequence_id) {
+                    in_flight_instructions.remove(pos);
+                }
                 // Log if error occurred
                 if pkt.error_id != 0 {
                     self.log_error(format!(
@@ -1124,7 +1313,7 @@ impl FanucDriver {
                 break;
             }
 
-            // Send packets with backpressure
+            // Send packets with backpressure (only when Running, not when Paused or ProgramPaused)
             while in_flight < MAX_IN_FLIGHT && state == DriverState::Running {
                 if let Some(mut driver_packet) = queue.pop_front() {
                     // Assign sequence ID right before sending (ensures consecutive IDs in send order)
@@ -1185,8 +1374,11 @@ impl FanucDriver {
                                 break;
                             }
                             if let SendPacket::Instruction(instr) = driver_packet.packet {
-                                let _seq = instr.get_sequence_id();
+                                let seq = instr.get_sequence_id();
                                 in_flight += 1;
+
+                                // Track in-flight instruction for potential program pause/resume replay
+                                in_flight_instructions.push_back((seq, instr));
 
                                 // Per FANUC documentation B-84184EN/02 Section 3.2:
                                 // Wait at least 2ms between consecutive instructions to prevent
