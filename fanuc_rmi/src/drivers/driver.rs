@@ -449,13 +449,13 @@ impl FanucDriver {
     ///
     /// Returns the request ID for tracking this request.
     pub fn send_pause(&self) -> Result<u64, String> {
-        // Pause the internal driver queue first to stop sending more instructions
-        let pause_queue_packet = SendPacket::DriverCommand(DriverCommand::Pause);
-        self.send_packet(pause_queue_packet, PacketPriority::Immediate)?;
-
-        // Then send FrcPause to the robot
+        // Pause the robot first for immediate pause
         let packet = SendPacket::Command(Command::FrcPause);
-        self.send_packet(packet, PacketPriority::Immediate)
+        self.send_packet(packet, PacketPriority::Immediate)?;
+        
+        // Then pause the driver to stop sending more instructions
+        let pause_queue_packet = SendPacket::DriverCommand(DriverCommand::Pause);
+        self.send_packet(pause_queue_packet, PacketPriority::Immediate)
     }
 
     /// Send a pause command and wait for the response
@@ -512,6 +512,8 @@ impl FanucDriver {
     ///
     /// Returns the request ID for tracking this request.
     pub fn send_continue(&self) -> Result<u64, String> {
+
+        
         // Send FrcContinue to the robot first
         let packet = SendPacket::Command(Command::FrcContinue);
         let result = self.send_packet(packet, PacketPriority::Immediate)?;
@@ -551,6 +553,16 @@ impl FanucDriver {
     /// # }
     /// ```
     pub async fn continue_motion(&self) -> Result<FrcContinueResponse, String> {
+        // Make sure we don't lose track of the sequences
+        match self.get_status().await {
+            Ok(status) => {
+                self.sync_sequence_counter(status.next_sequence_id);
+            }
+            Err(err) => {
+                return Err(format!("Failed to get status before continuing: {}", err));
+            }
+        }
+        
         let mut response_rx = self.response_tx.subscribe();
         // send_continue() already unpauses the driver queue
         let _request_id = self.send_continue()?;
