@@ -507,10 +507,20 @@ impl FanucDriver {
     /// This resumes robot motion after a pause. The robot will continue
     /// executing queued motion instructions from where it stopped.
     ///
+    /// This also unpauses the internal driver queue to resume sending
+    /// queued instructions.
+    ///
     /// Returns the request ID for tracking this request.
     pub fn send_continue(&self) -> Result<u64, String> {
+        // Send FrcContinue to the robot first
         let packet = SendPacket::Command(Command::FrcContinue);
-        self.send_packet(packet, PacketPriority::Immediate)
+        let result = self.send_packet(packet, PacketPriority::Immediate)?;
+
+        // Unpause the internal driver queue to resume sending instructions
+        let unpause_queue_packet = SendPacket::DriverCommand(DriverCommand::Unpause);
+        self.send_packet(unpause_queue_packet, PacketPriority::Immediate)?;
+
+        Ok(result)
     }
 
     /// Send a continue command and wait for the response
@@ -542,6 +552,7 @@ impl FanucDriver {
     /// ```
     pub async fn continue_motion(&self) -> Result<FrcContinueResponse, String> {
         let mut response_rx = self.response_tx.subscribe();
+        // send_continue() already unpauses the driver queue
         let _request_id = self.send_continue()?;
 
         // Wait up to 5 seconds for response
@@ -555,12 +566,6 @@ impl FanucDriver {
         })
         .await
         .map_err(|_| "Timeout waiting for continue response".to_string())??;
-
-        // If successful, unpause the driver queue to resume sending instructions
-        if response.error_id == 0 {
-            let unpause_packet = SendPacket::DriverCommand(DriverCommand::Unpause);
-            self.send_packet(unpause_packet, PacketPriority::Immediate)?;
-        }
 
         Ok(response)
     }
