@@ -681,14 +681,16 @@ impl FanucDriver {
         self.log_info("Program resume: re-initializing RMI program...").await;
 
         // Step 1: Get preserved instructions before we clear them
-        let instructions_to_replay: Vec<Instruction> = {
-            match self.program_pause_instructions.lock() {
-                Ok(stored) => stored.clone(),
-                Err(e) => {
-                    let msg = format!("Failed to get preserved instructions: {}", e);
-                    self.log_error(&msg).await;
-                    return Err(msg);
-                }
+        // Note: We extract the result synchronously and drop the MutexGuard before any await
+        let lock_result = self.program_pause_instructions.lock()
+            .map(|stored| stored.clone())
+            .map_err(|e| format!("Failed to get preserved instructions: {}", e));
+
+        let instructions_to_replay: Vec<Instruction> = match lock_result {
+            Ok(instructions) => instructions,
+            Err(msg) => {
+                self.log_error(&msg).await;
+                return Err(msg);
             }
         };
 

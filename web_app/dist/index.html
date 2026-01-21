@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FANUC RMI Control</title>
     
-<script type="module">
-import init, * as bindings from '/web_app-861fed032c24cf06.js';
-const wasm = await init({ module_or_path: '/web_app-861fed032c24cf06_bg.wasm' });
+<script type="module" nonce="YhcyJnPb237Pgg1a/XUJ6g==">
+import init, * as bindings from '/web_app-88a92ebf8906fb76.js';
+const wasm = await init({ module_or_path: '/web_app-88a92ebf8906fb76_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -49,7 +49,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
             background: #444444;
         }
     </style>
-<link rel="modulepreload" href="/web_app-861fed032c24cf06.js" crossorigin="anonymous" integrity="sha384-we5v+YFrRuRHm27RqUe1eJ7g+L51qsMWcevWOdYDXzTsO7vxVm2IUfmK9wozosqw"><link rel="preload" href="/web_app-861fed032c24cf06_bg.wasm" crossorigin="anonymous" integrity="sha384-OrJRgDtNi35RxsXPyPz6en7NrtwJqZQc1ABvy0vHJUATnDu9gFcPJWVlYN1KdhLE" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/web_app-88a92ebf8906fb76.js" crossorigin=anonymous integrity="sha384-gJn99RpUybqkqqWRjejEoOyCATcZo0SHc2E6MnHtbWG/2QXIyzsNrxnVpwtTwg2A"><link rel="preload" href="/web_app-88a92ebf8906fb76_bg.wasm" crossorigin=anonymous integrity="sha384-ZfUlDI9FYzVNvlEXbTt3ukZvMd30KMShj2a10s/GiBwl0ck/MzM05qm90UaGY9Jd" as="fetch" type="application/wasm"></head>
 <body>
 <script>"use strict";
 
@@ -143,7 +143,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
                         break;
                 }
             };
-            ws.onclose = () => this.onclose();
+            ws.onclose = this.onclose;
         }
 
         onclose() {
@@ -155,7 +155,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
                     // rebuilt on restart)
                     const ws = new WebSocket(this.url);
                     ws.onopen = () => window.location.reload();
-                    ws.onclose = () => this.onclose();
+                    ws.onclose = this.onclose;
                 },
                 this.poll_interval);
         }
