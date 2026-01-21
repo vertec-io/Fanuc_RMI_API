@@ -211,6 +211,25 @@ impl FanucDriver {
         let _ = self.send_command(packet, PacketPriority::Standard);
     }
 
+    /// Pause robot motion
+    ///
+    /// Sends the FRC_Pause command to the Fanuc controller. The robot will
+    /// decelerate and stop at the current position. Queued motion instructions
+    /// are preserved.
+    pub fn send_pause(&self) {
+        let packet = SendPacket::Command(Command::FrcPause);
+        let _ = self.send_command(packet, PacketPriority::Immediate);
+    }
+
+    /// Continue/resume robot motion
+    ///
+    /// Sends the FRC_Continue command to the Fanuc controller. The robot will
+    /// resume executing queued motion instructions from where it stopped.
+    pub fn send_continue(&self) {
+        let packet = SendPacket::Command(Command::FrcContinue);
+        let _ = self.send_command(packet, PacketPriority::Immediate);
+    }
+
     pub async fn disconnect(&self) {
         let packet = SendPacket::Communication(Communication::FrcDisconnect {});
         let _ = self.send_command(packet, PacketPriority::Standard);
