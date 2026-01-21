@@ -211,23 +211,126 @@ impl FanucDriver {
         let _ = self.send_command(packet, PacketPriority::Standard);
     }
 
-    /// Pause robot motion
+    /// Pause the internal driver queue
     ///
-    /// Sends the FRC_Pause command to the Fanuc controller. The robot will
-    /// decelerate and stop at the current position. Queued motion instructions
-    /// are preserved.
+    /// Sends DriverCommand::Pause to stop the driver from sending new instructions
+    /// to the controller. Does NOT send FrcPause to the robot.
+    fn pause_driver_queue(&self) {
+        let packet = SendPacket::DriverCommand(DriverCommand::Pause);
+        let _ = self.send_command(packet, PacketPriority::Immediate);
+    }
+
+    /// Unpause the internal driver queue
+    ///
+    /// Sends DriverCommand::Unpause to allow the driver to resume sending
+    /// instructions to the controller.
+    fn unpause_driver_queue(&self) {
+        let packet = SendPacket::DriverCommand(DriverCommand::Unpause);
+        let _ = self.send_command(packet, PacketPriority::Immediate);
+    }
+
+    /// Pause robot motion (fire-and-forget)
+    ///
+    /// Pauses the internal driver queue and sends the FRC_Pause command to the
+    /// Fanuc controller. The robot will decelerate and stop at the current position.
+    /// Queued motion instructions are preserved but won't be sent until resumed.
+    ///
+    /// This is a fire-and-forget method. Use `pause()` if you need to wait for
+    /// the response.
     pub fn send_pause(&self) {
+        // 1. Pause internal driver queue (stop sending new instructions)
+        self.pause_driver_queue();
+        // 2. Send FrcPause to controller
         let packet = SendPacket::Command(Command::FrcPause);
         let _ = self.send_command(packet, PacketPriority::Immediate);
     }
 
-    /// Continue/resume robot motion
+    /// Pause robot motion and wait for response
     ///
-    /// Sends the FRC_Continue command to the Fanuc controller. The robot will
-    /// resume executing queued motion instructions from where it stopped.
+    /// Pauses the internal driver queue and sends the FRC_Pause command to the
+    /// Fanuc controller, then waits for the response. The robot will decelerate
+    /// and stop at the current position. Queued motion instructions are preserved
+    /// but won't be sent until resumed.
+    ///
+    /// # Returns
+    /// * `Ok(FrcPauseResponse)` - The pause response from the controller
+    /// * `Err(String)` - Error if timeout (5 seconds) or channel closed
+    pub async fn pause(&self) -> Result<FrcPauseResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+
+        // 1. Pause internal driver queue (stop sending new instructions)
+        self.pause_driver_queue();
+
+        // 2. Send FrcPause to controller
+        let packet = SendPacket::Command(Command::FrcPause);
+        let _ = self.send_command(packet, PacketPriority::Immediate);
+
+        // 3. Wait for response
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommandResponse(CommandResponse::FrcPause(pause_response)) = response {
+                    return Ok(pause_response);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for pause response".to_string())?
+    }
+
+    /// Continue/resume robot motion (fire-and-forget)
+    ///
+    /// Sends the FRC_Continue command to the Fanuc controller and unpauses the
+    /// internal driver queue. The robot will resume executing queued motion
+    /// instructions from where it stopped.
+    ///
+    /// This is a fire-and-forget method. Use `continue_motion()` if you need to
+    /// wait for the response.
     pub fn send_continue(&self) {
+        // 1. Send FrcContinue to controller
         let packet = SendPacket::Command(Command::FrcContinue);
         let _ = self.send_command(packet, PacketPriority::Immediate);
+        // 2. Unpause internal driver queue (allow sending new instructions)
+        self.unpause_driver_queue();
+    }
+
+    /// Continue/resume robot motion and wait for response
+    ///
+    /// Sends the FRC_Continue command to the Fanuc controller and waits for
+    /// the response. If successful, unpauses the internal driver queue to allow
+    /// sending new instructions. The robot will resume executing queued motion
+    /// instructions from where it stopped.
+    ///
+    /// # Returns
+    /// * `Ok(FrcContinueResponse)` - The continue response from the controller
+    /// * `Err(String)` - Error if timeout (5 seconds) or channel closed
+    pub async fn continue_motion(&self) -> Result<FrcContinueResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+
+        // 1. Send FrcContinue to controller
+        let packet = SendPacket::Command(Command::FrcContinue);
+        let _ = self.send_command(packet, PacketPriority::Immediate);
+
+        // 2. Wait for response
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommandResponse(CommandResponse::FrcContinue(continue_response)) = response {
+                    return Ok(continue_response);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for continue response".to_string())?;
+
+        // 3. If successful, unpause internal driver queue
+        if let Ok(ref response) = result {
+            if response.error_id == 0 {
+                self.unpause_driver_queue();
+            }
+        }
+
+        result
     }
 
     pub async fn disconnect(&self) {
