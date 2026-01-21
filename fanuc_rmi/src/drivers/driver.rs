@@ -444,8 +444,16 @@ impl FanucDriver {
     /// This pauses robot motion. The robot will decelerate and stop at the
     /// current position. Queued motion instructions are preserved.
     ///
+    /// This also pauses the internal driver queue to prevent sending more
+    /// instructions while paused.
+    ///
     /// Returns the request ID for tracking this request.
     pub fn send_pause(&self) -> Result<u64, String> {
+        // Pause the internal driver queue first to stop sending more instructions
+        let pause_queue_packet = SendPacket::DriverCommand(DriverCommand::Pause);
+        self.send_packet(pause_queue_packet, PacketPriority::Immediate)?;
+
+        // Then send FrcPause to the robot
         let packet = SendPacket::Command(Command::FrcPause);
         self.send_packet(packet, PacketPriority::Immediate)
     }
@@ -537,7 +545,7 @@ impl FanucDriver {
         let _request_id = self.send_continue()?;
 
         // Wait up to 5 seconds for response
-        tokio::time::timeout(Duration::from_secs(5), async {
+        let response = tokio::time::timeout(Duration::from_secs(5), async {
             while let Ok(response) = response_rx.recv().await {
                 if let ResponsePacket::CommandResponse(CommandResponse::FrcContinue(continue_response)) = response {
                     return Ok(continue_response);
@@ -546,7 +554,15 @@ impl FanucDriver {
             Err("Response channel closed".to_string())
         })
         .await
-        .map_err(|_| "Timeout waiting for continue response".to_string())?
+        .map_err(|_| "Timeout waiting for continue response".to_string())??;
+
+        // If successful, unpause the driver queue to resume sending instructions
+        if response.error_id == 0 {
+            let unpause_packet = SendPacket::DriverCommand(DriverCommand::Unpause);
+            self.send_packet(unpause_packet, PacketPriority::Immediate)?;
+        }
+
+        Ok(response)
     }
 
     /// Send an initialize command to the FANUC controller
