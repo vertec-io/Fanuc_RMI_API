@@ -640,13 +640,19 @@ impl FanucDriver {
             return Err(msg);
         }
 
-        // Note: abort() already calls clear_in_flight() internally, but we want
-        // the ProgramPause command to handle the state transition and preserve
-        // in-flight instructions before clearing. So we send ProgramPause after abort.
-
         // Step 2: Send ProgramPause command to transition state and preserve instructions
+        // Note: This must happen before re-initialization so in-flight instructions are stored
         let pause_packet = SendPacket::DriverCommand(DriverCommand::ProgramPause);
         self.send_packet(pause_packet, PacketPriority::Immediate)?;
+
+        // Step 3: Re-initialize so robot can accept jog commands while paused
+        self.log_info("Re-initializing for jog capability...").await;
+        let init_response = self.initialize().await?;
+        if init_response.error_id != 0 {
+            let msg = format!("Program pause re-initialize failed with error: {}", init_response.error_id);
+            self.log_error(&msg).await;
+            return Err(msg);
+        }
 
         self.log_info("Program pause complete. Robot can now be jogged.").await;
         Ok(())
@@ -678,7 +684,7 @@ impl FanucDriver {
     /// # }
     /// ```
     pub async fn program_resume(&self) -> Result<(), String> {
-        self.log_info("Program resume: re-initializing RMI program...").await;
+        self.log_info("Program resume: preparing to continue motion program...").await;
 
         // Step 1: Get preserved instructions before we clear them
         // Note: We extract the result synchronously and drop the MutexGuard before any await
@@ -699,7 +705,17 @@ impl FanucDriver {
             instructions_to_replay.len()
         )).await;
 
-        // Step 2: Initialize to create new RMI_MOVE program
+        // Step 2: Abort current RMI_MOVE (used for jogging during pause)
+        self.log_info("Aborting jog session...").await;
+        let abort_response = self.abort().await?;
+        if abort_response.error_id != 0 {
+            let msg = format!("Program resume abort failed with error: {}", abort_response.error_id);
+            self.log_error(&msg).await;
+            return Err(msg);
+        }
+
+        // Step 3: Initialize to create fresh RMI_MOVE program with reset sequence counter
+        self.log_info("Re-initializing for motion program...").await;
         let init_response = self.initialize().await?;
         if init_response.error_id != 0 {
             let msg = format!("Program resume initialize failed with error: {}", init_response.error_id);
@@ -707,15 +723,13 @@ impl FanucDriver {
             return Err(msg);
         }
 
-        // Note: initialize() already resets sequence counter to 1
-
-        // Step 3: Send ProgramResume command with instructions to replay
+        // Step 4: Send ProgramResume command with instructions to replay
         let resume_packet = SendPacket::DriverCommand(DriverCommand::ProgramResume {
             instructions_to_replay,
         });
         self.send_packet(resume_packet, PacketPriority::Immediate)?;
 
-        // Step 4: Clear the stored instructions since we've replayed them
+        // Step 5: Clear the stored instructions since we've replayed them
         if let Ok(mut stored) = self.program_pause_instructions.lock() {
             stored.clear();
         }
