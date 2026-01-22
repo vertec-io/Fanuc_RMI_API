@@ -1315,8 +1315,9 @@ impl FanucDriver {
                 break;
             }
 
-            // Send packets with backpressure (only when Running, not when Paused or ProgramPaused)
-            while in_flight < MAX_IN_FLIGHT && state == DriverState::Running {
+            // Send packets with backpressure (when Running or ProgramPaused, not when Paused)
+            // ProgramPaused allows jog commands and other instructions to be sent
+            while in_flight < MAX_IN_FLIGHT && (state == DriverState::Running || state == DriverState::ProgramPaused) {
                 if let Some(mut driver_packet) = queue.pop_front() {
                     // Assign sequence ID right before sending (ensures consecutive IDs in send order)
                     if let SendPacket::Instruction(ref mut instruction) = driver_packet.packet {
@@ -1379,8 +1380,11 @@ impl FanucDriver {
                                 let seq = instr.get_sequence_id();
                                 in_flight += 1;
 
-                                // Track in-flight instruction for potential program pause/resume replay
-                                in_flight_instructions.push_back((seq, instr));
+                                // Only track in-flight instructions when Running (not when ProgramPaused)
+                                // Instructions sent during ProgramPaused are jog commands, not program instructions
+                                if state == DriverState::Running {
+                                    in_flight_instructions.push_back((seq, instr));
+                                }
 
                                 // Per FANUC documentation B-84184EN/02 Section 3.2:
                                 // Wait at least 2ms between consecutive instructions to prevent
