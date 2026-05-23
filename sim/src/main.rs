@@ -1,11 +1,33 @@
+//! FANUC RMI Simulator binary.
+//!
+//! # Per-connection state isolation
+//!
+//! Each successful `FRC_Connect` on the primary control port (default `16001`)
+//! allocates a dedicated **secondary data port** (default base `16002`) for the
+//! subsequent RMI session. The simulator assumes **one logical client per
+//! secondary port**: the secondary listener is bound, accepts a single TCP
+//! connection, serves it for the lifetime of the RMI session, and then releases
+//! the port back to the [`PortAllocator`] for reuse by a later `FRC_Connect`.
+//!
+//! Any second concurrent connection attempt on the same secondary port is
+//! rejected with an explicit JSON error response and the socket is closed,
+//! because the per-port `RobotState`, motion executor task, and sequence-id
+//! validator are not safe to multiplex across two clients sharing one port.
+//!
+//! See [`PortAllocator`] for the reuse-on-disconnect mechanic that satisfies
+//! the COMET1 PRD's requirement to cap secondary-port growth rather than
+//! monotonically incrementing forever.
+
 use serde_json::json;
 use std::error::Error;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc, RwLock};
 use tokio::time::Duration;
+use clap::Parser;
 use fanuc_rmi::{
     commands::*,
     packets::{CommandResponse, CommunicationResponse, InstructionResponse, FrcConnectResponse, FrcDisconnectResponse},
@@ -17,6 +39,105 @@ mod kinematics;
 mod robot_config;
 
 use kinematics::CRXKinematics;
+
+/// Process-global quiet flag. When `true`, the emoji `println!` chatter is
+/// suppressed (the `qprintln!` / `qeprintln!` macros become no-ops).
+/// `eprintln!` calls that report genuine errors are left alone.
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+/// `println!` gated by [`QUIET`]. Use for the chatty progress/emoji lines that
+/// US-004a's `--quiet` flag exists to silence.
+macro_rules! qprintln {
+    ($($arg:tt)*) => {
+        if !$crate::QUIET.load(::std::sync::atomic::Ordering::Relaxed) {
+            println!($($arg)*);
+        }
+    };
+}
+
+/// `eprintln!` gated by [`QUIET`]. Use for chatty stderr lines (e.g. motion
+/// trace) that are not actual errors.
+macro_rules! qeprintln {
+    ($($arg:tt)*) => {
+        if !$crate::QUIET.load(::std::sync::atomic::Ordering::Relaxed) {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
+/// Allocator for secondary RMI data ports.
+///
+/// Replaces the previous monotonic `Arc<Mutex<u16>>` counter that grew forever
+/// across a process lifetime. The allocator keeps a base port and tracks the
+/// set of currently in-use ports; [`allocate`](PortAllocator::allocate) returns
+/// the lowest free port at or above the base, and
+/// [`release`](PortAllocator::release) marks a port free again so it can be
+/// reused by the next `FRC_Connect`.
+#[derive(Debug)]
+pub struct PortAllocator {
+    base: u16,
+    in_use: std::collections::BTreeSet<u16>,
+}
+
+impl PortAllocator {
+    /// Create a new allocator that hands out ports starting at `base`.
+    pub fn new(base: u16) -> Self {
+        Self {
+            base,
+            in_use: std::collections::BTreeSet::new(),
+        }
+    }
+
+    /// Reserve and return the lowest free port at or above `self.base`.
+    /// Returns `None` on `u16` overflow (effectively never in practice).
+    pub fn allocate(&mut self) -> Option<u16> {
+        let mut candidate = self.base;
+        while self.in_use.contains(&candidate) {
+            candidate = candidate.checked_add(1)?;
+        }
+        self.in_use.insert(candidate);
+        Some(candidate)
+    }
+
+    /// Mark `port` free so a later `allocate()` may hand it out again.
+    pub fn release(&mut self, port: u16) {
+        self.in_use.remove(&port);
+    }
+
+    /// Number of currently allocated ports (test helper).
+    #[cfg(test)]
+    pub fn in_use_count(&self) -> usize {
+        self.in_use.len()
+    }
+}
+
+/// Command-line interface for the FANUC simulator binary.
+///
+/// Defaults preserve backward compatibility with operators who launch the sim
+/// with no arguments (`0.0.0.0:16001`, secondary ports starting at `16002`,
+/// immediate mode, verbose logging). US-010a's COMET1 launcher overrides
+/// these to `127.0.0.1` for local-only scope.
+#[derive(Parser, Debug, Clone)]
+#[command(name = "sim", about = "FANUC CRX RMI simulator")]
+pub struct Cli {
+    /// Primary control-port bind address (ip:port).
+    #[arg(long, default_value = "0.0.0.0:16001")]
+    pub addr: SocketAddr,
+
+    /// Starting port for dynamically-allocated secondary data ports.
+    /// Each `FRC_Connect` is assigned the lowest free port at or above this base.
+    #[arg(long, default_value_t = 16002)]
+    pub secondary_port_base: u16,
+
+    /// Suppress the emoji `println!` chatter (errors still go to stderr).
+    #[arg(long, default_value_t = false)]
+    pub quiet: bool,
+
+    /// Run in realtime mode (motion duration based on distance/speed, return
+    /// packets sent after execution). Default is immediate mode.
+    #[arg(long, default_value_t = false)]
+    pub realtime: bool,
+}
 
 /// Helper to serialize a CommandResponse to JSON
 fn serialize_response(response: CommandResponse) -> serde_json::Value {
@@ -233,7 +354,7 @@ impl RobotState {
 
 async fn handle_client(
     mut socket: TcpStream,
-    new_port: Arc<Mutex<u16>>,
+    port_allocator: Arc<Mutex<PortAllocator>>,
 ) -> Result<u16, Box<dyn Error + Send + Sync>> {
     let mut buffer = vec![0; 2048];
     let n = match socket.read(&mut buffer).await {
@@ -254,11 +375,16 @@ async fn handle_client(
     let response_json = match request_json["Communication"].as_str() {
         Some("FRC_Connect") => {
             let port = {
-                let mut port_lock = new_port.lock().await;
-                *port_lock += 1;
-                *port_lock
+                let mut allocator = port_allocator.lock().await;
+                match allocator.allocate() {
+                    Some(p) => p,
+                    None => {
+                        eprintln!("Port allocator exhausted (u16 overflow)");
+                        return Err("Port allocator exhausted".into());
+                    }
+                }
             };
-            println!("✓ Client connected, assigned port {}", port);
+            qprintln!("✓ Client connected, assigned port {}", port);
 
             let response = CommunicationResponse::FrcConnect(FrcConnectResponse {
                 error_id: 1,
@@ -318,7 +444,7 @@ async fn handle_secondary_client(
         'motion_loop: while let Some(cmd) = motion_rx.recv().await {
             // Check for abort BEFORE starting motion
             if control_for_executor.is_abort_requested() {
-                eprintln!("🛑 Abort detected before motion {}, clearing queue", cmd.seq_id);
+                qeprintln!("🛑 Abort detected before motion {}, clearing queue", cmd.seq_id);
                 // Drain remaining commands from the queue
                 while motion_rx.try_recv().is_ok() {}
                 control_for_executor.clear_abort();
@@ -378,7 +504,7 @@ async fn handle_secondary_client(
             let speed_override = control_for_executor.get_speed_override() as f64 / 100.0;
             let effective_speed = cmd.speed * speed_override.max(0.01); // Minimum 1% to avoid division by zero
 
-            eprintln!("🏃 Executing motion {} ({}) | dist={:.1}mm | speed={:.1}mm/s ({}% override)",
+            qeprintln!("🏃 Executing motion {} ({}) | dist={:.1}mm | speed={:.1}mm/s ({}% override)",
                 cmd.seq_id, cmd.instruction_type, distance, effective_speed, (speed_override * 100.0) as u8);
 
             let delay_ms = if mode == SimulatorMode::Realtime {
@@ -397,7 +523,7 @@ async fn handle_secondary_client(
                 for step in 1..=total_steps {
                     // Check for abort DURING motion interpolation
                     if control_for_executor.is_abort_requested() {
-                        eprintln!("🛑 Abort detected during motion {} at step {}/{}", cmd.seq_id, step, total_steps);
+                        qeprintln!("🛑 Abort detected during motion {} at step {}/{}", cmd.seq_id, step, total_steps);
                         // Drain remaining commands
                         while motion_rx.try_recv().is_ok() {}
                         control_for_executor.clear_abort();
@@ -409,7 +535,7 @@ async fn handle_secondary_client(
                     while control_for_executor.is_paused() {
                         // Check for abort while paused
                         if control_for_executor.is_abort_requested() {
-                            eprintln!("🛑 Abort detected while paused during motion {}", cmd.seq_id);
+                            qeprintln!("🛑 Abort detected while paused during motion {}", cmd.seq_id);
                             while motion_rx.try_recv().is_ok() {}
                             control_for_executor.clear_abort();
                             motion_aborted = true;
@@ -501,7 +627,7 @@ async fn handle_secondary_client(
             }
 
             // Send response back - motion is complete
-            eprintln!("✅ Motion {} complete, sending response", cmd.seq_id);
+            qeprintln!("✅ Motion {} complete, sending response", cmd.seq_id);
             let _ = response_tx_for_executor.send(MotionResponse {
                 seq_id: cmd.seq_id,
                 instruction_type: cmd.instruction_type,
@@ -552,7 +678,7 @@ async fn handle_secondary_client(
 
                     let mut response_json = match request_json["Command"].as_str() {
                         Some("FRC_Initialize") => {
-                            println!("📋 FRC_Initialize");
+                            qprintln!("📋 FRC_Initialize");
                             let cmd: FrcInitialize = serde_json::from_value(request_json.clone())
                                 .unwrap_or(FrcInitialize { group_mask: 1 });
 
@@ -561,7 +687,7 @@ async fn handle_secondary_client(
                                 let mut state = robot_state.lock().await;
                                 state.last_sequence_id = 0;
                                 state.expected_next_sequence_id = 1;
-                                eprintln!("🔄 Sequence counter reset: expected_next=1");
+                                qeprintln!("🔄 Sequence counter reset: expected_next=1");
                             }
                             let response = CommandResponse::FrcInitialize(FrcInitializeResponse {
                                 error_id: 0,
@@ -649,7 +775,7 @@ async fn handle_secondary_client(
                             serialize_response(response)
                         },
                         Some("FRC_Abort") => {
-                            println!("🛑 FRC_Abort - signaling motion executor to abort immediately");
+                            qprintln!("🛑 FRC_Abort - signaling motion executor to abort immediately");
                             executor_control.request_abort();
                             // Also unpause if paused, so abort takes effect
                             executor_control.unpause();
@@ -659,7 +785,7 @@ async fn handle_secondary_client(
                             serialize_response(response)
                         }
                         Some("FRC_Pause") => {
-                            println!("⏸️ FRC_Pause - pausing motion executor");
+                            qprintln!("⏸️ FRC_Pause - pausing motion executor");
                             executor_control.pause();
                             let response = CommandResponse::FrcPause(FrcPauseResponse {
                                 error_id: 0,
@@ -667,7 +793,7 @@ async fn handle_secondary_client(
                             serialize_response(response)
                         }
                         Some("FRC_Continue") => {
-                            println!("▶️ FRC_Continue - resuming motion executor");
+                            qprintln!("▶️ FRC_Continue - resuming motion executor");
                             executor_control.unpause();
                             let response = CommandResponse::FrcContinue(FrcContinueResponse {
                                 error_id: 0,
@@ -675,7 +801,7 @@ async fn handle_secondary_client(
                             serialize_response(response)
                         }
                         Some("FRC_Reset") => {
-                            println!("🔄 FRC_Reset");
+                            qprintln!("🔄 FRC_Reset");
                             // Reset also clears abort/pause state
                             executor_control.clear_abort();
                             executor_control.unpause();
@@ -688,7 +814,7 @@ async fn handle_secondary_client(
                             let cmd: FrcSetOverRide = serde_json::from_value(request_json.clone())
                                 .unwrap_or(FrcSetOverRide { value: 100 });
                             executor_control.set_speed_override(cmd.value);
-                            println!("⚡ FRC_SetOverRide: {}%", cmd.value);
+                            qprintln!("⚡ FRC_SetOverRide: {}%", cmd.value);
                             let response = CommandResponse::FrcSetOverRide(FrcSetOverRideResponse {
                                 error_id: 0,
                             });
@@ -712,7 +838,7 @@ async fn handle_secondary_client(
                             let mut state = robot_state.lock().await;
                             state.active_uframe = cmd.u_frame_number;
                             state.active_utool = cmd.u_tool_number;
-                            println!("🔧 FRC_SetUFrameUTool: UFrame={}, UTool={}", cmd.u_frame_number, cmd.u_tool_number);
+                            qprintln!("🔧 FRC_SetUFrameUTool: UFrame={}, UTool={}", cmd.u_frame_number, cmd.u_tool_number);
                             let response = CommandResponse::FrcSetUFrameUTool(FrcSetUFrameUToolResponse {
                                 error_id: 0,
                                 group: cmd.group as u16,
@@ -731,7 +857,7 @@ async fn handle_secondary_client(
                             //
                             // We simulate the timeout by simply not sending a response for frame 0
                             if cmd.frame_number == 0 {
-                                eprintln!("⚠️ FRC_ReadUFrameData: Frame 0 requested - simulating timeout (real robot behavior)");
+                                qeprintln!("⚠️ FRC_ReadUFrameData: Frame 0 requested - simulating timeout (real robot behavior)");
                                 // Don't send any response - this will cause a timeout on the client
                                 serde_json::json!({})  // Return empty to skip response
                             } else {
@@ -767,7 +893,7 @@ async fn handle_secondary_client(
                             // - Tools 1-10 are valid and can be read
                             // - Tool 11+ don't exist (would return error on real robot)
                             if cmd.tool_number == 0 {
-                                eprintln!("⚠️ FRC_ReadUToolData: Tool 0 requested - returning Unknown error (real robot behavior)");
+                                qeprintln!("⚠️ FRC_ReadUToolData: Tool 0 requested - returning Unknown error (real robot behavior)");
                                 let response = CommandResponse::Unknown(FrcUnknownResponse {
                                     error_id: 2556950,  // Same error as real robot
                                 });
@@ -813,7 +939,7 @@ async fn handle_secondary_client(
                                     p: cmd.frame.p,
                                     r: cmd.frame.r,
                                 };
-                                println!("📝 FRC_WriteUFrameData: UFrame {} updated", frame_num);
+                                qprintln!("📝 FRC_WriteUFrameData: UFrame {} updated", frame_num);
                             }
                             let response = CommandResponse::FrcWriteUFrameData(FrcWriteUFrameDataResponse {
                                 error_id: 0,
@@ -839,7 +965,7 @@ async fn handle_secondary_client(
                                     p: cmd.frame.p,
                                     r: cmd.frame.r,
                                 };
-                                println!("📝 FRC_WriteUToolData: UTool {} updated", tool_num);
+                                qprintln!("📝 FRC_WriteUToolData: UTool {} updated", tool_num);
                             }
                             let response = CommandResponse::FrcWriteUToolData(FrcWriteUToolDataResponse {
                                 error_id: 0,
@@ -853,7 +979,7 @@ async fn handle_secondary_client(
                             let state = robot_state.lock().await;
                             let port_num = cmd.port_number as usize;
                             let port_value = if port_num < 256 { state.din[port_num] } else { false };
-                            println!("📥 FRC_ReadDIN: Port {} = {}", port_num, if port_value { "ON" } else { "OFF" });
+                            qprintln!("📥 FRC_ReadDIN: Port {} = {}", port_num, if port_value { "ON" } else { "OFF" });
                             let response = CommandResponse::FrcReadDIN(FrcReadDINResponse {
                                 error_id: 0,
                                 port_number: cmd.port_number,
@@ -870,7 +996,7 @@ async fn handle_secondary_client(
                             if port_num < 256 {
                                 state.dout[port_num] = port_value;
                             }
-                            println!("📤 FRC_WriteDOUT: Port {} = {}", port_num, if port_value { "ON" } else { "OFF" });
+                            qprintln!("📤 FRC_WriteDOUT: Port {} = {}", port_num, if port_value { "ON" } else { "OFF" });
                             let response = CommandResponse::FrcWriteDOUT(FrcWriteDOUTResponse {
                                 error_id: 0,
                             });
@@ -882,7 +1008,7 @@ async fn handle_secondary_client(
                             let state = robot_state.lock().await;
                             let port_num = cmd.port_number as usize;
                             let port_value = if port_num < 256 { state.ain[port_num] } else { 0.0 };
-                            println!("📥 FRC_ReadAIN: Port {} = {:.2}", port_num, port_value);
+                            qprintln!("📥 FRC_ReadAIN: Port {} = {:.2}", port_num, port_value);
                             let response = CommandResponse::FrcReadAIN(FrcReadAINResponse {
                                 error_id: 0,
                                 port_number: cmd.port_number,
@@ -898,7 +1024,7 @@ async fn handle_secondary_client(
                             if port_num < 256 {
                                 state.aout[port_num] = cmd.port_value;
                             }
-                            println!("📤 FRC_WriteAOUT: Port {} = {:.2}", port_num, cmd.port_value);
+                            qprintln!("📤 FRC_WriteAOUT: Port {} = {:.2}", port_num, cmd.port_value);
                             let response = CommandResponse::FrcWriteAOUT(FrcWriteAOUTResponse {
                                 error_id: 0,
                             });
@@ -910,7 +1036,7 @@ async fn handle_secondary_client(
                             let state = robot_state.lock().await;
                             let port_num = cmd.port_number as usize;
                             let port_value = if port_num < 256 { state.gin[port_num] } else { 0 };
-                            println!("📥 FRC_ReadGIN: Port {} = {}", port_num, port_value);
+                            qprintln!("📥 FRC_ReadGIN: Port {} = {}", port_num, port_value);
                             let response = CommandResponse::FrcReadGIN(FrcReadGINResponse {
                                 error_id: 0,
                                 port_number: cmd.port_number,
@@ -926,7 +1052,7 @@ async fn handle_secondary_client(
                             if port_num < 256 {
                                 state.gout[port_num] = cmd.port_value;
                             }
-                            println!("📤 FRC_WriteGOUT: Port {} = {}", port_num, cmd.port_value);
+                            qprintln!("📤 FRC_WriteGOUT: Port {} = {}", port_num, cmd.port_value);
                             let response = CommandResponse::FrcWriteGOUT(FrcWriteGOUTResponse {
                                 error_id: 0,
                             });
@@ -944,7 +1070,7 @@ async fn handle_secondary_client(
 
                     response_json = match request_json["Communication"].as_str() {
                         Some("FRC_Disconnect") => {
-                            println!("👋 FRC_Disconnect\n");
+                            qprintln!("👋 FRC_Disconnect\n");
                             let response = CommunicationResponse::FrcDisconnect(FrcDisconnectResponse {
                                 error_id: 0,
                             });
@@ -990,7 +1116,7 @@ async fn handle_secondary_client(
 
                         // Increment expected sequence ID for next instruction
                         state.expected_next_sequence_id = seq + 1;
-                        eprintln!("✓ Sequence ID {} validated, next expected: {}", seq, state.expected_next_sequence_id);
+                        qeprintln!("✓ Sequence ID {} validated, next expected: {}", seq, state.expected_next_sequence_id);
                     }
 
                     // Handle motion instructions asynchronously
@@ -1015,7 +1141,7 @@ async fn handle_secondary_client(
                                     state.mode.clone()
                                 };
 
-                                println!("🎯 FRC_LinearMotion: X={:.1} Y={:.1} Z={:.1} | Speed={:.1}mm/s | Term={} CNT={} | seq={}",
+                                qprintln!("🎯 FRC_LinearMotion: X={:.1} Y={:.1} Z={:.1} | Speed={:.1}mm/s | Term={} CNT={} | seq={}",
                                     target_x, target_y, target_z, speed, term_type, term_value, seq);
 
                                 // Queue the motion command for sequential execution
@@ -1066,7 +1192,7 @@ async fn handle_secondary_client(
                                     state.mode.clone()
                                 };
 
-                                println!("🎯 FRC_LinearRelative: ΔX={:+.1} ΔY={:+.1} ΔZ={:+.1} | Speed={:.1}mm/s | Term={} CNT={} | seq={}",
+                                qprintln!("🎯 FRC_LinearRelative: ΔX={:+.1} ΔY={:+.1} ΔZ={:+.1} | Speed={:.1}mm/s | Term={} CNT={} | seq={}",
                                     dx, dy, dz, speed, term_type, term_value, seq);
 
                                 // Queue the motion command - use is_relative=true to indicate this is a relative move
@@ -1144,7 +1270,7 @@ async fn handle_secondary_client(
                                         state.cartesian_orientation[2] = ori[2] as f32;
                                 };
 
-                                println!("🎯 FRC_JointRelativeJRep: ΔJ1={:+.2}° ΔJ2={:+.2}° ΔJ3={:+.2}° ΔJ4={:+.2}° ΔJ5={:+.2}° ΔJ6={:+.2}° | Speed={:.1}°/s | Term={} CNT={} | seq={}",
+                                qprintln!("🎯 FRC_JointRelativeJRep: ΔJ1={:+.2}° ΔJ2={:+.2}° ΔJ3={:+.2}° ΔJ4={:+.2}° ΔJ5={:+.2}° ΔJ6={:+.2}° | Speed={:.1}°/s | Term={} CNT={} | seq={}",
                                     dj1.to_degrees(), dj2.to_degrees(), dj3.to_degrees(), dj4.to_degrees(), dj5.to_degrees(), dj6.to_degrees(), speed, term_type, term_value, seq);
                             }
 
@@ -1166,7 +1292,7 @@ async fn handle_secondary_client(
             }
             // Check for motion responses to send back
             Some(motion_response) = response_rx.recv() => {
-                eprintln!("📨 Received response from channel: seq_id={}", motion_response.seq_id);
+                qeprintln!("📨 Received response from channel: seq_id={}", motion_response.seq_id);
 
                 // Create the appropriate InstructionResponse based on instruction type
                 let response_enum = match motion_response.instruction_type.as_str() {
@@ -1197,7 +1323,7 @@ async fn handle_secondary_client(
                 });
 
                 let response = serde_json::to_string(&response_json)? + "\r\n";
-                eprintln!("📬 Sending to client: {}", response.trim());
+                qeprintln!("📬 Sending to client: {}", response.trim());
                 socket.write_all(response.as_bytes()).await?;
             }
         }
@@ -1206,36 +1332,105 @@ async fn handle_secondary_client(
     Ok(())
 }
 
-async fn start_secondary_server_with_listener(_port: u16, listener: TcpListener, mode: Arc<SimulatorMode>) -> Result<(), Box<dyn Error + Send + Sync>> {
+/// Serve one logical RMI client on a secondary data port, then release the
+/// port back to the allocator so a later `FRC_Connect` can reuse it.
+///
+/// The listener is bound by [`start_server`] and passed in. The first
+/// accepted connection is dispatched to [`handle_secondary_client`]; while
+/// that session is in flight, any additional incoming connection on the same
+/// port is rejected with a clear JSON error response (matching the
+/// module-level "one logical client per secondary port" invariant) and the
+/// reject socket is closed. The function returns once the served client
+/// disconnects, the listener is dropped (closing the bound port), and the
+/// caller releases the port to the allocator.
+async fn start_secondary_server_with_listener(
+    port: u16,
+    listener: TcpListener,
+    mode: Arc<SimulatorMode>,
+    port_allocator: Arc<Mutex<PortAllocator>>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     // Create shared robot state for this connection
     let robot_state = Arc::new(Mutex::new(RobotState::new((*mode).clone())));
 
-    loop {
-        let (socket, _) = match listener.accept().await {
-            Ok((socket, addr)) => (socket, addr),
-            Err(e) => {
-                eprintln!("Failed to accept connection: {}", e);
-                continue;
-            }
-        };
+    // Accept the first connection - this is the one logical client for this port.
+    let (socket, _) = match listener.accept().await {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("Failed to accept primary secondary connection on port {}: {}", port, e);
+            // Release the port even on accept failure so it isn't leaked.
+            port_allocator.lock().await.release(port);
+            return Err(Box::new(e));
+        }
+    };
 
-        let robot_state_clone = Arc::clone(&robot_state);
-        tokio::spawn(async move {
-            if let Err(e) = handle_secondary_client(socket, robot_state_clone).await {
-                eprintln!("Error handling secondary client: {:?}", e);
+    let robot_state_clone = Arc::clone(&robot_state);
+    let serve_handle = tokio::spawn(async move {
+        if let Err(e) = handle_secondary_client(socket, robot_state_clone).await {
+            eprintln!("Error handling secondary client: {:?}", e);
+        }
+    });
+
+    // While the primary session is active, reject any further connection
+    // attempts on this same secondary port with an explicit error response.
+    let port_for_reject = port;
+    let reject_handle = tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((mut extra_socket, peer)) => {
+                    eprintln!(
+                        "Rejecting duplicate connection on secondary port {} from {} (one client per port)",
+                        port_for_reject, peer
+                    );
+                    let rejection = serde_json::json!({
+                        "Error": "Secondary port already in use",
+                        "Detail": format!(
+                            "Simulator allows one logical client per secondary port; port {} is already serving an active session",
+                            port_for_reject
+                        ),
+                        "ErrorID": 2556951u32
+                    });
+                    let body = match serde_json::to_string(&rejection) {
+                        Ok(s) => s + "\r\n",
+                        Err(_) => "{\"Error\":\"Secondary port already in use\"}\r\n".to_string(),
+                    };
+                    let _ = extra_socket.write_all(body.as_bytes()).await;
+                    let _ = extra_socket.shutdown().await;
+                }
+                Err(e) => {
+                    // Listener closed (likely because we're shutting down).
+                    eprintln!("Secondary listener on port {} closed: {}", port_for_reject, e);
+                    break;
+                }
             }
-        });
-    }
+        }
+    });
+
+    // Wait for the primary client session to finish.
+    let _ = serve_handle.await;
+    // Stop the reject task and drop the listener so the port is freed at the OS level.
+    reject_handle.abort();
+
+    // Return the port to the allocator for reuse.
+    port_allocator.lock().await.release(port);
+    qprintln!("✓ Released secondary port {} back to allocator", port);
+
+    Ok(())
 }
 
-async fn start_server(port: u16, mode: SimulatorMode) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = TcpListener::bind(&addr).await?;
-    println!("🤖 FANUC Simulator started on {}", addr);
-    println!("   Waiting for connections...\n");
+async fn start_server(
+    addr: SocketAddr,
+    secondary_port_base: u16,
+    mode: SimulatorMode,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let listener = TcpListener::bind(addr).await?;
+    qprintln!("🤖 FANUC Simulator started on {}", addr);
+    qprintln!("   Secondary data ports allocated from base {}", secondary_port_base);
+    qprintln!("   Waiting for connections...\n");
 
-    let new_port = Arc::new(Mutex::new(port + 1));
+    let port_allocator = Arc::new(Mutex::new(PortAllocator::new(secondary_port_base)));
     let sim_mode = Arc::new(mode);
+    // Use the primary bind IP for secondary listeners so they're reachable on the same interface.
+    let bind_ip = addr.ip();
 
     loop {
         let (socket, _) = match listener.accept().await {
@@ -1246,21 +1441,32 @@ async fn start_server(port: u16, mode: SimulatorMode) -> Result<(), Box<dyn Erro
             }
         };
 
-        let new_port = Arc::clone(&new_port);
+        let port_allocator_clone = Arc::clone(&port_allocator);
         let sim_mode_clone = Arc::clone(&sim_mode);
 
-        match handle_client(socket, new_port).await {
+        match handle_client(socket, Arc::clone(&port_allocator)).await {
             Ok(port) if port != 0 => {
                 // Start the secondary server and wait for it to be ready before continuing
                 // This ensures the server is listening before the client tries to connect
-                let secondary_addr = format!("0.0.0.0:{}", port);
-                match TcpListener::bind(&secondary_addr).await {
+                let secondary_addr = SocketAddr::new(bind_ip, port);
+                match TcpListener::bind(secondary_addr).await {
                     Ok(secondary_listener) => {
+                        let allocator_for_task = port_allocator_clone;
                         tokio::spawn(async move {
-                            start_secondary_server_with_listener(port, secondary_listener, sim_mode_clone).await
+                            let _ = start_secondary_server_with_listener(
+                                port,
+                                secondary_listener,
+                                sim_mode_clone,
+                                allocator_for_task,
+                            )
+                            .await;
                         });
                     }
-                    Err(e) => eprintln!("Failed to bind secondary server on port {}: {:?}", port, e),
+                    Err(e) => {
+                        eprintln!("Failed to bind secondary server on port {}: {:?}", port, e);
+                        // Release the allocated port since we couldn't bind it.
+                        port_allocator_clone.lock().await.release(port);
+                    }
                 }
             }
             Ok(_) => {}
@@ -1271,9 +1477,14 @@ async fn start_server(port: u16, mode: SimulatorMode) -> Result<(), Box<dyn Erro
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    // Parse command-line arguments
-    let args: Vec<String> = std::env::args().collect();
-    let mode = if args.len() > 1 && args[1] == "--realtime" {
+    // Parse command-line arguments via clap so --addr / --secondary-port-base /
+    // --quiet / --realtime are documented in --help.
+    let cli = Cli::parse();
+
+    // Latch the global quiet flag before any chatty prints occur.
+    QUIET.store(cli.quiet, Ordering::Relaxed);
+
+    let mode = if cli.realtime {
         SimulatorMode::Realtime
     } else {
         SimulatorMode::Immediate
@@ -1281,15 +1492,154 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     match mode {
         SimulatorMode::Immediate => {
-            println!("🤖 Starting FANUC Simulator in IMMEDIATE mode");
-            println!("   (Positions update instantly, return packets sent immediately)\n");
+            qprintln!("🤖 Starting FANUC Simulator in IMMEDIATE mode");
+            qprintln!("   (Positions update instantly, return packets sent immediately)\n");
         }
         SimulatorMode::Realtime => {
-            println!("🤖 Starting FANUC Simulator in REALTIME mode");
-            println!("   (Simulates actual robot timing, return packets sent after execution)\n");
+            qprintln!("🤖 Starting FANUC Simulator in REALTIME mode");
+            qprintln!("   (Simulates actual robot timing, return packets sent after execution)\n");
         }
     }
 
-    start_server(16001, mode).await?;
+    start_server(cli.addr, cli.secondary_port_base, mode).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    /// CLI default: `--addr` defaults to `0.0.0.0:16001` for backward compatibility.
+    #[test]
+    fn cli_default_addr_preserves_backward_compat() {
+        let cli = Cli::parse_from(["sim"]);
+        assert_eq!(cli.addr, SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 16001));
+        assert_eq!(cli.secondary_port_base, 16002);
+        assert!(!cli.quiet);
+        assert!(!cli.realtime);
+    }
+
+    /// CLI accepts a custom bind address and secondary-port base.
+    #[test]
+    fn cli_accepts_configurable_bind() {
+        let cli = Cli::parse_from([
+            "sim",
+            "--addr",
+            "127.0.0.1:17000",
+            "--secondary-port-base",
+            "17002",
+        ]);
+        assert_eq!(cli.addr.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(cli.addr.port(), 17000);
+        assert_eq!(cli.secondary_port_base, 17002);
+    }
+
+    /// CLI `--quiet` is parsed and toggles the global flag handle.
+    #[test]
+    fn cli_quiet_flag_parses() {
+        let cli = Cli::parse_from(["sim", "--quiet"]);
+        assert!(cli.quiet, "--quiet should set Cli::quiet = true");
+    }
+
+    /// `--realtime` still parses (backward-compat with the prior arg style).
+    #[test]
+    fn cli_realtime_flag_parses() {
+        let cli = Cli::parse_from(["sim", "--realtime"]);
+        assert!(cli.realtime);
+    }
+
+    /// Port allocator hands out the base port first and never duplicates.
+    #[test]
+    fn port_allocator_assigns_base_first() {
+        let mut alloc = PortAllocator::new(20000);
+        assert_eq!(alloc.allocate(), Some(20000));
+        assert_eq!(alloc.allocate(), Some(20001));
+        assert_eq!(alloc.allocate(), Some(20002));
+        assert_eq!(alloc.in_use_count(), 3);
+    }
+
+    /// Released ports are reused — the counter does NOT grow monotonically,
+    /// satisfying US-004a AC#3.
+    #[test]
+    fn port_allocator_reuses_released_ports() {
+        let mut alloc = PortAllocator::new(20000);
+        let p0 = alloc.allocate().unwrap();
+        let p1 = alloc.allocate().unwrap();
+        let p2 = alloc.allocate().unwrap();
+        assert_eq!((p0, p1, p2), (20000, 20001, 20002));
+
+        // Release the middle port and confirm the next allocate reuses it
+        // rather than growing to 20003.
+        alloc.release(p1);
+        assert_eq!(alloc.in_use_count(), 2);
+        let reused = alloc.allocate().unwrap();
+        assert_eq!(
+            reused, 20001,
+            "released port should be reused before allocating a fresh higher port"
+        );
+        assert_eq!(alloc.in_use_count(), 3);
+    }
+
+    /// Releasing all ports brings the in-use set fully back to empty so a
+    /// long-running sim under churn does not leak ports across many sessions.
+    #[test]
+    fn port_allocator_full_release_cycle() {
+        let mut alloc = PortAllocator::new(30000);
+        let ports: Vec<u16> = (0..10).map(|_| alloc.allocate().unwrap()).collect();
+        assert_eq!(alloc.in_use_count(), 10);
+        for p in &ports {
+            alloc.release(*p);
+        }
+        assert_eq!(alloc.in_use_count(), 0);
+        // After full release, next allocate should return the base port again.
+        assert_eq!(alloc.allocate(), Some(30000));
+    }
+
+    /// Releasing a port that was never allocated is a no-op (defensive).
+    #[test]
+    fn port_allocator_release_unknown_is_noop() {
+        let mut alloc = PortAllocator::new(40000);
+        alloc.release(40000); // never allocated
+        assert_eq!(alloc.in_use_count(), 0);
+        // And we can still allocate it cleanly afterwards.
+        assert_eq!(alloc.allocate(), Some(40000));
+    }
+
+    /// `qprintln!` is silenced when `QUIET == true` and active when `false`.
+    /// We exercise the gate logic (the actual stdout capture isn't worth the
+    /// complexity here — what matters is that the global flag is checked).
+    #[test]
+    fn quiet_flag_gates_qprintln() {
+        // Save and restore so this test doesn't leak state into others if
+        // they ever run on the same thread.
+        let prev = QUIET.load(Ordering::Relaxed);
+
+        QUIET.store(false, Ordering::Relaxed);
+        assert!(!QUIET.load(Ordering::Relaxed));
+        qprintln!("verbose output: should print when not quiet");
+
+        QUIET.store(true, Ordering::Relaxed);
+        assert!(QUIET.load(Ordering::Relaxed));
+        // This call should be suppressed — if --quiet did nothing, this would
+        // emit during a normal `cargo test` run.
+        qprintln!("SHOULD-NOT-APPEAR: quiet gate is broken if you see this");
+        qeprintln!("SHOULD-NOT-APPEAR: quiet gate is broken if you see this");
+
+        QUIET.store(prev, Ordering::Relaxed);
+    }
+
+    /// Smoke test: a configurable bind address can actually bind a tokio
+    /// `TcpListener`, matching what `start_server` does. We don't run the
+    /// full server (that would require a real client) — we just confirm the
+    /// SocketAddr from clap reaches a bind() call cleanly.
+    #[tokio::test]
+    async fn configurable_bind_actually_binds() {
+        let cli = Cli::parse_from(["sim", "--addr", "127.0.0.1:0"]); // :0 = OS picks free port
+        let listener = TcpListener::bind(cli.addr).await.expect("bind should succeed");
+        let local = listener.local_addr().expect("local_addr");
+        assert_eq!(local.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert!(local.port() > 0);
+    }
 }
