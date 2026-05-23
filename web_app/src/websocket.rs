@@ -496,7 +496,7 @@ impl WebSocketManager {
                                 MessageDirection::Received,
                                 if error_id != 0 { MessageType::Error } else { MessageType::Response },
                                 if error_id != 0 {
-                                    format!("{} error_id={}", resp_name, error_id)
+                                    format!("{} {}", resp_name, fanuc_rmi::format_error_id(error_id))
                                 } else {
                                     format!("{} completed", resp_name)
                                 },
@@ -505,7 +505,7 @@ impl WebSocketManager {
 
                             if error_id != 0 {
                                 set_error_log.update(|log| {
-                                    log.push(format!("Motion error: Seq:{} Err:{}", seq_id, error_id));
+                                    log.push(format!("Motion error Seq:{} {}", seq_id, fanuc_rmi::format_error_id(error_id)));
                                     if log.len() > 10 {
                                         log.remove(0);
                                     }
@@ -902,17 +902,16 @@ impl WebSocketManager {
                             }
                             // Add to error log
                             set_error_log.update(|log| {
-                                let error_msg = if let Some(ref raw) = raw_data {
-                                    // Include raw data for protocol errors
-                                    if let Some(id) = error_id {
-                                        format!("[{}] {} (ErrorID: {}) | Raw: {}", error_type, message, id, raw)
-                                    } else {
-                                        format!("[{}] {} | Raw: {}", error_type, message, raw)
-                                    }
-                                } else if let Some(id) = error_id {
-                                    format!("[{}] {} (ErrorID: {})", error_type, message, id)
-                                } else {
-                                    format!("[{}] {}", error_type, message)
+                                // Decode either the explicit error_id field or scan the raw payload.
+                                let decoded = error_id
+                                    .filter(|&id| id > 0)
+                                    .map(|id| fanuc_rmi::format_error_id(id as u32))
+                                    .or_else(|| raw_data.as_deref().and_then(fanuc_rmi::extract_and_format_error_id));
+                                let error_msg = match (&decoded, &raw_data) {
+                                    (Some(d), Some(raw)) => format!("[{}] {} [{}] | Raw: {}", error_type, message, d, raw),
+                                    (Some(d), None)      => format!("[{}] {} [{}]", error_type, message, d),
+                                    (None,    Some(raw)) => format!("[{}] {} | Raw: {}", error_type, message, raw),
+                                    (None,    None)      => format!("[{}] {}", error_type, message),
                                 };
                                 log.push(error_msg);
                                 if log.len() > 20 {

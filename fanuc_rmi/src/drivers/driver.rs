@@ -1555,13 +1555,20 @@ impl FanucDriver {
                 }
             }
             Err(e) => {
-                let error_msg = format!("Invalid JSON ({}): {}", e, line);
+                let decoded = crate::extract_and_format_error_id(&line);
+                let error_msg = match &decoded {
+                    Some(d) => format!("Invalid JSON ({}) [{}]: {}", e, d, line),
+                    None => format!("Invalid JSON ({}): {}", e, line),
+                };
                 self.log_error(error_msg.clone()).await;
 
                 // Broadcast protocol error to subscribers
                 let protocol_error = ProtocolError {
                     error_type: "protocol".to_string(),
-                    message: format!("Failed to parse robot response: {}", e),
+                    message: match &decoded {
+                        Some(d) => format!("Failed to parse robot response [{}]: {}", d, e),
+                        None => format!("Failed to parse robot response: {}", e),
+                    },
                     raw_data: Some(line.to_string()),
                 };
                 if let Err(send_err) = self.error_tx.send(protocol_error) {

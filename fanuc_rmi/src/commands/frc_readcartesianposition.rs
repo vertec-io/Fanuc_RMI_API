@@ -28,12 +28,12 @@ impl FrcReadCartesianPosition{
 pub struct FrcReadCartesianPositionResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
-    #[serde(rename = "TimeTag")]
+    #[serde(rename = "TimeTag", default)]
     pub time_tag: u32,
-    #[serde(rename = "Configuration")]
+    #[serde(rename = "Configuration", default)]
     pub config: Configuration,
-    #[serde(rename = "Position")]
+    #[serde(rename = "Position", default)]
     pub pos: Position,
-    #[serde(rename = "Group")]
+    #[serde(rename = "Group", default)]
     pub group: u8,
 }

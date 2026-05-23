@@ -24,9 +24,9 @@ impl FrcReadGIN {
 pub struct FrcReadGINResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
-    #[serde(rename = "PortNumber")]
+    #[serde(rename = "PortNumber", default)]
     pub port_number: u16,
-    #[serde(rename = "PortValue")]
+    #[serde(rename = "PortValue", default)]
     pub port_value: u32,
 }
 

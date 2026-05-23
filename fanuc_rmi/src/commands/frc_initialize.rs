@@ -31,6 +31,6 @@ impl Default for FrcInitialize {
 pub struct FrcInitializeResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
-    #[serde(rename = "GroupMask")]
+    #[serde(rename = "GroupMask", default)]
     pub group_mask: u16,
 }

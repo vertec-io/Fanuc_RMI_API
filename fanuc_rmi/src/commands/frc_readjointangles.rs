@@ -34,11 +34,11 @@ where
 pub struct FrcReadJointAnglesResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
-    #[serde(rename = "TimeTag")]
+    #[serde(rename = "TimeTag", default)]
     pub time_tag: u32,
     /// Joint angles - accepts both "JointAngle" (real robot) and "JointAngles" (simulator)
     #[serde(alias = "JointAngle", rename = "JointAngles", deserialize_with = "deserialize_joint_angles")]
     pub joint_angles: JointAngles,
-    #[serde(rename = "Group")]
+    #[serde(rename = "Group", default)]
     pub group: u8,
 }

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 pub struct FrcReadTCPSpeedResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
-    #[serde(rename = "TimeTag")]
+    #[serde(rename = "TimeTag", default)]
     pub time_tag: u32,
-    #[serde(rename = "Speed")]
+    #[serde(rename = "Speed", default)]
     pub speed: f32,
 }

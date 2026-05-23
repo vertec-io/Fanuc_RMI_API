@@ -32,6 +32,6 @@ pub struct FrcWriteUToolDataResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
     /// Per documentation: byteValue2 (u8)
-    #[serde(rename = "Group")]
+    #[serde(rename = "Group", default)]
     pub group: u8,
 }

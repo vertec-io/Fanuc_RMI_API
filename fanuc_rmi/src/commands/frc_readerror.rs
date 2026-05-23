@@ -30,8 +30,8 @@ impl Default for FrcReadError {
 pub struct FrcReadErrorResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u16,
-    #[serde(rename = "Count")]
+    #[serde(rename = "Count", default)]
     pub count: u8,
-    #[serde(rename = "ErrorData")]
+    #[serde(rename = "ErrorData", default)]
     pub error_data: String
 }

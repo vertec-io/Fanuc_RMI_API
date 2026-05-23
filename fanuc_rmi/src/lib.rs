@@ -45,7 +45,7 @@ pub mod protocol {
 
 
 #[cfg_attr(feature = "DTO", mirror_dto)]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct FrameData {
     pub x: f64,
@@ -188,7 +188,7 @@ impl Default for Position {
 }
 
 #[cfg_attr(feature = "DTO", mirror_dto)]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct JointAngles {
     pub j1: f32,

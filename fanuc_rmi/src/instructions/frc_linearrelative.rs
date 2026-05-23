@@ -50,6 +50,6 @@ impl FrcLinearRelative{
 pub struct FrcLinearRelativeResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
-    #[serde(rename = "SequenceID")]
+    #[serde(rename = "SequenceID", default)]
     pub sequence_id: u32,
 }

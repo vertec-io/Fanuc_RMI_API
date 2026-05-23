@@ -23,12 +23,12 @@ impl FrcGetUFrameUTool{
 #[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcGetUFrameUToolResponse {
-    #[serde(rename = "UFrameNumber")]
+    #[serde(rename = "UFrameNumber", default)]
     pub u_frame_number: u8,
-    #[serde(rename = "UToolNumber")]
+    #[serde(rename = "UToolNumber", default)]
     pub u_tool_number: u8,
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
-    #[serde(rename = "Group")]
+    #[serde(rename = "Group", default)]
     pub group: u16,
 }

@@ -30,11 +30,11 @@ pub struct FrcReadUToolDataResponse {
     pub error_id: u32,
     /// Note: Manual says "UToolNumber" but real robot sends "ToolNumber"
     /// Per documentation: byteValue (u8, 0-255)
-    #[serde(rename = "ToolNumber")]
+    #[serde(rename = "ToolNumber", default)]
     pub tool_number: u8,
-    #[serde(rename = "Frame")]
+    #[serde(rename = "Frame", default)]
     pub frame: FrameData,
     /// Per documentation: byteValue2 (u8)
-    #[serde(rename = "Group")]
+    #[serde(rename = "Group", default)]
     pub group: u8,
 }

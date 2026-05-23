@@ -29,6 +29,6 @@ impl FrcSetUFrameUTool{
 pub struct FrcSetUFrameUToolResponse {
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
-    #[serde(rename = "Group")]
+    #[serde(rename = "Group", default)]
     pub group: u16,
 }

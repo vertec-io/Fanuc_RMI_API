@@ -27,12 +27,12 @@ impl FrcReadPositionRegister{
 pub struct FrcReadPositionRegisterResponse { 
     #[serde(rename = "ErrorID")]
     pub error_id: u32,
-    #[serde(rename = "RegisterNumber")]
+    #[serde(rename = "RegisterNumber", default)]
     pub register_number: i16,
-    #[serde(rename = "Configuration")]
+    #[serde(rename = "Configuration", default)]
     pub config: Configuration,
-    #[serde(rename = "Position")]
+    #[serde(rename = "Position", default)]
     pub position: Position,
-    #[serde(rename = "Group")]
+    #[serde(rename = "Group", default)]
     pub group: i16,
 }
