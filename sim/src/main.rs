@@ -35,6 +35,16 @@ use fanuc_rmi::{
     FrameData, Configuration, Position, JointAngles,
 };
 
+// US-004c: HTTP I/O stimulus sidecar (axum 0.8).
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::post,
+    Json, Router,
+};
+use serde::Deserialize;
+
 /// Maximum number of motion instructions allowed to be in-flight
 /// simultaneously (queued + currently executing). The 9th queued
 /// instruction blocks until one of the first 8 completes.
@@ -147,6 +157,22 @@ pub struct Cli {
     /// packets sent after execution). Default is immediate mode.
     #[arg(long, default_value_t = false)]
     pub realtime: bool,
+
+    /// Port for the HTTP I/O stimulus sidecar used by Playwright/E2E tests
+    /// (US-004c). Set to `0` to disable the sidecar entirely (default is
+    /// `16080`).
+    ///
+    /// Endpoints exposed when enabled (all bound to `127.0.0.1`):
+    ///   * POST /sim/io/din/{port}   body `{"value": bool}`
+    ///   * POST /sim/io/ain/{port}   body `{"value": f64}`
+    ///   * POST /sim/io/gin/{port}   body `{"value": u32}`
+    ///   * POST /sim/fault           body `{"error_id": u32}`  (one-shot)
+    ///
+    /// I/O writes are mirrored into every currently-active RMI session's
+    /// `RobotState`. The one-shot fault is consumed by the next dispatched
+    /// command on any session and then cleared.
+    #[arg(long, default_value_t = 16080)]
+    pub io_sidecar_port: u16,
 }
 
 /// Helper to serialize a CommandResponse to JSON
@@ -309,6 +335,10 @@ struct RobotState {
     aout: [f64; 256],  // Analog outputs
     gin: [u32; 256],   // Group inputs (simulated)
     gout: [u32; 256],  // Group outputs
+    /// One-shot fault injection (US-004c). When `Some(error_id)`, the next
+    /// dispatched Command / Instruction returns this `error_id` and clears
+    /// the field. Set via `POST /sim/fault` on the HTTP sidecar.
+    next_fault_error_id: Option<u32>,
 }
 
 impl Default for RobotState {
@@ -386,6 +416,7 @@ impl RobotState {
             aout: [0.0; 256],
             gin: [0; 256],
             gout: [0; 256],
+            next_fault_error_id: None,
         }
     }
 
@@ -846,6 +877,42 @@ async fn handle_secondary_client(
                             continue;
                         }
                     };
+
+                    // US-004c: check-and-clear the one-shot fault BEFORE
+                    // dispatch. If the HTTP sidecar armed a fault via
+                    // `POST /sim/fault`, the very next Command / Instruction
+                    // on this session returns an error response carrying
+                    // that `error_id` and the latch clears. We echo back
+                    // the original Command / Instruction / Communication
+                    // tag so the client can correlate the response.
+                    let armed_fault = {
+                        let mut state = robot_state.lock().await;
+                        state.next_fault_error_id.take()
+                    };
+                    if let Some(error_id) = armed_fault {
+                        let cmd_tag = request_json
+                            .get("Command")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| request_json.get("Instruction").and_then(|v| v.as_str()))
+                            .or_else(|| request_json.get("Communication").and_then(|v| v.as_str()))
+                            .unwrap_or("FRC_Unknown");
+                        let seq_id = request_json
+                            .get("SequenceID")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32;
+                        let fault_json = json!({
+                            "Command": cmd_tag,
+                            "ErrorID": error_id,
+                            "SequenceID": seq_id,
+                        });
+                        qeprintln!(
+                            "⚡ Sidecar one-shot fault fired: error_id={} on {} (seq={})",
+                            error_id, cmd_tag, seq_id
+                        );
+                        let body = serde_json::to_string(&fault_json)? + "\r\n";
+                        socket.write_all(body.as_bytes()).await?;
+                        continue;
+                    }
 
                     let mut response_json = match request_json["Command"].as_str() {
                         Some("FRC_Initialize") => {
@@ -1680,9 +1747,17 @@ async fn start_secondary_server_with_listener(
     listener: TcpListener,
     mode: Arc<SimulatorMode>,
     port_allocator: Arc<Mutex<PortAllocator>>,
+    sessions: SessionRegistry,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     // Create shared robot state for this connection
     let robot_state = Arc::new(Mutex::new(RobotState::new((*mode).clone())));
+
+    // US-004c: register this session so the HTTP I/O sidecar can mutate
+    // its `RobotState`. Deregistered below once the session ends.
+    sessions
+        .lock()
+        .await
+        .insert(port, Arc::clone(&robot_state));
 
     // Accept the first connection - this is the one logical client for this port.
     let (socket, _) = match listener.accept().await {
@@ -1690,6 +1765,7 @@ async fn start_secondary_server_with_listener(
         Err(e) => {
             eprintln!("Failed to accept primary secondary connection on port {}: {}", port, e);
             // Release the port even on accept failure so it isn't leaked.
+            sessions.lock().await.remove(&port);
             port_allocator.lock().await.release(port);
             return Err(Box::new(e));
         }
@@ -1742,6 +1818,10 @@ async fn start_secondary_server_with_listener(
     // Stop the reject task and drop the listener so the port is freed at the OS level.
     reject_handle.abort();
 
+    // US-004c: deregister from the session registry so the sidecar stops
+    // mirroring writes into a dead state.
+    sessions.lock().await.remove(&port);
+
     // Return the port to the allocator for reuse.
     port_allocator.lock().await.release(port);
     qprintln!("✓ Released secondary port {} back to allocator", port);
@@ -1749,10 +1829,174 @@ async fn start_secondary_server_with_listener(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// US-004c: HTTP I/O stimulus sidecar.
+//
+// Playwright tests (and other E2E harnesses) need to drive simulated robot
+// inputs (DIN / AIN / GIN) and inject one-shot faults without going through
+// the FANUC RMI TCP protocol. The sidecar is a small axum app bound to
+// 127.0.0.1:<--io-sidecar-port> that mutates the same `Arc<Mutex<RobotState>>`
+// the secondary-server task uses, so subsequent `FRC_ReadDIN` / `FRC_ReadAIN`
+// / `FRC_ReadGIN` requests observe the stimulus.
+//
+// Because every secondary client allocates its own `RobotState`, the sidecar
+// holds a *registry* of all currently-active states. A write fans out to
+// every registered state so the typical Playwright workflow (1 sim, 1 RMI
+// client) always sees the value regardless of which secondary port the test
+// happened to land on. The registry is keyed by the secondary port so
+// disconnects can deregister without scanning by pointer identity.
+// ---------------------------------------------------------------------------
+
+/// Registry of every currently-active secondary-session `RobotState`, keyed by
+/// the session's secondary port. Updated by `start_secondary_server_with_listener`
+/// on session start / end and read by the HTTP sidecar handlers.
+type SessionRegistry = Arc<Mutex<std::collections::HashMap<u16, Arc<Mutex<RobotState>>>>>;
+
+/// Shared state handed to every axum handler.
+#[derive(Clone)]
+struct SidecarState {
+    sessions: SessionRegistry,
+}
+
+/// Body shape for `POST /sim/io/din/{port}`.
+#[derive(Debug, Deserialize)]
+struct DinBody {
+    value: bool,
+}
+
+/// Body shape for `POST /sim/io/ain/{port}`. `value` is `f64` to match
+/// `RobotState::ain` (NOT `i16` — the simulator stores analog as f64).
+#[derive(Debug, Deserialize)]
+struct AinBody {
+    value: f64,
+}
+
+/// Body shape for `POST /sim/io/gin/{port}`. `value` is `u32` to match
+/// `RobotState::gin`.
+#[derive(Debug, Deserialize)]
+struct GinBody {
+    value: u32,
+}
+
+/// Body shape for `POST /sim/fault`.
+#[derive(Debug, Deserialize)]
+struct FaultBody {
+    error_id: u32,
+}
+
+/// `POST /sim/io/din/{port}` — set `state.din[port] = value` in every active session.
+async fn handle_set_din(
+    State(state): State<SidecarState>,
+    Path(port): Path<u16>,
+    Json(body): Json<DinBody>,
+) -> impl IntoResponse {
+    if port as usize >= 256 {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "port out of range (0..256)"}))).into_response();
+    }
+    let sessions = state.sessions.lock().await;
+    let mut touched = 0usize;
+    for rs in sessions.values() {
+        let mut s = rs.lock().await;
+        s.din[port as usize] = body.value;
+        touched += 1;
+    }
+    (StatusCode::OK, Json(json!({"ok": true, "port": port, "value": body.value, "sessions_updated": touched}))).into_response()
+}
+
+/// `POST /sim/io/ain/{port}` — set `state.ain[port] = value` in every active session.
+async fn handle_set_ain(
+    State(state): State<SidecarState>,
+    Path(port): Path<u16>,
+    Json(body): Json<AinBody>,
+) -> impl IntoResponse {
+    if port as usize >= 256 {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "port out of range (0..256)"}))).into_response();
+    }
+    let sessions = state.sessions.lock().await;
+    let mut touched = 0usize;
+    for rs in sessions.values() {
+        let mut s = rs.lock().await;
+        s.ain[port as usize] = body.value;
+        touched += 1;
+    }
+    (StatusCode::OK, Json(json!({"ok": true, "port": port, "value": body.value, "sessions_updated": touched}))).into_response()
+}
+
+/// `POST /sim/io/gin/{port}` — set `state.gin[port] = value` in every active session.
+async fn handle_set_gin(
+    State(state): State<SidecarState>,
+    Path(port): Path<u16>,
+    Json(body): Json<GinBody>,
+) -> impl IntoResponse {
+    if port as usize >= 256 {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "port out of range (0..256)"}))).into_response();
+    }
+    let sessions = state.sessions.lock().await;
+    let mut touched = 0usize;
+    for rs in sessions.values() {
+        let mut s = rs.lock().await;
+        s.gin[port as usize] = body.value;
+        touched += 1;
+    }
+    (StatusCode::OK, Json(json!({"ok": true, "port": port, "value": body.value, "sessions_updated": touched}))).into_response()
+}
+
+/// `POST /sim/fault` — arm a one-shot fault on every active session. The next
+/// `Command` / `Instruction` dispatched on a session returns an error response
+/// carrying `error_id` and clears the latch. This is a *global* one-shot
+/// (per-session) — every active session is armed; the first command on each
+/// consumes its latch independently.
+async fn handle_set_fault(
+    State(state): State<SidecarState>,
+    Json(body): Json<FaultBody>,
+) -> impl IntoResponse {
+    let sessions = state.sessions.lock().await;
+    let mut armed = 0usize;
+    for rs in sessions.values() {
+        let mut s = rs.lock().await;
+        s.next_fault_error_id = Some(body.error_id);
+        armed += 1;
+    }
+    (StatusCode::OK, Json(json!({"ok": true, "error_id": body.error_id, "sessions_armed": armed}))).into_response()
+}
+
+/// Build the axum app. Split out so a future test can call it without binding.
+fn build_sidecar_app(state: SidecarState) -> Router {
+    Router::new()
+        .route("/sim/io/din/{port}", post(handle_set_din))
+        .route("/sim/io/ain/{port}", post(handle_set_ain))
+        .route("/sim/io/gin/{port}", post(handle_set_gin))
+        .route("/sim/fault", post(handle_set_fault))
+        .with_state(state)
+}
+
+/// Spawn the sidecar listener. Returns once the listener is bound (or
+/// immediately if `port == 0`, which disables the sidecar).
+async fn start_io_sidecar(
+    port: u16,
+    sessions: SessionRegistry,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    if port == 0 {
+        qprintln!("ℹ️ HTTP I/O sidecar disabled (--io-sidecar-port 0)");
+        return Ok(());
+    }
+    let addr: SocketAddr = SocketAddr::from(([127, 0, 0, 1], port));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    qprintln!("🩺 HTTP I/O sidecar bound on http://{}", addr);
+    let app = build_sidecar_app(SidecarState { sessions });
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            eprintln!("HTTP I/O sidecar terminated: {}", e);
+        }
+    });
+    Ok(())
+}
+
 async fn start_server(
     addr: SocketAddr,
     secondary_port_base: u16,
     mode: SimulatorMode,
+    sessions: SessionRegistry,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let listener = TcpListener::bind(addr).await?;
     qprintln!("🤖 FANUC Simulator started on {}", addr);
@@ -1775,6 +2019,7 @@ async fn start_server(
 
         let port_allocator_clone = Arc::clone(&port_allocator);
         let sim_mode_clone = Arc::clone(&sim_mode);
+        let sessions_for_task = Arc::clone(&sessions);
 
         match handle_client(socket, Arc::clone(&port_allocator)).await {
             Ok(port) if port != 0 => {
@@ -1790,6 +2035,7 @@ async fn start_server(
                                 secondary_listener,
                                 sim_mode_clone,
                                 allocator_for_task,
+                                sessions_for_task,
                             )
                             .await;
                         });
@@ -1833,7 +2079,15 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     }
 
-    start_server(cli.addr, cli.secondary_port_base, mode).await?;
+    // US-004c: spin up the HTTP I/O sidecar before the FANUC TCP server
+    // starts accepting clients. The session registry is shared between
+    // the secondary servers (which insert/remove on connect/disconnect)
+    // and the sidecar handlers (which fan I/O writes out to every active
+    // session).
+    let sessions: SessionRegistry = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    start_io_sidecar(cli.io_sidecar_port, Arc::clone(&sessions)).await?;
+
+    start_server(cli.addr, cli.secondary_port_base, mode, sessions).await?;
     Ok(())
 }
 
@@ -2208,5 +2462,247 @@ mod tests {
             wait_until(|| sem.available_permits() == MOTION_IN_FLIGHT_CAP).await,
             "permits should return to full count after all drops",
         );
+    }
+
+    // -------------------------------------------------------------------
+    // US-004c: HTTP I/O stimulus sidecar
+    //
+    // These tests exercise the sidecar handlers directly with a hand-built
+    // [`SidecarState`] registry and assert that the same `RobotState`
+    // arrays consulted by `FRC_ReadDIN` / `FRC_ReadAIN` / `FRC_ReadGIN`
+    // (`state.din[port]`, `state.ain[port]`, `state.gin[port]`) carry the
+    // value the sidecar wrote. We then re-execute the exact branch the
+    // read handlers use to construct the response, proving the round-trip.
+    //
+    // The dispatch loop's one-shot fault check is exercised separately via
+    // the same `state.next_fault_error_id` field the dispatch arm reads.
+    // -------------------------------------------------------------------
+
+    /// Helper: build a sidecar state containing one RobotState registered
+    /// under a fake secondary port. Returns the state for handler calls
+    /// plus the `Arc<Mutex<RobotState>>` for read-side assertions.
+    fn make_sidecar_with_one_session() -> (SidecarState, Arc<Mutex<RobotState>>) {
+        let rs = Arc::new(Mutex::new(RobotState::new(SimulatorMode::Immediate)));
+        let mut map = std::collections::HashMap::new();
+        map.insert(16002u16, Arc::clone(&rs));
+        let sessions: SessionRegistry = Arc::new(Mutex::new(map));
+        (SidecarState { sessions }, rs)
+    }
+
+    /// US-004c AC#3, AC#7: `POST /sim/io/din/{port}` writes to
+    /// `state.din[port]`, and the FRC_ReadDIN branch (`state.din[port]`)
+    /// reads back the same value.
+    #[tokio::test]
+    async fn sidecar_din_set_is_visible_to_read_din() {
+        let (sidecar, rs) = make_sidecar_with_one_session();
+
+        // Sanity: starts false.
+        assert!(!rs.lock().await.din[5]);
+
+        // Drive the handler exactly the way axum would: Path-extracted
+        // port, JSON body.
+        let resp = handle_set_din(
+            State(sidecar.clone()),
+            Path(5u16),
+            Json(DinBody { value: true }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Read back the same field FRC_ReadDIN consults at sim/src/main.rs:
+        // `let port_value = if port_num < 256 { state.din[port_num] } else { false };`
+        let state = rs.lock().await;
+        assert!(
+            state.din[5],
+            "sidecar write must be visible at state.din[5] (FRC_ReadDIN read path)"
+        );
+    }
+
+    /// US-004c AC#4, AC#7: `POST /sim/io/ain/{port}` writes to
+    /// `state.ain[port]` (f64), and the FRC_ReadAIN branch reads back the
+    /// same value.
+    #[tokio::test]
+    async fn sidecar_ain_set_is_visible_to_read_ain() {
+        let (sidecar, rs) = make_sidecar_with_one_session();
+        assert_eq!(rs.lock().await.ain[3], 0.0);
+
+        let resp = handle_set_ain(
+            State(sidecar.clone()),
+            Path(3u16),
+            Json(AinBody { value: 12.5 }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let state = rs.lock().await;
+        let read_value = if 3 < 256 { state.ain[3] } else { 0.0 };
+        assert!(
+            (read_value - 12.5).abs() < f64::EPSILON,
+            "FRC_ReadAIN should observe 12.5, got {}",
+            read_value
+        );
+    }
+
+    /// US-004c AC#5, AC#7: `POST /sim/io/gin/{port}` writes to
+    /// `state.gin[port]` (u32), and the FRC_ReadGIN branch reads back the
+    /// same value.
+    #[tokio::test]
+    async fn sidecar_gin_set_is_visible_to_read_gin() {
+        let (sidecar, rs) = make_sidecar_with_one_session();
+        assert_eq!(rs.lock().await.gin[2], 0);
+
+        let resp = handle_set_gin(
+            State(sidecar.clone()),
+            Path(2u16),
+            Json(GinBody { value: 42 }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let state = rs.lock().await;
+        let read_value = if 2 < 256 { state.gin[2] } else { 0 };
+        assert_eq!(
+            read_value, 42,
+            "FRC_ReadGIN should observe 42, got {}",
+            read_value
+        );
+    }
+
+    /// US-004c AC#6: `POST /sim/fault` arms `state.next_fault_error_id`
+    /// on every registered session. The dispatch loop's check-and-clear
+    /// (`state.next_fault_error_id.take()`) then surfaces the error on
+    /// the next command.
+    #[tokio::test]
+    async fn sidecar_fault_arms_one_shot_on_all_sessions() {
+        // Build a registry with two sessions to prove fan-out.
+        let rs_a = Arc::new(Mutex::new(RobotState::new(SimulatorMode::Immediate)));
+        let rs_b = Arc::new(Mutex::new(RobotState::new(SimulatorMode::Immediate)));
+        let mut map = std::collections::HashMap::new();
+        map.insert(16002u16, Arc::clone(&rs_a));
+        map.insert(16003u16, Arc::clone(&rs_b));
+        let sessions: SessionRegistry = Arc::new(Mutex::new(map));
+        let sidecar = SidecarState { sessions };
+
+        // Initially unarmed.
+        assert!(rs_a.lock().await.next_fault_error_id.is_none());
+        assert!(rs_b.lock().await.next_fault_error_id.is_none());
+
+        let resp = handle_set_fault(
+            State(sidecar.clone()),
+            Json(FaultBody { error_id: 12345 }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Both sessions armed.
+        assert_eq!(rs_a.lock().await.next_fault_error_id, Some(12345));
+        assert_eq!(rs_b.lock().await.next_fault_error_id, Some(12345));
+
+        // Simulate the dispatch loop's check-and-clear on session A only.
+        let armed = rs_a.lock().await.next_fault_error_id.take();
+        assert_eq!(armed, Some(12345), "dispatch loop must consume the latch");
+        assert!(
+            rs_a.lock().await.next_fault_error_id.is_none(),
+            "fault is one-shot — must clear after a single consumption"
+        );
+
+        // Session B's latch remains armed independently (per-session one-shot).
+        assert_eq!(rs_b.lock().await.next_fault_error_id, Some(12345));
+    }
+
+    /// US-004c AC#7: a fan-out write reaches every active session in the
+    /// registry, not just one. Mirrors the typical Playwright workflow
+    /// where a test fixture sets I/O *before* the test's RMI client has
+    /// even connected to its specific secondary port.
+    #[tokio::test]
+    async fn sidecar_write_fans_out_to_all_sessions() {
+        let rs_a = Arc::new(Mutex::new(RobotState::new(SimulatorMode::Immediate)));
+        let rs_b = Arc::new(Mutex::new(RobotState::new(SimulatorMode::Immediate)));
+        let mut map = std::collections::HashMap::new();
+        map.insert(16002u16, Arc::clone(&rs_a));
+        map.insert(16003u16, Arc::clone(&rs_b));
+        let sessions: SessionRegistry = Arc::new(Mutex::new(map));
+        let sidecar = SidecarState { sessions };
+
+        let _ = handle_set_din(
+            State(sidecar.clone()),
+            Path(10u16),
+            Json(DinBody { value: true }),
+        )
+        .await
+        .into_response();
+
+        assert!(rs_a.lock().await.din[10]);
+        assert!(rs_b.lock().await.din[10]);
+    }
+
+    /// US-004c AC#1: the CLI advertises `--io-sidecar-port` with the
+    /// documented default of 16080.
+    #[test]
+    fn cli_io_sidecar_port_default() {
+        let cli = Cli::parse_from(["sim"]);
+        assert_eq!(cli.io_sidecar_port, 16080);
+    }
+
+    /// US-004c AC#2: `--io-sidecar-port 0` disables the sidecar — the
+    /// runtime guard is the `if port == 0 { return Ok(()) }` short-circuit
+    /// in `start_io_sidecar`. We exercise the disabled branch here so a
+    /// future refactor that drops the guard fails this test.
+    #[tokio::test]
+    async fn sidecar_disabled_when_port_zero() {
+        let sessions: SessionRegistry = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        // Must complete without binding a listener or panicking.
+        let result = start_io_sidecar(0, sessions).await;
+        assert!(result.is_ok(), "port 0 must be a clean no-op");
+    }
+
+    /// US-004c AC#3-5: an out-of-range port (>= 256) is rejected with
+    /// `400 Bad Request` and does not mutate any session.
+    #[tokio::test]
+    async fn sidecar_rejects_port_out_of_range() {
+        let (sidecar, rs) = make_sidecar_with_one_session();
+
+        let resp = handle_set_din(
+            State(sidecar.clone()),
+            Path(256u16),
+            Json(DinBody { value: true }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // No mutation occurred — every entry still false.
+        assert!(rs.lock().await.din.iter().all(|&b| !b));
+    }
+
+    /// US-004c AC#1-2: the sidecar binds an actual TCP listener on
+    /// 127.0.0.1 when a non-zero port is supplied. We pick an ephemeral
+    /// port via `--io-sidecar-port`-style integer to confirm the bind
+    /// path works end-to-end.
+    #[tokio::test]
+    async fn sidecar_binds_listener_when_enabled() {
+        // We can't use port 0 here (that's the disable sentinel), so pick
+        // a high port unlikely to clash. If it does, the test reruns are
+        // fine — failure mode is loud (bind error returned).
+        let sessions: SessionRegistry = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let port = 18_080u16;
+        let result = start_io_sidecar(port, Arc::clone(&sessions)).await;
+        assert!(
+            result.is_ok(),
+            "start_io_sidecar({}) should bind 127.0.0.1:{} cleanly: {:?}",
+            port, port, result.err()
+        );
+        // Sanity: confirm something is listening by attempting a connection.
+        let _stream = tokio::time::timeout(
+            Duration::from_secs(1),
+            tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        )
+        .await
+        .expect("connect within 1s")
+        .expect("sidecar should accept a TCP connection");
     }
 }

@@ -20,3 +20,6 @@ nalgebra = "0.33"
 clap = { version = "4", features = ["derive"] }
 fanuc_rmi = { path = "../fanuc_rmi" }
 web_common = { path = "../web_common" }
+# US-004c: HTTP I/O sidecar (axum 0.8 matches the COMET1 PLC simulator
+# sidecar for ecosystem parity).
+axum = "0.8"
