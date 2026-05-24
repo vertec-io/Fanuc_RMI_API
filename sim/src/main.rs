@@ -153,9 +153,19 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub quiet: bool,
 
-    /// Run in realtime mode (motion duration based on distance/speed, return
-    /// packets sent after execution). Default is immediate mode.
+    /// Force immediate mode (instant position updates, return packets sent
+    /// immediately). Default is realtime mode (motion duration based on
+    /// distance/speed). Set this only for unit-test scenarios where you
+    /// need deterministic single-tick completion; production / E2E /
+    /// COMET1 should always use the default realtime mode.
     #[arg(long, default_value_t = false)]
+    pub immediate: bool,
+
+    /// Deprecated alias — realtime is now the default. Kept for backward
+    /// compatibility with `xtask sim-up` and `start_simulators.bat` callers
+    /// that still pass `--realtime` explicitly. Has no effect (the default
+    /// is already realtime); use `--immediate` to opt OUT of realtime.
+    #[arg(long, default_value_t = false, hide = true)]
     pub realtime: bool,
 
     /// Port for the HTTP I/O stimulus sidecar used by Playwright/E2E tests
@@ -2087,11 +2097,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Latch the global quiet flag before any chatty prints occur.
     QUIET.store(cli.quiet, Ordering::Relaxed);
 
-    let mode = if cli.realtime {
-        SimulatorMode::Realtime
-    } else {
+    // Default is REALTIME (motion durations honor distance/speed). Operator
+    // must explicitly opt out via --immediate. --realtime is a deprecated
+    // no-op kept so existing launch scripts (xtask sim-up,
+    // start_simulators.bat) don't break.
+    let mode = if cli.immediate {
         SimulatorMode::Immediate
+    } else {
+        SimulatorMode::Realtime
     };
+    let _ = cli.realtime; // explicitly acknowledge deprecated flag
 
     match mode {
         SimulatorMode::Immediate => {
