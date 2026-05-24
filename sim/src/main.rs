@@ -463,15 +463,18 @@ async fn handle_client(
             };
             qprintln!("✓ Client connected, assigned port {}", port);
 
+            // US-004d: real FANUC controllers return ErrorID=0 on a successful
+            // FRC_Connect handshake. The previous value of 1 was incorrect and
+            // broke clients that strictly check ErrorID==0 for success.
             let response = CommunicationResponse::FrcConnect(FrcConnectResponse {
-                error_id: 1,
+                error_id: 0,
                 port_number: port as u32,
                 major_version: 1,
                 minor_version: 0,
             });
             serde_json::to_value(&response).unwrap_or_else(|e| {
                 eprintln!("Failed to serialize FRC_Connect response: {}", e);
-                serde_json::json!({"Communication": "FRC_Connect", "ErrorID": 1, "PortNumber": port, "MajorVersion": 1, "MinorVersion": 0})
+                serde_json::json!({"Communication": "FRC_Connect", "ErrorID": 0, "PortNumber": port, "MajorVersion": 1, "MinorVersion": 0})
             })
         }
         _ => {
@@ -1294,6 +1297,28 @@ async fn handle_secondary_client(
                             let response = CommandResponse::FrcWriteGOUT(FrcWriteGOUTResponse {
                                 error_id: 0,
                             });
+                            serialize_response(response)
+                        }
+                        Some("FRC_ReadError") => {
+                            // US-004d: implement FRC_ReadError (previously fell
+                            // through to the Unknown arm). Returns the current
+                            // pending error from RobotState — i.e. an armed but
+                            // not-yet-fired sidecar fault — or 0 when no error
+                            // is latched. Reading the error does NOT clear the
+                            // one-shot latch; that still fires on the next
+                            // Command / Instruction per US-004c semantics.
+                            let cmd: FrcReadError = serde_json::from_value(request_json.clone())
+                                .unwrap_or(FrcReadError { count: 1 });
+                            let pending_error = {
+                                let state = robot_state.lock().await;
+                                state.next_fault_error_id.unwrap_or(0)
+                            };
+                            let response = CommandResponse::FrcReadError(FrcReadErrorResponse {
+                                error_id: pending_error as u16,
+                                count: cmd.count,
+                                error_data: String::new(),
+                            });
+                            qprintln!("📖 FRC_ReadError: count={} error_id={}", cmd.count, pending_error);
                             serialize_response(response)
                         }
                         _ => {
