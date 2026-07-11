@@ -630,9 +630,20 @@ impl FanucDriver {
     /// # }
     /// ```
     pub async fn program_pause(&self) -> Result<(), String> {
-        self.log_info("Program pause: aborting RMI program...").await;
+        self.log_info("Program pause: snapshotting unexecuted set before abort...").await;
 
-        // Step 1: Send abort to terminate RMI_MOVE program
+        // Step 1: Snapshot the unexecuted program set (in-flight + queued) and stop
+        // transmitting this program's points, BEFORE the abort. Ordering matters:
+        // this ProgramPause command is enqueued ahead of the FRC_Abort below on the
+        // same FIFO channel, so by the time the abort reaches the controller the send
+        // loop has already drained this program's queued points into the replay set —
+        // none can leak into the next TP program carrying a stale sequence id. This is
+        // driver-internal and is not sent to the controller.
+        let pause_packet = SendPacket::DriverCommand(DriverCommand::ProgramPause);
+        self.send_packet(pause_packet, PacketPriority::Immediate)?;
+
+        // Step 2: Abort the RMI_MOVE program on the controller.
+        self.log_info("Aborting RMI program...").await;
         let abort_response = self.abort().await?;
         if abort_response.error_id != 0 {
             let msg = format!("Program pause abort failed with error: {}", abort_response.error_id);
@@ -640,12 +651,8 @@ impl FanucDriver {
             return Err(msg);
         }
 
-        // Step 2: Send ProgramPause command to transition state and preserve instructions
-        // Note: This must happen before re-initialization so in-flight instructions are stored
-        let pause_packet = SendPacket::DriverCommand(DriverCommand::ProgramPause);
-        self.send_packet(pause_packet, PacketPriority::Immediate)?;
-
-        // Step 3: Re-initialize so robot can accept jog commands while paused
+        // Step 3: Re-initialize — fresh TP program with the sequence counter reset to
+        // 1 — so the robot can accept jog / rewind moves while paused.
         self.log_info("Re-initializing for jog capability...").await;
         let init_response = self.initialize().await?;
         if init_response.error_id != 0 {
@@ -1247,17 +1254,42 @@ impl FanucDriver {
                             println!("ClearInFlight: reset in_flight counter from {} to 0", old_in_flight);
                         }
                         DriverCommand::ProgramPause => {
-                            // Program pause: Set state to ProgramPaused, preserve in-flight instructions
-                            // The abort + clear_in_flight is handled externally before this command
+                            // A pause is the seam between two TP programs. Snapshot the
+                            // ENTIRE unexecuted set of the program being aborted so it can
+                            // be replayed (re-sequenced from 1) into the next one:
+                            //   1. in-flight — transmitted-but-not-completed (earliest first)
+                            //   2. queued    — accepted-but-not-yet-transmitted (later points)
+                            //
+                            // Draining the queued points here is the fix for RMIT-029
+                            // ("invalid sequence id"): if they were left in the queue they
+                            // would be streamed into the NEXT TP program carrying THIS
+                            // program's now-stale sequence ids, which the controller rejects.
+                            // program_resume() replays this whole set from seq 1, in order,
+                            // so nothing is lost and nothing carries a stale id.
+                            //
+                            // Only program-motion Instructions are drained; FRC commands and
+                            // other non-instruction packets stay in the queue so abort /
+                            // initialize / jog / rewind still flow while paused.
                             println!("ProgramPause: transitioning to ProgramPaused state");
-                            println!("  Preserving {} in-flight instructions for replay", in_flight_instructions.len());
-
-                            // Copy in-flight instructions to shared state for later retrieval
                             if let Ok(mut stored) = self.program_pause_instructions.lock() {
                                 stored.clear();
                                 for (_, instr) in in_flight_instructions.iter() {
                                     stored.push(instr.clone());
                                 }
+                                let mut drained_from_queue = 0usize;
+                                queue.retain(|pkt| match &pkt.packet {
+                                    SendPacket::Instruction(instr) => {
+                                        stored.push(instr.clone());
+                                        drained_from_queue += 1;
+                                        false
+                                    }
+                                    _ => true,
+                                });
+                                println!(
+                                    "  Preserving {} in-flight + {} queued instruction(s) for replay",
+                                    in_flight_instructions.len(),
+                                    drained_from_queue
+                                );
                             }
 
                             state = DriverState::ProgramPaused;
