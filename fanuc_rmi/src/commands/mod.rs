@@ -21,6 +21,8 @@ mod frc_setoveride;
 mod frc_getuframeutool;
 mod frc_readpositionregister;
 mod frc_writepositionregister;
+mod frc_readregister;
+mod frc_writeregister;
 mod frc_reset;
 mod frc_readtcpspeed;
 mod frc_unknown;
@@ -48,6 +50,8 @@ pub use frc_setoveride::*;
 pub use frc_getuframeutool::*;
 pub use frc_readpositionregister::*;
 pub use frc_writepositionregister::*;
+pub use frc_readregister::*;
+pub use frc_writeregister::*;
 pub use frc_reset::*;
 pub use frc_readtcpspeed::*;
 pub use frc_unknown::*;
@@ -98,6 +102,10 @@ pub mod dto {
     pub use super::frc_setoveride::FrcSetOverRideResponseDto as FrcSetOverRideResponse;
     pub use super::frc_readpositionregister::FrcReadPositionRegisterResponseDto as FrcReadPositionRegisterResponse;
     pub use super::frc_writepositionregister::FrcWritePositionRegisterResponseDto as FrcWritePositionRegisterResponse;
+    pub use super::frc_readregister::FrcReadRegisterDto as FrcReadRegister;
+    pub use super::frc_readregister::FrcReadRegisterResponseDto as FrcReadRegisterResponse;
+    pub use super::frc_writeregister::FrcWriteRegisterDto as FrcWriteRegister;
+    pub use super::frc_writeregister::FrcWriteRegisterResponseDto as FrcWriteRegisterResponse;
     pub use super::frc_unknown::FrcUnknownResponseDto as FrcUnknownResponse;
 }
 

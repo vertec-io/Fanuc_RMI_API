@@ -931,7 +931,7 @@ async fn handle_secondary_client(
                         Some("FRC_Initialize") => {
                             qprintln!("📋 FRC_Initialize");
                             let cmd: FrcInitialize = serde_json::from_value(request_json.clone())
-                                .unwrap_or(FrcInitialize { group_mask: 1 });
+                                .unwrap_or_default();
 
                             // Reset sequence tracking on initialize
                             {
@@ -942,7 +942,7 @@ async fn handle_secondary_client(
                             }
                             let response = CommandResponse::FrcInitialize(FrcInitializeResponse {
                                 error_id: 0,
-                                group_mask: cmd.group_mask as u16,
+                                group_mask: cmd.group_mask.bits() as u16,
                             });
                             serialize_response(response)
                         }

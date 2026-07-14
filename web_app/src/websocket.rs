@@ -1174,6 +1174,8 @@ impl WebSocketManager {
                     Command::FrcSetUFrameUTool(_) => "FRC_SetUFrameUTool",
                     Command::FrcReadPositionRegister(_) => "FRC_ReadPositionRegister",
                     Command::FrcWritePositionRegister(_) => "FRC_WritePositionRegister",
+                    Command::FrcReadRegister(_) => "FRC_ReadRegister",
+                    Command::FrcWriteRegister(_) => "FRC_WriteRegister",
                     Command::FrcGetUFrameUTool(_) => "FRC_GetUFrameUTool",
                     Command::FrcGetStatus => "FRC_GetStatus",
                     Command::FrcReadUFrameData(_) => "FRC_ReadUFrameData",

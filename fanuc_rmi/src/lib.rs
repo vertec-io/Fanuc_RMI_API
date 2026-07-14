@@ -43,6 +43,162 @@ pub mod protocol {
     pub use super::*;
 }
 
+/// A FANUC motion-group selection bitmask.
+///
+/// FANUC controllers can be configured with multiple motion groups. Group 1 is
+/// the robot arm; a coordinated **positioner** (turntable / tilt-rotate table)
+/// is configured as a *second motion group* (Group 2). The RMI `GroupMask` field
+/// (used by `FRC_Initialize`) is a bitmask where **bit N-1 selects group N**:
+///
+/// | Group | Bit  | Value |
+/// |-------|------|-------|
+/// | 1     | 0    | 0x01  |
+/// | 2     | 1    | 0x02  |
+/// | 3     | 2    | 0x04  |
+/// | …     | …    | …     |
+///
+/// So Group 1 + Group 2 together is `0x03`.
+///
+/// # ⚠️ RMI limitation — read before using multi-group masks
+///
+/// Initializing with a multi-group mask (e.g. `GROUP_1 | GROUP_2`) tells the
+/// controller which groups the RMI session *reserves*. It does **not** make the
+/// RMI motion packets (`FRC_LinearMotion`, `FRC_JointMotion`, …) drive Group 2:
+/// the RMI motion protocol is documented single-group and its motion packets
+/// carry **no group field**, so coordinated motion is not reachable through them.
+/// True coordinated / positioner motion must be driven by a controller-resident
+/// TP/COORD program (see [`crate::instructions::FrcCall`]) parameterised through
+/// registers / group I/O. Reading Group-2 joint angles for visualization *is*
+/// supported (the read commands carry a group field). Use multi-group masks with
+/// that architecture in mind.
+///
+/// `GroupMask` is `#[serde(transparent)]` over a `u8`, so it is wire-compatible
+/// with the raw byte the controller expects and is reused as-is in the binary
+/// DTO layer (no separate `GroupMaskDto`).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(transparent)]
+pub struct GroupMask(u8);
+
+impl GroupMask {
+    /// Group 1 (the robot arm) — the RMI default.
+    pub const GROUP_1: GroupMask = GroupMask(0b0000_0001);
+    /// Group 2 — typically a coordinated positioner.
+    pub const GROUP_2: GroupMask = GroupMask(0b0000_0010);
+    /// Group 3.
+    pub const GROUP_3: GroupMask = GroupMask(0b0000_0100);
+    /// Group 4.
+    pub const GROUP_4: GroupMask = GroupMask(0b0000_1000);
+    /// Group 5.
+    pub const GROUP_5: GroupMask = GroupMask(0b0001_0000);
+    /// Group 6.
+    pub const GROUP_6: GroupMask = GroupMask(0b0010_0000);
+    /// Group 7.
+    pub const GROUP_7: GroupMask = GroupMask(0b0100_0000);
+    /// Group 8.
+    pub const GROUP_8: GroupMask = GroupMask(0b1000_0000);
+
+    /// An empty mask (no groups selected).
+    pub const fn empty() -> Self {
+        GroupMask(0)
+    }
+
+    /// Construct directly from the raw bitmask value.
+    pub const fn from_bits(bits: u8) -> Self {
+        GroupMask(bits)
+    }
+
+    /// The raw bitmask value, as sent on the wire.
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Build a mask selecting a single **1-based** group number (1..=8).
+    ///
+    /// Returns [`GroupMask::empty`] for `0` or values `> 8` (out of range).
+    pub const fn from_group(group: u8) -> Self {
+        if group == 0 || group > 8 {
+            GroupMask::empty()
+        } else {
+            GroupMask(1u8 << (group - 1))
+        }
+    }
+
+    /// Union of two masks (adds the groups selected by `other`).
+    pub const fn with(self, other: GroupMask) -> Self {
+        GroupMask(self.0 | other.0)
+    }
+
+    /// True if every group in `other` is also selected by `self`.
+    pub const fn contains(self, other: GroupMask) -> bool {
+        (self.0 & other.0) == other.0
+    }
+
+    /// True if a **1-based** group number is selected by this mask.
+    pub const fn contains_group(self, group: u8) -> bool {
+        self.contains(GroupMask::from_group(group))
+    }
+
+    /// True if more than one group bit is set (a coordinated/multi-group mask).
+    pub const fn is_multi_group(self) -> bool {
+        self.0.count_ones() > 1
+    }
+
+    /// Number of groups selected.
+    pub const fn count(self) -> u32 {
+        self.0.count_ones()
+    }
+
+    /// The **1-based** group numbers selected by this mask, ascending.
+    pub fn groups(self) -> impl Iterator<Item = u8> {
+        (1u8..=8).filter(move |g| self.contains_group(*g))
+    }
+}
+
+impl Default for GroupMask {
+    /// The RMI default: Group 1 only.
+    fn default() -> Self {
+        GroupMask::GROUP_1
+    }
+}
+
+impl core::fmt::Display for GroupMask {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "GroupMask(0x{:02x})", self.0)
+    }
+}
+
+impl From<u8> for GroupMask {
+    fn from(bits: u8) -> Self {
+        GroupMask(bits)
+    }
+}
+
+impl From<GroupMask> for u8 {
+    fn from(mask: GroupMask) -> Self {
+        mask.0
+    }
+}
+
+impl core::ops::BitOr for GroupMask {
+    type Output = GroupMask;
+    fn bitor(self, rhs: GroupMask) -> GroupMask {
+        GroupMask(self.0 | rhs.0)
+    }
+}
+
+impl core::ops::BitOrAssign for GroupMask {
+    fn bitor_assign(&mut self, rhs: GroupMask) {
+        self.0 |= rhs.0;
+    }
+}
+
+impl core::ops::BitAnd for GroupMask {
+    type Output = GroupMask;
+    fn bitand(self, rhs: GroupMask) -> GroupMask {
+        GroupMask(self.0 & rhs.0)
+    }
+}
+
 
 #[cfg_attr(feature = "DTO", mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]

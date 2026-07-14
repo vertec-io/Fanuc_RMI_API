@@ -74,6 +74,7 @@ pub fn JointJogPanel() -> impl IntoView {
                 speed,
                 term_type: fanuc_rmi::TermType::FINE,
                 term_value: 1,
+                group: None,
             },
         ));
         ws.send_command(packet);

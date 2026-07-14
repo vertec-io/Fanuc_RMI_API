@@ -99,6 +99,7 @@ pub fn JogControls() -> impl IntoView {
                 speed: jog_speed as f64,
                 term_type: fanuc_rmi::TermType::FINE,
                 term_value: 1,
+                group: None,
             },
         ));
         ws.send_command(packet);
@@ -168,6 +169,7 @@ pub fn JogControls() -> impl IntoView {
                 speed: jog_speed as f64,
                 term_type: fanuc_rmi::TermType::FINE,
                 term_value: 1,
+                group: None,
             },
         ));
         ws.send_command(packet);

@@ -46,8 +46,10 @@ fn map_type_to_dto(ty: &mut Type) {
                         "OnOff" => {
                             *ty = syn::parse_quote!(crate::packets::#dto_ident);
                         }
-                        // Keep these as-is (protocol enums reused in DTO)
-                        "SpeedType" | "TermType" => {}
+                        // Keep these as-is (protocol enums / newtypes reused in DTO).
+                        // GroupMask is #[serde(transparent)] over u8, so it round-trips
+                        // in bincode without a mirrored DTO type.
+                        "SpeedType" | "TermType" | "GroupMask" => {}
                         _ => {
                             seg.ident = dto_ident;
                         }
@@ -256,8 +258,8 @@ fn map_type_to_dto_in_enum(ty: &mut Type, enum_name: &Ident) {
                         "OnOff" => {
                             *ty = syn::parse_quote!(crate::packets::#dto_ident);
                         }
-                        // Keep these as-is (protocol enums reused in DTO)
-                        "SpeedType" | "TermType" => {}
+                        // Keep these as-is (protocol enums / newtypes reused in DTO).
+                        "SpeedType" | "TermType" | "GroupMask" => {}
                         _ => {
                             let e = enum_name.to_string();
                             if e == "Instruction" || e == "InstructionResponse" {

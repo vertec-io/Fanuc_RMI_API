@@ -31,6 +31,15 @@ pub enum Command {
     #[serde(rename = "FrcWritePositionRegister")]
     FrcWritePositionRegister(FrcWritePositionRegister),
 
+    // Numeric register (R[n]) access — the parameter channel for a
+    // controller-resident coordinated-motion TP program. See FrcReadRegister docs
+    // for the portability caveat (not part of the base RMI command set).
+    #[serde(rename = "FRC_ReadRegister")]
+    FrcReadRegister(FrcReadRegister),
+
+    #[serde(rename = "FRC_WriteRegister")]
+    FrcWriteRegister(FrcWriteRegister),
+
     #[serde(rename = "FRC_SetOverRide")]
     FrcSetOverRide(FrcSetOverRide),
 
@@ -156,6 +165,12 @@ pub enum CommandResponse {
     #[serde(rename = "FRC_WritePositionRegister")]
     FrcWritePositionRegister(FrcWritePositionRegisterResponse),
 
+    #[serde(rename = "FRC_ReadRegister")]
+    FrcReadRegister(FrcReadRegisterResponse),
+
+    #[serde(rename = "FRC_WriteRegister")]
+    FrcWriteRegister(FrcWriteRegisterResponse),
+
     #[serde(rename = "FRC_Reset")]
     FrcReset(FrcResetResponse),
 
@@ -194,6 +209,8 @@ impl_extract_inner!(CommandResponse, FrcReadJointAngles, FrcReadJointAnglesRespo
 impl_extract_inner!(CommandResponse, FrcSetOverRide, FrcSetOverRideResponse);
 impl_extract_inner!(CommandResponse, FrcReadPositionRegister, FrcReadPositionRegisterResponse);
 impl_extract_inner!(CommandResponse, FrcWritePositionRegister, FrcWritePositionRegisterResponse);
+impl_extract_inner!(CommandResponse, FrcReadRegister, FrcReadRegisterResponse);
+impl_extract_inner!(CommandResponse, FrcWriteRegister, FrcWriteRegisterResponse);
 impl_extract_inner!(CommandResponse, FrcReset, FrcResetResponse);
 impl_extract_inner!(CommandResponse, FrcReadTCPSpeed, FrcReadTCPSpeedResponse);
 impl_extract_inner!(CommandResponse, Unknown, FrcUnknownResponse);

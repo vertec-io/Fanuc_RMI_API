@@ -20,8 +20,9 @@ static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 // Prefer importing from the module rather than re-exporting from here
 // Prefer downstream crates to reference modules directly (crate::commands, crate::instructions, crate::dto)
 use crate::commands::*;
+use crate::instructions::FrcCall;
 use crate::packets::*;
-use crate::FrcError;
+use crate::{FrcError, GroupMask};
 
 use super::DriverState;
 use super::FanucDriverConfig;
@@ -856,6 +857,170 @@ impl FanucDriver {
         })
         .await
         .map_err(|_| "Timeout waiting for get status response".to_string())?
+    }
+
+    // ------------------------------------------------------------------
+    // FANUC Group-2 (coordinated positioner) support helpers
+    //
+    // A FANUC positioner is a *second motion group* (Group 2). The RMI motion
+    // protocol is documented single-group and its motion packets carry no group
+    // field, so coordinated positioner motion is **not** reachable through
+    // `FRC_LinearMotion` / `FRC_JointMotion` / etc. The supported architecture is:
+    //
+    //   1. RUN a controller-resident TP/COORD program by name — `run_tp_program`
+    //      (wraps the `FRC_Call` instruction). That program owns the coordinated
+    //      motion between the robot and the positioner.
+    //   2. PASS PARAMETERS to it through registers / group I/O — `write_register`,
+    //      `read_register`, `write_position_register`, `read_position_register`,
+    //      and the existing `FRC_WriteGOUT` / `FRC_ReadGIN` commands.
+    //   3. READ BACK Group-2 state for visualization — `read_group_joint_angles`,
+    //      `read_group_cartesian_position` (the RMI read commands *do* carry a
+    //      group field).
+    // ------------------------------------------------------------------
+
+    /// Run a controller-resident TP program by name (the coordinated-motion
+    /// channel for a Group-2 positioner).
+    ///
+    /// This wraps the `FRC_Call` instruction. Because `FRC_Call` is an
+    /// *instruction*, it flows through the ordered instruction queue and is
+    /// assigned a sequence ID by the driver. The program named must already exist
+    /// on the controller; for coordinated motion it is a TP/COORD program that
+    /// drives both the robot and the positioner (Group 2).
+    ///
+    /// Returns the request ID; await [`Self::wait_on_request_completion`] with it
+    /// to block until the program finishes.
+    pub fn run_tp_program(&self, program_name: &str) -> Result<u64, String> {
+        let packet = SendPacket::Instruction(Instruction::FrcCall(FrcCall::new(
+            0, // sequence_id is assigned by the driver on dispatch
+            program_name.to_string(),
+        )));
+        self.send_packet(packet, PacketPriority::Standard)
+    }
+
+    /// Read the joint angles of a specific motion group (1-based group number).
+    ///
+    /// Use `group = 2` to read a coordinated positioner's axes for visualization.
+    /// The RMI `FRC_ReadJointAngles` command carries a `Group` field, so this
+    /// works even though the *motion* protocol is single-group.
+    pub async fn read_group_joint_angles(
+        &self,
+        group: u8,
+    ) -> Result<FrcReadJointAnglesResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+        let packet =
+            SendPacket::Command(Command::FrcReadJointAngles(FrcReadJointAngles::new(Some(group))));
+        let _request_id = self.send_packet(packet, PacketPriority::Standard)?;
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommandResponse(CommandResponse::FrcReadJointAngles(resp)) =
+                    response
+                {
+                    return Ok(resp);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for read joint angles response".to_string())?
+    }
+
+    /// Read the Cartesian position of a specific motion group (1-based group
+    /// number). Use `group = 2` for a coordinated positioner.
+    pub async fn read_group_cartesian_position(
+        &self,
+        group: u8,
+    ) -> Result<FrcReadCartesianPositionResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+        let packet = SendPacket::Command(Command::FrcReadCartesianPosition(
+            FrcReadCartesianPosition::new(Some(group)),
+        ));
+        let _request_id = self.send_packet(packet, PacketPriority::Standard)?;
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommandResponse(
+                    CommandResponse::FrcReadCartesianPosition(resp),
+                ) = response
+                {
+                    return Ok(resp);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for read cartesian position response".to_string())?
+    }
+
+    /// Write a numeric register (`R[n]`) — a parameter channel for a
+    /// coordinated-motion TP program.
+    ///
+    /// See [`crate::commands::FrcWriteRegister`] for the portability caveat
+    /// (numeric register commands are not in the base RMI set; UNTESTED across
+    /// controllers — prefer group I/O or position registers where portability
+    /// matters).
+    pub async fn write_register(
+        &self,
+        register_number: u16,
+        value: f32,
+    ) -> Result<FrcWriteRegisterResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+        let packet = SendPacket::Command(Command::FrcWriteRegister(FrcWriteRegister::new(
+            register_number,
+            value,
+        )));
+        let _request_id = self.send_packet(packet, PacketPriority::Standard)?;
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommandResponse(CommandResponse::FrcWriteRegister(resp)) =
+                    response
+                {
+                    return Ok(resp);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for write register response".to_string())?
+    }
+
+    /// Read a numeric register (`R[n]`). See [`Self::write_register`] for the
+    /// portability caveat.
+    pub async fn read_register(
+        &self,
+        register_number: u16,
+    ) -> Result<FrcReadRegisterResponse, String> {
+        let mut response_rx = self.response_tx.subscribe();
+        let packet =
+            SendPacket::Command(Command::FrcReadRegister(FrcReadRegister::new(register_number)));
+        let _request_id = self.send_packet(packet, PacketPriority::Standard)?;
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(response) = response_rx.recv().await {
+                if let ResponsePacket::CommandResponse(CommandResponse::FrcReadRegister(resp)) =
+                    response
+                {
+                    return Ok(resp);
+                }
+            }
+            Err("Response channel closed".to_string())
+        })
+        .await
+        .map_err(|_| "Timeout waiting for read register response".to_string())?
+    }
+
+    /// Initialize the RMI session reserving a specific set of motion groups.
+    ///
+    /// Convenience over [`Self::initialize`] for the coordinated case: pass
+    /// `GroupMask::GROUP_1 | GroupMask::GROUP_2` to reserve both the robot and a
+    /// positioner. **Reserving Group 2 does not make RMI motion packets drive it**
+    /// (see [`GroupMask`]); it only declares the groups the session owns so that
+    /// group reads and a coordinated TP program can operate.
+    pub fn send_initialize_groups(&self, groups: GroupMask) -> Result<u64, String> {
+        let packet =
+            SendPacket::Command(Command::FrcInitialize(FrcInitialize::new(Some(groups))));
+        self.send_packet(packet, PacketPriority::Standard)
     }
 
     /// Send a disconnect communication to the FANUC controller

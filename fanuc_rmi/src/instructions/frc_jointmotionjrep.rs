@@ -16,6 +16,17 @@ pub struct FrcJointMotionJRep {
     pub term_type: TermType,
     #[serde(rename = "TermValue")]
     pub term_value: u8,
+    /// Optional, **UNTESTED** motion-group selector. Omitted from the wire when
+    /// `None` (the default) — byte-identical to the documented single-group packet.
+    ///
+    /// The RMI motion protocol is documented single-group (Group 1) and its motion
+    /// packets carry no group field, so **setting this does NOT produce coordinated
+    /// positioner (Group 2) motion** and may simply be ignored by the controller. It
+    /// exists only so the wire format can express a group selector for experimentation.
+    /// For real coordinated motion, drive a controller-resident TP/COORD program via
+    /// [`crate::instructions::FrcCall`]. The `GroupMask` field name here is a best guess.
+    #[serde(rename = "GroupMask", default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<crate::GroupMask>,
 }
 
 
@@ -36,6 +47,7 @@ impl FrcJointMotionJRep{
             speed,
             term_type,
             term_value,
+            group: None,
         }
 
     }
@@ -48,4 +60,15 @@ pub struct FrcJointMotionJRepResponse {
     pub error_id: u32,
     #[serde(rename = "SequenceID", default)]
     pub sequence_id: u32,
+}
+
+
+impl FrcJointMotionJRep {
+    /// Attach an **UNTESTED** motion-group selector (see the `group` field).
+    /// Does not by itself produce coordinated Group-2 motion; the RMI motion
+    /// protocol is single-group. Provided so callers can express intent on the wire.
+    pub fn with_group(mut self, group: crate::GroupMask) -> Self {
+        self.group = Some(group);
+        self
+    }
 }
