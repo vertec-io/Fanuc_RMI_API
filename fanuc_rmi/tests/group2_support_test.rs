@@ -55,7 +55,9 @@ fn initialize_serializes_group_mask_as_integer() {
 }
 
 #[test]
-fn motion_group_field_is_omitted_by_default() {
+fn single_group_motion_is_flat_with_no_groupmask_key() {
+    // Single-group motion serializes FLAT (§2.4.7). `GroupMask` belongs on
+    // FRC_Initialize (§2.3.1), NOT on motion packets.
     let m = FrcLinearMotion::new(
         1,
         Configuration::default(),
@@ -65,16 +67,32 @@ fn motion_group_field_is_omitted_by_default() {
         TermType::FINE,
         1,
     );
-    // No group by default -> byte-identical to the documented single-group packet.
-    assert_eq!(m.group, None);
     let s = serde_json::to_string(&m).unwrap();
-    assert!(!s.contains("GroupMask"), "expected no group field, got: {s}");
+    assert!(!s.contains("GroupMask"), "motion packets carry no GroupMask key: {s}");
+    assert!(s.contains("\"Configuration\""), "single-group is flat: {s}");
+    assert!(!s.contains("\"G1\""), "single-group is not wrapped: {s}");
+}
 
-    // Opt-in via builder makes the wire format express the (UNTESTED) selector.
-    let m = m.with_group(GroupMask::GROUP_2);
-    assert_eq!(m.group, Some(GroupMask::GROUP_2));
+#[test]
+fn two_group_motion_wraps_g1_g2_with_coord() {
+    use fanuc_rmi::instructions::GroupBlock;
+    use fanuc_rmi::JointAngles;
+    // Arm (G1, Cartesian) + positioner (G2, joint) coordinated motion (§2.4.7.1).
+    let m = FrcLinearMotion::coordinated(
+        1,
+        Configuration::default(),
+        Position::default(),
+        GroupBlock::joint(JointAngles { j1: 30.0, ..Default::default() }),
+        SpeedType::MMSec,
+        50.0,
+        TermType::FINE,
+        1,
+    );
     let s = serde_json::to_string(&m).unwrap();
-    assert!(s.contains("\"GroupMask\":2"), "got: {s}");
+    assert!(s.contains("\"G1\""), "two-group wraps in G1: {s}");
+    assert!(s.contains("\"G2\""), "two-group wraps in G2: {s}");
+    assert!(s.contains("\"COORD\":\"ON\""), "coordinated sets COORD: {s}");
+    assert!(!s.contains("GroupMask"), "still no GroupMask on the motion packet: {s}");
 }
 
 #[test]

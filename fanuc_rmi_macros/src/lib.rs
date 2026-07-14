@@ -46,6 +46,13 @@ fn map_type_to_dto(ty: &mut Type) {
                         "OnOff" => {
                             *ty = syn::parse_quote!(crate::packets::#dto_ident);
                         }
+                        // Multi-group motion payloads have hand-written DTO mirrors
+                        // (the macro can't rewrite the Vec<(u8, GroupBlock)> element),
+                        // re-exported from crate::instructions.
+                        "CartesianGroups" | "JointGroups" | "CircularGroups"
+                        | "GroupBlock" | "CircGroupBlock" => {
+                            *ty = syn::parse_quote!(crate::instructions::#dto_ident);
+                        }
                         // Keep these as-is (protocol enums / newtypes reused in DTO).
                         // GroupMask is #[serde(transparent)] over u8, so it round-trips
                         // in bincode without a mirrored DTO type.

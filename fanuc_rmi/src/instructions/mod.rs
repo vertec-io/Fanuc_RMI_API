@@ -1,3 +1,4 @@
+mod motion_groups;
 mod frc_waitdin;
 mod frc_setuframe;
 mod frc_setutool;
@@ -15,6 +16,7 @@ mod frc_jointmotionjrep;
 mod frc_jointrelativejrep;
 mod frc_linearmotionjrep;
 
+pub use motion_groups::*;
 pub use frc_waitdin::*;
 pub use frc_setuframe::*;
 pub use frc_setutool::*;
