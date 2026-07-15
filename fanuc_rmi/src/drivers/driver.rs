@@ -755,6 +755,18 @@ impl FanucDriver {
         self.send_packet(packet, PacketPriority::Standard)
     }
 
+    /// Send an initialize command reserving a specific set of motion groups.
+    ///
+    /// `group_mask` is a bitmask (e.g. `GroupMask::GROUP_1 | GroupMask::GROUP_2`
+    /// → `0b11`). Use this when a coordinated Group-2 positioner is present so
+    /// every subsequent motion packet may carry a G2 block. Returns the request
+    /// ID for tracking.
+    pub fn send_initialize_with_mask(&self, group_mask: u8) -> Result<u64, String> {
+        let packet: SendPacket =
+            SendPacket::Command(Command::FrcInitialize(FrcInitialize::from_bits(group_mask)));
+        self.send_packet(packet, PacketPriority::Standard)
+    }
+
     /// Send an initialize command and wait for the response
     ///
     /// This is an async convenience method that sends the initialize command and waits
@@ -782,8 +794,16 @@ impl FanucDriver {
     /// # }
     /// ```
     pub async fn initialize(&self) -> Result<FrcInitializeResponse, String> {
+        self.initialize_with_mask(GroupMask::default().bits()).await
+    }
+
+    /// Initialize reserving a specific set of motion groups and wait for the
+    /// response. See [`send_initialize_with_mask`](Self::send_initialize_with_mask);
+    /// this is the awaiting convenience wrapper used when a coordinated Group-2
+    /// positioner is present (`group_mask = 0b11`).
+    pub async fn initialize_with_mask(&self, group_mask: u8) -> Result<FrcInitializeResponse, String> {
         let mut response_rx = self.response_tx.subscribe();
-        let _request_id = self.send_initialize()?;
+        let _request_id = self.send_initialize_with_mask(group_mask)?;
 
         // Wait up to 5 seconds for response
         let result = tokio::time::timeout(Duration::from_secs(5), async {
