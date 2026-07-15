@@ -67,15 +67,14 @@ pub fn JointJogPanel() -> impl IntoView {
         }
 
         let packet = SendPacket::Instruction(Instruction::FrcJointRelativeJRep(
-            FrcJointRelativeJRep {
-                sequence_id: 0, // Will be assigned by driver
-                joint_angles: angles,
-                speed_type: fanuc_rmi::SpeedType::Time, // Use time-based for joint motion
+            fanuc_rmi::instructions::FrcJointRelativeJRep::single(
+                0, // sequence_id - will be assigned by driver
+                angles.into(),
+                fanuc_rmi::SpeedType::Time, // Use time-based for joint motion
                 speed,
-                term_type: fanuc_rmi::TermType::FINE,
-                term_value: 1,
-                group: None,
-            },
+                fanuc_rmi::TermType::FINE,
+                1,
+            ).into(),
         ));
         ws.send_command(packet);
     };

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Instruction")]
+#[non_exhaustive]
 pub enum Instruction {
     #[serde(rename = "FRC_WaitDIN")]
     FrcWaitDIN(FrcWaitDIN), // Wait for DIN Instruction
@@ -53,6 +54,12 @@ pub enum Instruction {
 
     #[serde(rename = "FRC_LinearMotionJRep")]
     FrcLinearMotionJRep(FrcLinearMotionJRep), // Add Linear Motion with Joint Representation
+
+    #[serde(rename = "FRC_SplineMotion")]
+    FrcSplineMotion(FrcSplineMotion), // Add Spline Motion Instruction
+
+    #[serde(rename = "FRC_SplineMotionJRep")]
+    FrcSplineMotionJRep(FrcSplineMotionJRep), // Add Spline Motion with Joint Representation
 }
 
 impl Instruction {
@@ -74,6 +81,8 @@ impl Instruction {
             Instruction::FrcJointMotionJRep(resp) => resp.sequence_id,
             Instruction::FrcJointRelativeJRep(resp) => resp.sequence_id,
             Instruction::FrcLinearMotionJRep(resp) => resp.sequence_id,
+            Instruction::FrcSplineMotion(resp) => resp.sequence_id,
+            Instruction::FrcSplineMotionJRep(resp) => resp.sequence_id,
         }
     }
 }
@@ -81,6 +90,7 @@ impl Instruction {
 #[cfg_attr(feature = "DTO", crate::mirror_dto)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Instruction")]
+#[non_exhaustive]
 pub enum InstructionResponse {
     #[serde(rename = "FRC_WaitDIN")]
     FrcWaitDIN(FrcWaitDINResponse),
@@ -114,6 +124,10 @@ pub enum InstructionResponse {
     FrcJointRelativeJRep(FrcJointRelativeJRepResponse),
     #[serde(rename = "FRC_LinearMotionJRep")]
     FrcLinearMotionJRep(FrcLinearMotionJRepResponse),
+    #[serde(rename = "FRC_SplineMotion")]
+    FrcSplineMotion(FrcSplineMotionResponse),
+    #[serde(rename = "FRC_SplineMotionJRep")]
+    FrcSplineMotionJRep(FrcSplineMotionJRepResponse),
 }
 
 impl InstructionResponse {
@@ -135,6 +149,8 @@ impl InstructionResponse {
             InstructionResponse::FrcJointMotionJRep(resp) => resp.sequence_id,
             InstructionResponse::FrcJointRelativeJRep(resp) => resp.sequence_id,
             InstructionResponse::FrcLinearMotionJRep(resp) => resp.sequence_id,
+            InstructionResponse::FrcSplineMotion(resp) => resp.sequence_id,
+            InstructionResponse::FrcSplineMotionJRep(resp) => resp.sequence_id,
         }
     }
 }
@@ -157,6 +173,8 @@ impl InstructionResponse {
             InstructionResponse::FrcJointMotionJRep(resp) => resp.error_id,
             InstructionResponse::FrcJointRelativeJRep(resp) => resp.error_id,
             InstructionResponse::FrcLinearMotionJRep(resp) => resp.error_id,
+            InstructionResponse::FrcSplineMotion(resp) => resp.error_id,
+            InstructionResponse::FrcSplineMotionJRep(resp) => resp.error_id,
         }
     }
 }
@@ -209,4 +227,6 @@ impl_extract_inner!(InstructionResponse, FrcCircularRelative, FrcCircularRelativ
 impl_extract_inner!(InstructionResponse, FrcJointMotionJRep, FrcJointMotionJRepResponse);
 impl_extract_inner!(InstructionResponse, FrcJointRelativeJRep, FrcJointRelativeJRepResponse);
 impl_extract_inner!(InstructionResponse, FrcLinearMotionJRep, FrcLinearMotionJRepResponse);
+impl_extract_inner!(InstructionResponse, FrcSplineMotion, FrcSplineMotionResponse);
+impl_extract_inner!(InstructionResponse, FrcSplineMotionJRep, FrcSplineMotionJRepResponse);
 

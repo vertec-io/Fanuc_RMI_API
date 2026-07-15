@@ -295,6 +295,184 @@ impl<'de> Deserialize<'de> for JointGroups {
     }
 }
 
+/// One circular motion group's target: Cartesian destination + via, each with
+/// its own [`Configuration`]. Circular moves need three points (the implicit
+/// start, the via, and the destination), so a group carries both a destination
+/// (`Configuration`/`Position`) and a via (`ViaConfiguration`/`ViaPosition`).
+///
+/// The manual documents circular two-group blocks as Cartesian only (§2.4.11.1).
+/// The general free-second-group rule (§2.4.7.1) technically permits a joint
+/// second group, but the manual specifies no joint-with-via wire shape for
+/// circular, so this encodes the documented Cartesian form.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CircGroupBlock {
+    pub configuration: Configuration,
+    pub position: Position,
+    pub via_configuration: Configuration,
+    pub via_position: Position,
+}
+
+impl CircGroupBlock {
+    pub fn new(
+        configuration: Configuration,
+        position: Position,
+        via_configuration: Configuration,
+        via_position: Position,
+    ) -> Self {
+        Self { configuration, position, via_configuration, via_position }
+    }
+}
+
+impl Serialize for CircGroupBlock {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut m = s.serialize_map(Some(4))?;
+        m.serialize_entry("Configuration", &self.configuration)?;
+        m.serialize_entry("Position", &self.position)?;
+        m.serialize_entry("ViaConfiguration", &self.via_configuration)?;
+        m.serialize_entry("ViaPosition", &self.via_position)?;
+        m.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for CircGroupBlock {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = CircGroupBlock;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a circular group block ({Configuration,Position,ViaConfiguration,ViaPosition})")
+            }
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<CircGroupBlock, M::Error> {
+                let mut configuration: Option<Configuration> = None;
+                let mut position: Option<Position> = None;
+                let mut via_configuration: Option<Configuration> = None;
+                let mut via_position: Option<Position> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "Configuration" => configuration = Some(map.next_value()?),
+                        "Position" => position = Some(map.next_value()?),
+                        "ViaConfiguration" => via_configuration = Some(map.next_value()?),
+                        "ViaPosition" => via_position = Some(map.next_value()?),
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(CircGroupBlock {
+                    configuration: configuration.ok_or_else(|| DeError::missing_field("Configuration"))?,
+                    position: position.ok_or_else(|| DeError::missing_field("Position"))?,
+                    via_configuration: via_configuration
+                        .ok_or_else(|| DeError::missing_field("ViaConfiguration"))?,
+                    via_position: via_position.ok_or_else(|| DeError::missing_field("ViaPosition"))?,
+                })
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
+/// The circular motion payload: flat single-group, or wrapped multi-group.
+///
+/// Used by the circular-native instructions. `Single` emits the flat top-level
+/// form (`Configuration`/`Position`/`ViaConfiguration`/`ViaPosition`); `Multi`
+/// emits `G<n>` blocks, each a [`CircGroupBlock`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum CircularGroups {
+    Single {
+        configuration: Configuration,
+        position: Position,
+        via_configuration: Configuration,
+        via_position: Position,
+    },
+    Multi(Vec<(u8, CircGroupBlock)>),
+}
+
+impl CircularGroups {
+    /// Single-group (Group 1) flat form.
+    pub fn single(
+        configuration: Configuration,
+        position: Position,
+        via_configuration: Configuration,
+        via_position: Position,
+    ) -> Self {
+        CircularGroups::Single { configuration, position, via_configuration, via_position }
+    }
+    /// Multi-group form, group numbers explicit (must match the session
+    /// `GroupMask`; the first block is the instruction's own group).
+    pub fn multi(blocks: Vec<(u8, CircGroupBlock)>) -> Self {
+        CircularGroups::Multi(blocks)
+    }
+    /// Arm(G1) + Group 2 coordinated circular case.
+    pub fn arm_and_group2(g1: CircGroupBlock, group2: CircGroupBlock) -> Self {
+        CircularGroups::Multi(vec![(1, g1), (2, group2)])
+    }
+}
+
+impl Serialize for CircularGroups {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut m = s.serialize_map(None)?;
+        match self {
+            CircularGroups::Single { configuration, position, via_configuration, via_position } => {
+                m.serialize_entry("Configuration", configuration)?;
+                m.serialize_entry("Position", position)?;
+                m.serialize_entry("ViaConfiguration", via_configuration)?;
+                m.serialize_entry("ViaPosition", via_position)?;
+            }
+            CircularGroups::Multi(blocks) => serialize_multi(blocks, &mut m)?,
+        }
+        m.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for CircularGroups {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = CircularGroups;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("flat circular Cartesian fields or G<n> circular blocks")
+            }
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<CircularGroups, M::Error> {
+                let mut configuration: Option<Configuration> = None;
+                let mut position: Option<Position> = None;
+                let mut via_configuration: Option<Configuration> = None;
+                let mut via_position: Option<Position> = None;
+                let mut multi: Vec<(u8, CircGroupBlock)> = Vec::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "Configuration" => configuration = Some(map.next_value()?),
+                        "Position" => position = Some(map.next_value()?),
+                        "ViaConfiguration" => via_configuration = Some(map.next_value()?),
+                        "ViaPosition" => via_position = Some(map.next_value()?),
+                        k if is_group_key(k) => {
+                            let n = parse_group_key::<M>(k)?;
+                            multi.push((n, map.next_value()?));
+                        }
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                if !multi.is_empty() {
+                    multi.sort_by_key(|(n, _)| *n);
+                    Ok(CircularGroups::Multi(multi))
+                } else {
+                    Ok(CircularGroups::Single {
+                        configuration: configuration
+                            .ok_or_else(|| DeError::missing_field("Configuration"))?,
+                        position: position.ok_or_else(|| DeError::missing_field("Position"))?,
+                        via_configuration: via_configuration
+                            .ok_or_else(|| DeError::missing_field("ViaConfiguration"))?,
+                        via_position: via_position
+                            .ok_or_else(|| DeError::missing_field("ViaPosition"))?,
+                    })
+                }
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
 /// `true` if `key` is a `G<n>` group key with a valid group number (1..=8).
 fn is_group_key(key: &str) -> bool {
     key.len() >= 2
@@ -434,6 +612,95 @@ impl From<JointGroupsDto> for JointGroups {
                 JointGroups::Single { joint_angle: joint_angle.into() }
             }
             JointGroupsDto::Multi(v) => JointGroups::Multi(blocks_from_dto(v)),
+        }
+    }
+}
+
+#[cfg(feature = "DTO")]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct CircGroupBlockDto {
+    pub configuration: crate::ConfigurationDto,
+    pub position: crate::PositionDto,
+    pub via_configuration: crate::ConfigurationDto,
+    pub via_position: crate::PositionDto,
+}
+
+#[cfg(feature = "DTO")]
+impl From<CircGroupBlock> for CircGroupBlockDto {
+    fn from(src: CircGroupBlock) -> Self {
+        CircGroupBlockDto {
+            configuration: src.configuration.into(),
+            position: src.position.into(),
+            via_configuration: src.via_configuration.into(),
+            via_position: src.via_position.into(),
+        }
+    }
+}
+
+#[cfg(feature = "DTO")]
+impl From<CircGroupBlockDto> for CircGroupBlock {
+    fn from(src: CircGroupBlockDto) -> Self {
+        CircGroupBlock {
+            configuration: src.configuration.into(),
+            position: src.position.into(),
+            via_configuration: src.via_configuration.into(),
+            via_position: src.via_position.into(),
+        }
+    }
+}
+
+#[cfg(feature = "DTO")]
+fn circ_blocks_to_dto(v: Vec<(u8, CircGroupBlock)>) -> Vec<(u8, CircGroupBlockDto)> {
+    v.into_iter().map(|(n, b)| (n, b.into())).collect()
+}
+
+#[cfg(feature = "DTO")]
+fn circ_blocks_from_dto(v: Vec<(u8, CircGroupBlockDto)>) -> Vec<(u8, CircGroupBlock)> {
+    v.into_iter().map(|(n, b)| (n, b.into())).collect()
+}
+
+#[cfg(feature = "DTO")]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum CircularGroupsDto {
+    Single {
+        configuration: crate::ConfigurationDto,
+        position: crate::PositionDto,
+        via_configuration: crate::ConfigurationDto,
+        via_position: crate::PositionDto,
+    },
+    Multi(Vec<(u8, CircGroupBlockDto)>),
+}
+
+#[cfg(feature = "DTO")]
+impl From<CircularGroups> for CircularGroupsDto {
+    fn from(src: CircularGroups) -> Self {
+        match src {
+            CircularGroups::Single { configuration, position, via_configuration, via_position } => {
+                CircularGroupsDto::Single {
+                    configuration: configuration.into(),
+                    position: position.into(),
+                    via_configuration: via_configuration.into(),
+                    via_position: via_position.into(),
+                }
+            }
+            CircularGroups::Multi(v) => CircularGroupsDto::Multi(circ_blocks_to_dto(v)),
+        }
+    }
+}
+
+#[cfg(feature = "DTO")]
+impl From<CircularGroupsDto> for CircularGroups {
+    fn from(src: CircularGroupsDto) -> Self {
+        match src {
+            CircularGroupsDto::Single { configuration, position, via_configuration, via_position } => {
+                CircularGroups::Single {
+                    configuration: configuration.into(),
+                    position: position.into(),
+                    via_configuration: via_configuration.into(),
+                    via_position: via_position.into(),
+                }
+            }
+            CircularGroupsDto::Multi(v) => CircularGroups::Multi(circ_blocks_from_dto(v)),
         }
     }
 }

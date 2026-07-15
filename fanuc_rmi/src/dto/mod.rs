@@ -10,6 +10,12 @@ pub use crate::JointAnglesDto as JointAngles;
 pub use crate::commands::dto::*;
 // Instructions
 pub use crate::instructions::dto::*;
+// Multi-group motion payloads (hand-written DTO mirrors)
+pub use crate::instructions::{
+    CartesianGroupsDto as CartesianGroups, CircGroupBlockDto as CircGroupBlock,
+    CircularGroupsDto as CircularGroups, GroupBlockDto as GroupBlock,
+    JointGroupsDto as JointGroups,
+};
 
 // Packets - Top-level enums
 pub use crate::packets::SendPacketDto as SendPacket;

@@ -1566,6 +1566,8 @@ impl FanucDriver {
                             Instruction::FrcJointMotionJRep(ref mut instr) => instr.sequence_id = current_id,
                             Instruction::FrcJointRelativeJRep(ref mut instr) => instr.sequence_id = current_id,
                             Instruction::FrcLinearMotionJRep(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcSplineMotion(ref mut instr) => instr.sequence_id = current_id,
+                            Instruction::FrcSplineMotionJRep(ref mut instr) => instr.sequence_id = current_id,
                         }
 
                         // Broadcast sent instruction info
@@ -1839,6 +1841,12 @@ impl FanucDriver {
                     instr.sequence_id = current_id;
                 }
                 Instruction::FrcLinearMotionJRep(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcSplineMotion(ref mut instr) => {
+                    instr.sequence_id = current_id;
+                }
+                Instruction::FrcSplineMotionJRep(ref mut instr) => {
                     instr.sequence_id = current_id;
                 }
             }

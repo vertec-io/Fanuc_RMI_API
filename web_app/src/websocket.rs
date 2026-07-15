@@ -1214,6 +1214,8 @@ impl WebSocketManager {
                     Instruction::FrcJointMotionJRep(i) => ("FRC_JointMotionJRep", i.sequence_id),
                     Instruction::FrcJointRelativeJRep(i) => ("FRC_JointRelativeJRep", i.sequence_id),
                     Instruction::FrcLinearMotionJRep(i) => ("FRC_LinearMotionJRep", i.sequence_id),
+                    Instruction::FrcSplineMotion(i) => ("FRC_SplineMotion", i.sequence_id),
+                    Instruction::FrcSplineMotionJRep(i) => ("FRC_SplineMotionJRep", i.sequence_id),
                 };
                 (name.to_string(), Some(seq_id))
             }
@@ -2013,6 +2015,8 @@ fn get_instruction_response_name(resp: &InstructionResponse) -> &'static str {
         InstructionResponse::FrcJointMotionJRep(_) => "FRC_JointMotionJRep",
         InstructionResponse::FrcJointRelativeJRep(_) => "FRC_JointRelativeJRep",
         InstructionResponse::FrcLinearMotionJRep(_) => "FRC_LinearMotionJRep",
+        InstructionResponse::FrcSplineMotion(_) => "FRC_SplineMotion",
+        InstructionResponse::FrcSplineMotionJRep(_) => "FRC_SplineMotionJRep",
     }
 }
 

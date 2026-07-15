@@ -71,9 +71,9 @@ pub fn JogControls() -> impl IntoView {
             .unwrap_or(10.0);
 
         let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(
-            FrcLinearRelative {
-                sequence_id: 0, // Will be assigned by driver
-                configuration: Configuration {
+            fanuc_rmi::instructions::FrcLinearRelative::single(
+                0, // sequence_id - will be assigned by driver
+                Configuration {
                     u_tool_number: u_tool as i8,
                     u_frame_number: u_frame as i8,
                     front,
@@ -83,8 +83,8 @@ pub fn JogControls() -> impl IntoView {
                     turn4,
                     turn5,
                     turn6,
-                },
-                position: Position {
+                }.into(),
+                Position {
                     x: dx,
                     y: dy,
                     z: dz,
@@ -94,13 +94,12 @@ pub fn JogControls() -> impl IntoView {
                     ext1: 0.0,
                     ext2: 0.0,
                     ext3: 0.0,
-                },
-                speed_type: fanuc_rmi::SpeedType::MMSec,
-                speed: jog_speed as f64,
-                term_type: fanuc_rmi::TermType::FINE,
-                term_value: 1,
-                group: None,
-            },
+                }.into(),
+                fanuc_rmi::SpeedType::MMSec,
+                jog_speed as f64,
+                fanuc_rmi::TermType::FINE,
+                1,
+            ).into(),
         ));
         ws.send_command(packet);
     };
@@ -141,9 +140,9 @@ pub fn JogControls() -> impl IntoView {
             .unwrap_or(5.0);
 
         let packet = SendPacket::Instruction(Instruction::FrcLinearRelative(
-            FrcLinearRelative {
-                sequence_id: 0,
-                configuration: Configuration {
+            fanuc_rmi::instructions::FrcLinearRelative::single(
+                0,
+                Configuration {
                     u_tool_number: u_tool as i8,
                     u_frame_number: u_frame as i8,
                     front,
@@ -153,8 +152,8 @@ pub fn JogControls() -> impl IntoView {
                     turn4,
                     turn5,
                     turn6,
-                },
-                position: Position {
+                }.into(),
+                Position {
                     x: 0.0,
                     y: 0.0,
                     z: 0.0,
@@ -164,13 +163,12 @@ pub fn JogControls() -> impl IntoView {
                     ext1: 0.0,
                     ext2: 0.0,
                     ext3: 0.0,
-                },
-                speed_type: fanuc_rmi::SpeedType::MMSec,
-                speed: jog_speed as f64,
-                term_type: fanuc_rmi::TermType::FINE,
-                term_value: 1,
-                group: None,
-            },
+                }.into(),
+                fanuc_rmi::SpeedType::MMSec,
+                jog_speed as f64,
+                fanuc_rmi::TermType::FINE,
+                1,
+            ).into(),
         ));
         ws.send_command(packet);
     };

@@ -15,6 +15,8 @@ mod frc_circularrelative;
 mod frc_jointmotionjrep;
 mod frc_jointrelativejrep;
 mod frc_linearmotionjrep;
+mod frc_splinemotion;
+mod frc_splinemotionjrep;
 
 pub use motion_groups::*;
 pub use frc_waitdin::*;
@@ -33,6 +35,8 @@ pub use frc_circularrelative::*;
 pub use frc_jointmotionjrep::*;
 pub use frc_jointrelativejrep::*;
 pub use frc_linearmotionjrep::*;
+pub use frc_splinemotion::*;
+pub use frc_splinemotionjrep::*;
 
 
 #[cfg(feature = "DTO")]
@@ -53,6 +57,8 @@ pub mod dto {
     pub use super::frc_jointmotionjrep::FrcJointMotionJRepDto as FrcJointMotionJRep;
     pub use super::frc_jointrelativejrep::FrcJointRelativeJRepDto as FrcJointRelativeJRep;
     pub use super::frc_linearmotionjrep::FrcLinearMotionJRepDto as FrcLinearMotionJRep;
+    pub use super::frc_splinemotion::FrcSplineMotionDto as FrcSplineMotion;
+    pub use super::frc_splinemotionjrep::FrcSplineMotionJRepDto as FrcSplineMotionJRep;
         pub use super::frc_waitdin::FrcWaitDINResponseDto as FrcWaitDINResponse;
         pub use super::frc_setuframe::FrcSetUFrameResponseDto as FrcSetUFrameResponse;
         pub use super::frc_setutool::FrcSetUToolResponseDto as FrcSetUToolResponse;
@@ -69,5 +75,7 @@ pub mod dto {
         pub use super::frc_jointmotionjrep::FrcJointMotionJRepResponseDto as FrcJointMotionJRepResponse;
         pub use super::frc_jointrelativejrep::FrcJointRelativeJRepResponseDto as FrcJointRelativeJRepResponse;
         pub use super::frc_linearmotionjrep::FrcLinearMotionJRepResponseDto as FrcLinearMotionJRepResponse;
+        pub use super::frc_splinemotion::FrcSplineMotionResponseDto as FrcSplineMotionResponse;
+        pub use super::frc_splinemotionjrep::FrcSplineMotionJRepResponseDto as FrcSplineMotionJRepResponse;
 
 }

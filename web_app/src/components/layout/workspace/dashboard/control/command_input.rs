@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 use crate::components::layout::workspace::context::{WorkspaceContext, CommandLogEntry, CommandStatus, RecentCommand};
 use crate::websocket::WebSocketManager;
-use fanuc_rmi::dto::{SendPacket, Instruction, FrcLinearRelative, FrcLinearMotion, FrcJointMotion, Configuration, Position};
+use fanuc_rmi::dto::{SendPacket, Instruction, Configuration, Position};
 use fanuc_rmi::{SpeedType, TermType};
 
 /// Helper function to create a motion packet from a RecentCommand
@@ -50,49 +50,53 @@ pub fn create_motion_packet(cmd: &RecentCommand, ws: &WebSocketManager) -> Optio
     let term_value = if cmd.term_type == "FINE" { 0 } else { 100 };
 
     Some(match cmd.command_type.as_str() {
-        "linear_rel" => SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative {
-            sequence_id: 0,
-            configuration: config,
-            position,
-            speed_type,
-            speed: cmd.speed,
-            term_type,
-            term_value,
-            group: None,
-        })),
-        "linear_abs" => SendPacket::Instruction(Instruction::FrcLinearMotion(FrcLinearMotion {
-            sequence_id: 0,
-            configuration: config,
-            position,
-            speed_type,
-            speed: cmd.speed,
-            term_type,
-            term_value,
-            group: None,
-        })),
-        // Both joint_abs and joint_rel use FrcJointMotion - the position determines absolute vs relative
-        "joint_abs" | "joint_rel" => SendPacket::Instruction(Instruction::FrcJointMotion(FrcJointMotion {
-            sequence_id: 0,
-            configuration: config,
-            position,
-            speed_type,
-            speed: cmd.speed,
-            term_type,
-            term_value,
-            group: None,
-        })),
-        unknown => {
-            log::warn!("Unknown command type '{}', defaulting to linear_rel", unknown);
-            SendPacket::Instruction(Instruction::FrcLinearRelative(FrcLinearRelative {
-                sequence_id: 0,
-                configuration: config,
-                position,
+        "linear_rel" => SendPacket::Instruction(Instruction::FrcLinearRelative(
+            fanuc_rmi::instructions::FrcLinearRelative::single(
+                0,
+                config.clone().into(),
+                position.clone().into(),
                 speed_type,
-                speed: cmd.speed,
+                cmd.speed,
                 term_type,
                 term_value,
-                group: None,
-            }))
+            ).into(),
+        )),
+        "linear_abs" => SendPacket::Instruction(Instruction::FrcLinearMotion(
+            fanuc_rmi::instructions::FrcLinearMotion::single(
+                0,
+                config.clone().into(),
+                position.clone().into(),
+                speed_type,
+                cmd.speed,
+                term_type,
+                term_value,
+            ).into(),
+        )),
+        // Both joint_abs and joint_rel use FrcJointMotion - the position determines absolute vs relative
+        "joint_abs" | "joint_rel" => SendPacket::Instruction(Instruction::FrcJointMotion(
+            fanuc_rmi::instructions::FrcJointMotion::single(
+                0,
+                config.clone().into(),
+                position.clone().into(),
+                speed_type,
+                cmd.speed,
+                term_type,
+                term_value,
+            ).into(),
+        )),
+        unknown => {
+            log::warn!("Unknown command type '{}', defaulting to linear_rel", unknown);
+            SendPacket::Instruction(Instruction::FrcLinearRelative(
+                fanuc_rmi::instructions::FrcLinearRelative::single(
+                    0,
+                    config.clone().into(),
+                    position.clone().into(),
+                    speed_type,
+                    cmd.speed,
+                    term_type,
+                    term_value,
+                ).into(),
+            ))
         }
     })
 }
