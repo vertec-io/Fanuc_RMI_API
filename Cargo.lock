@@ -846,7 +846,7 @@ checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fanuc_rmi"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bincode",
  "fanuc_rmi_macros",

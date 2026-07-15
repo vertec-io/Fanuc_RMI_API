@@ -32,7 +32,7 @@ use fanuc_rmi::{
     commands::*,
     packets::{CommandResponse, CommunicationResponse, InstructionResponse, FrcConnectResponse, FrcDisconnectResponse},
     instructions::{FrcLinearMotionResponse, FrcLinearRelativeResponse, FrcJointMotionResponse, FrcJointMotionJRepResponse, FrcJointRelativeJRepResponse},
-    FrameData, Configuration, Position, JointAngles,
+    FrameData, Configuration, Position, JointAngles, GroupMask,
 };
 
 // US-004c: HTTP I/O stimulus sidecar (axum 0.8).
@@ -248,12 +248,44 @@ struct MotionCommand {
     #[allow(dead_code)]
     term_value: u64,
     instruction_type: String,
+    /// Group-2 positioner absolute joint target in **degrees** (`[J1, J2]`),
+    /// carried alongside the Group-1 arm target for coordinated two-group
+    /// motion (RMI Operators Manual §2.4.7.1). `None` for single-group packets.
+    /// The executor interpolates the positioner over the same duration as the
+    /// arm so both groups co-terminate (`COORD` semantics; see `split_groups`).
+    positioner_target: Option<[f64; 2]>,
     /// In-flight permit held while this command is queued or executing.
     /// Dropped when the executor finishes (or aborts) the command, freeing
     /// a slot in the 8-deep [`MOTION_IN_FLIGHT_CAP`] semaphore. `None`
     /// only in unit tests that exercise the executor without going
     /// through the dispatch table.
     _permit: Option<OwnedSemaphorePermit>,
+}
+
+/// Split a motion packet into its Group-1 (arm) data source and an optional
+/// Group-2 (positioner) joint target, handling both RMI wire forms:
+///
+/// - **Single group (flat):** arm data (`Position` / `JointAngle` /
+///   `Configuration`) sits at the top level → the arm source is `req` itself
+///   and there is no positioner target.
+/// - **Two groups (wrapped):** arm data is under `"G1"` and the positioner is
+///   `"G2": { "JointAngle": { "J1", "J2", … } }` (§2.4.7.1). The returned arm
+///   source is `req["G1"]`; the positioner target is `[J1, J2]` in degrees.
+///
+/// Shared motion params (`Speed`/`TermType`/`TermValue`/`COORD`) always stay at
+/// the top level and are read from `req` directly by the caller. `COORD` is
+/// accepted but not branched on: the sim always co-terminates the two groups.
+/// Accepts the legacy plural `"JointAngles"` key as well as the spec singular.
+fn split_groups(req: &serde_json::Value) -> (&serde_json::Value, Option<[f64; 2]>) {
+    let arm_src = req.get("G1").unwrap_or(req);
+    let positioner_target = req.get("G2").and_then(|g2| {
+        let ja = g2.get("JointAngle").or_else(|| g2.get("JointAngles"))?;
+        Some([
+            ja.get("J1").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            ja.get("J2").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        ])
+    });
+    (arm_src, positioner_target)
 }
 
 /// Response to send back after motion completes
@@ -330,6 +362,14 @@ struct RobotState {
     cartesian_position: [f32; 3],
     cartesian_orientation: [f32; 3],
     kinematics: CRXKinematics,
+    /// Group-2 positioner joint angles in **degrees** (as they arrive on the
+    /// wire; a 2-axis positioner uses J1/J2 — e.g. rotary + tilt). The
+    /// positioner has no CRX DH chain, so the sim models it joint-only: there
+    /// is no positioner Cartesian pose (Group-2 Cartesian reads return zeros).
+    positioner_joints: [f32; 2],
+    /// Motion groups the session reserved at `FRC_Initialize` (`GroupMask`).
+    /// Reads for an un-reserved group are rejected; defaults to Group 1.
+    active_groups: GroupMask,
     mode: SimulatorMode,
     last_sequence_id: u32, // Track the last completed sequence ID
     expected_next_sequence_id: u32, // Track the expected next sequence ID (for validation)
@@ -389,6 +429,8 @@ impl RobotState {
             cartesian_position: [pos[0] as f32, pos[1] as f32, pos[2] as f32],
             cartesian_orientation: [ori[0] as f32, ori[1] as f32, ori[2] as f32],
             kinematics,
+            positioner_joints: [0.0, 0.0],
+            active_groups: GroupMask::GROUP_1,
             mode,
             last_sequence_id: 0,
             expected_next_sequence_id: 1, // Start expecting sequence ID 1
@@ -538,7 +580,7 @@ async fn run_motion_executor(
         }
 
         // Get current position for interpolation
-        let (start_x, start_y, start_z, start_w, start_p, start_r, current_joints, mode) = {
+        let (start_x, start_y, start_z, start_w, start_p, start_r, current_joints, start_positioner, mode) = {
             let state = robot_state.lock().await;
             (
                 state.cartesian_position[0] as f64,
@@ -555,6 +597,7 @@ async fn run_motion_executor(
                     state.joint_angles[4] as f64,
                     state.joint_angles[5] as f64,
                 ],
+                [state.positioner_joints[0] as f64, state.positioner_joints[1] as f64],
                 state.mode.clone(),
             )
         };
@@ -630,6 +673,16 @@ async fn run_motion_executor(
                     )
                 }
             };
+
+        // Coordinated Group-2 positioner: factor its angular travel (degrees)
+        // into the motion extent so a positioner-heavy (or positioner-only)
+        // move still takes realtime rather than snapping instantly. Treated
+        // like mm for the duration heuristic (a sim simplification).
+        let positioner_delta = cmd
+            .positioner_target
+            .map(|t| (t[0] - start_positioner[0]).abs().max((t[1] - start_positioner[1]).abs()))
+            .unwrap_or(0.0);
+        let distance = distance.max(positioner_delta);
 
         // Apply speed override to motion speed
         let speed_override = control.get_speed_override() as f64 / 100.0;
@@ -743,6 +796,15 @@ async fn run_motion_executor(
                             }
                         }
                     }
+
+                    // Coordinated Group-2 positioner: interpolate its joints
+                    // over the same `t` so it co-terminates with the arm.
+                    if let Some(pt) = cmd.positioner_target {
+                        state.positioner_joints[0] =
+                            (start_positioner[0] + (pt[0] - start_positioner[0]) * t) as f32;
+                        state.positioner_joints[1] =
+                            (start_positioner[1] + (pt[1] - start_positioner[1]) * t) as f32;
+                    }
                 }
 
                 tokio::time::sleep(Duration::from_millis(update_interval_ms)).await;
@@ -790,6 +852,11 @@ async fn run_motion_executor(
                         state.joint_angles[5] = new_joints[5] as f32;
                     }
                 }
+            }
+            // Coordinated Group-2 positioner: jump to the final target.
+            if let Some(pt) = cmd.positioner_target {
+                state.positioner_joints[0] = pt[0] as f32;
+                state.positioner_joints[1] = pt[1] as f32;
             }
         }
 
@@ -933,12 +1000,17 @@ async fn handle_secondary_client(
                             let cmd: FrcInitialize = serde_json::from_value(request_json.clone())
                                 .unwrap_or_default();
 
-                            // Reset sequence tracking on initialize
+                            // Reset sequence tracking + record the reserved
+                            // motion groups (GroupMask) for this session.
                             {
                                 let mut state = robot_state.lock().await;
                                 state.last_sequence_id = 0;
                                 state.expected_next_sequence_id = 1;
-                                qeprintln!("🔄 Sequence counter reset: expected_next=1");
+                                state.active_groups = cmd.group_mask;
+                                qeprintln!(
+                                    "🔄 Sequence counter reset: expected_next=1; groups={:?}",
+                                    cmd.group_mask.groups().collect::<Vec<_>>()
+                                );
                             }
                             let response = CommandResponse::FrcInitialize(FrcInitializeResponse {
                                 error_id: 0,
@@ -974,10 +1046,18 @@ async fn handle_secondary_client(
                             let cmd: FrcReadJointAngles = serde_json::from_value(request_json.clone())
                                 .unwrap_or(FrcReadJointAngles { group: 1 });
                             let state = robot_state.lock().await;
-                            let response = CommandResponse::FrcReadJointAngles(FrcReadJointAnglesResponse {
-                                error_id: 0,
-                                time_tag: 0,
-                                joint_angles: JointAngles {
+                            // Group 2 = the positioner (joints in J1/J2); any other
+                            // group = the arm. A group not reserved at
+                            // FRC_Initialize echoes back but reads zeros.
+                            let group_active = state.active_groups.contains_group(cmd.group as u8);
+                            let joint_angles = if cmd.group == 2 {
+                                JointAngles {
+                                    j1: if group_active { state.positioner_joints[0] } else { 0.0 },
+                                    j2: if group_active { state.positioner_joints[1] } else { 0.0 },
+                                    j3: 0.0, j4: 0.0, j5: 0.0, j6: 0.0, j7: 0.0, j8: 0.0, j9: 0.0,
+                                }
+                            } else {
+                                JointAngles {
                                     j1: state.joint_angles[0],
                                     j2: state.joint_angles[1],
                                     j3: state.joint_angles[2],
@@ -987,7 +1067,12 @@ async fn handle_secondary_client(
                                     j7: 0.0,
                                     j8: 0.0,
                                     j9: 0.0,
-                                },
+                                }
+                            };
+                            let response = CommandResponse::FrcReadJointAngles(FrcReadJointAnglesResponse {
+                                error_id: 0,
+                                time_tag: 0,
+                                joint_angles,
                                 group: cmd.group,
                             });
                             serialize_response(response)
@@ -996,6 +1081,25 @@ async fn handle_secondary_client(
                             let cmd: FrcReadCartesianPosition = serde_json::from_value(request_json.clone())
                                 .unwrap_or(FrcReadCartesianPosition { group: 1 });
                             let state = robot_state.lock().await;
+                            // The Group-2 positioner is modeled joint-only (no CRX
+                            // DH chain), so it has no Cartesian TCP pose: a Group-2
+                            // Cartesian read returns zeros. Use FRC_ReadJointAngles
+                            // with group=2 to read the positioner.
+                            let pos = if cmd.group == 2 {
+                                Position { x: 0.0, y: 0.0, z: 0.0, w: 0.0, p: 0.0, r: 0.0, ext1: 0.0, ext2: 0.0, ext3: 0.0 }
+                            } else {
+                                Position {
+                                    x: state.cartesian_position[0] as f64,
+                                    y: state.cartesian_position[1] as f64,
+                                    z: state.cartesian_position[2] as f64,
+                                    w: state.cartesian_orientation[0] as f64,
+                                    p: state.cartesian_orientation[1] as f64,
+                                    r: state.cartesian_orientation[2] as f64,
+                                    ext1: 0.0,
+                                    ext2: 0.0,
+                                    ext3: 0.0,
+                                }
+                            };
                             let response = CommandResponse::FrcReadCartesianPosition(FrcReadCartesianPositionResponse {
                                 error_id: 0,
                                 time_tag: 0,
@@ -1010,17 +1114,7 @@ async fn handle_secondary_client(
                                     turn5: 0,
                                     turn6: 0,
                                 },
-                                pos: Position {
-                                    x: state.cartesian_position[0] as f64,
-                                    y: state.cartesian_position[1] as f64,
-                                    z: state.cartesian_position[2] as f64,
-                                    w: state.cartesian_orientation[0] as f64,
-                                    p: state.cartesian_orientation[1] as f64,
-                                    r: state.cartesian_orientation[2] as f64,
-                                    ext1: 0.0,
-                                    ext2: 0.0,
-                                    ext3: 0.0,
-                                },
+                                pos,
                                 group: cmd.group,
                             });
                             serialize_response(response)
@@ -1396,11 +1490,17 @@ async fn handle_secondary_client(
                         qeprintln!("✓ Sequence ID {} validated, next expected: {}", seq, state.expected_next_sequence_id);
                     }
 
+                    // Split single-group (flat) vs two-group (G1/G2 wrapped)
+                    // motion packets: `arm_src` is where the arm's Position /
+                    // JointAngle lives; `positioner_target` is the optional
+                    // Group-2 joint target carried alongside (§2.4.7.1).
+                    let (arm_src, positioner_target) = split_groups(&request_json);
+
                     // Handle motion instructions asynchronously
                     response_json = match request_json["Instruction"].as_str() {
                         Some("FRC_LinearMotion") => {
                             // Parse the Position from the instruction (absolute position)
-                            if let Some(position) = request_json.get("Position") {
+                            if let Some(position) = arm_src.get("Position") {
                                 let target_x = position["X"].as_f64().unwrap_or(0.0);
                                 let target_y = position["Y"].as_f64().unwrap_or(0.0);
                                 let target_z = position["Z"].as_f64().unwrap_or(0.0);
@@ -1437,6 +1537,7 @@ async fn handle_secondary_client(
                                     term_type,
                                     term_value,
                                     instruction_type: "FRC_LinearMotion".to_string(),
+                                    positioner_target,
                                     _permit: Some(permit),
                                 };
 
@@ -1461,7 +1562,7 @@ async fn handle_secondary_client(
                         }
                         Some("FRC_LinearRelative") => {
                             // Parse the Position from the instruction (relative offset)
-                            if let Some(position) = request_json.get("Position") {
+                            if let Some(position) = arm_src.get("Position") {
                                 let dx = position["X"].as_f64().unwrap_or(0.0);
                                 let dy = position["Y"].as_f64().unwrap_or(0.0);
                                 let dz = position["Z"].as_f64().unwrap_or(0.0);
@@ -1496,6 +1597,7 @@ async fn handle_secondary_client(
                                     term_type,
                                     term_value,
                                     instruction_type: "FRC_LinearRelative".to_string(),
+                                    positioner_target,
                                     _permit: Some(permit),
                                 };
 
@@ -1524,7 +1626,7 @@ async fn handle_secondary_client(
                             // queue it as a Cartesian-target motion through the same executor
                             // path used by FRC_LinearMotion so pause / abort / speed-override
                             // semantics are uniform across motion types.
-                            if let Some(position) = request_json.get("Position") {
+                            if let Some(position) = arm_src.get("Position") {
                                 let target_x = position["X"].as_f64().unwrap_or(0.0);
                                 let target_y = position["Y"].as_f64().unwrap_or(0.0);
                                 let target_z = position["Z"].as_f64().unwrap_or(0.0);
@@ -1558,6 +1660,7 @@ async fn handle_secondary_client(
                                     term_type,
                                     term_value,
                                     instruction_type: "FRC_JointMotion".to_string(),
+                                    positioner_target,
                                     _permit: Some(permit),
                                 };
 
@@ -1584,7 +1687,7 @@ async fn handle_secondary_client(
                             // FANUC RMI). We queue it as a JointAbsolute target so the executor
                             // interpolates joints and applies forward kinematics to keep the
                             // Cartesian readout consistent for subsequent reads.
-                            if let Some(joint_angles) = request_json.get("JointAngles") {
+                            if let Some(joint_angles) = arm_src.get("JointAngle").or_else(|| arm_src.get("JointAngles")) {
                                 let j1 = joint_angles["J1"].as_f64().unwrap_or(0.0);
                                 let j2 = joint_angles["J2"].as_f64().unwrap_or(0.0);
                                 let j3 = joint_angles["J3"].as_f64().unwrap_or(0.0);
@@ -1623,6 +1726,7 @@ async fn handle_secondary_client(
                                     term_type,
                                     term_value,
                                     instruction_type: "FRC_JointMotionJRep".to_string(),
+                                    positioner_target,
                                     _permit: Some(permit),
                                 };
 
@@ -1649,7 +1753,7 @@ async fn handle_secondary_client(
                             // route through the executor as a JointRelative target so pause /
                             // abort apply uniformly (the previous inline-mutation path bypassed
                             // the executor and was unaffected by FRC_Pause / FRC_Abort).
-                            if let Some(joint_angles) = request_json.get("JointAngles") {
+                            if let Some(joint_angles) = arm_src.get("JointAngle").or_else(|| arm_src.get("JointAngles")) {
                                 let dj1 = joint_angles["J1"].as_f64().unwrap_or(0.0);
                                 let dj2 = joint_angles["J2"].as_f64().unwrap_or(0.0);
                                 let dj3 = joint_angles["J3"].as_f64().unwrap_or(0.0);
@@ -1688,6 +1792,7 @@ async fn handle_secondary_client(
                                     term_type,
                                     term_value,
                                     instruction_type: "FRC_JointRelativeJRep".to_string(),
+                                    positioner_target,
                                     _permit: Some(permit),
                                 };
 
@@ -2333,6 +2438,7 @@ mod tests {
             term_type: "FINE".to_string(),
             term_value: 0,
             instruction_type: "FRC_JointMotion".to_string(),
+            positioner_target: None,
             _permit: None,
         };
 
@@ -2375,6 +2481,7 @@ mod tests {
             term_type: "FINE".to_string(),
             term_value: 0,
             instruction_type: "FRC_JointMotionJRep".to_string(),
+            positioner_target: None,
             _permit: None,
         };
 
@@ -2422,6 +2529,7 @@ mod tests {
             term_type: "FINE".to_string(),
             term_value: 0,
             instruction_type: "FRC_JointRelativeJRep".to_string(),
+            positioner_target: None,
             _permit: None,
         };
 
@@ -2442,6 +2550,97 @@ mod tests {
             "executor should have applied the J1 delta; expected {:.4} rad, got {:.4} rad",
             delta_rad,
             applied,
+        );
+    }
+
+    // ----- Group-2 (coordinated positioner) support -----
+
+    /// A single-group (flat) motion packet: the arm source is the packet
+    /// itself and there is no Group-2 positioner target.
+    #[test]
+    fn split_groups_flat_single_group_has_no_positioner() {
+        let req = serde_json::json!({
+            "Instruction": "FRC_LinearMotion",
+            "SequenceID": 1,
+            "Configuration": {"UToolNumber": 1},
+            "Position": {"X": 100.0, "Y": 0.0, "Z": 0.0},
+            "SpeedType": "mmSec", "Speed": 50.0, "TermType": "FINE", "TermValue": 0
+        });
+        let (arm_src, positioner) = split_groups(&req);
+        assert_eq!(arm_src["Position"]["X"], 100.0, "flat arm source is the packet itself");
+        assert!(positioner.is_none(), "single-group packet has no positioner target");
+    }
+
+    /// A two-group (wrapped) packet: the arm source is `G1` and the Group-2
+    /// positioner joint target is extracted from `G2.JointAngle`.
+    #[test]
+    fn split_groups_wrapped_two_group_extracts_positioner() {
+        let req = serde_json::json!({
+            "Instruction": "FRC_LinearMotion",
+            "SequenceID": 1,
+            "G1": {
+                "Configuration": {"UToolNumber": 1},
+                "Position": {"X": 200.0, "Y": 0.0, "Z": 0.0}
+            },
+            "G2": { "JointAngle": {"J1": 45.0, "J2": 10.0} },
+            "SpeedType": "mmSec", "Speed": 50.0, "TermType": "FINE", "TermValue": 0, "COORD": "ON"
+        });
+        let (arm_src, positioner) = split_groups(&req);
+        assert_eq!(arm_src["Position"]["X"], 200.0, "arm source is the G1 block");
+        assert_eq!(positioner, Some([45.0, 10.0]), "positioner target from G2.JointAngle");
+    }
+
+    /// Lenient-in: the legacy plural `JointAngles` key is still accepted.
+    #[test]
+    fn split_groups_accepts_plural_jointangles_alias() {
+        let req = serde_json::json!({
+            "G1": { "Position": {"X": 1.0} },
+            "G2": { "JointAngles": {"J1": 12.0, "J2": 34.0} }
+        });
+        let (_arm, positioner) = split_groups(&req);
+        assert_eq!(positioner, Some([12.0, 34.0]));
+    }
+
+    /// End-to-end: a coordinated command carrying a Group-2 positioner target
+    /// drives `positioner_joints` to the requested angles alongside the arm.
+    #[tokio::test]
+    async fn coordinated_positioner_moves_group2() {
+        let (motion_tx, robot_state, mut response_rx, _ctrl) = spawn_test_executor();
+
+        // Positioner starts at [0, 0].
+        {
+            let state = robot_state.lock().await;
+            assert_eq!(state.positioner_joints, [0.0, 0.0]);
+        }
+
+        let cmd = MotionCommand {
+            seq_id: 1,
+            target: MotionTarget::Cartesian {
+                pos: [300.0, 0.0, 400.0],
+                ori: [-180.0, 0.0, 0.0],
+                is_relative: false,
+            },
+            speed: 100.0,
+            term_type: "FINE".to_string(),
+            term_value: 0,
+            instruction_type: "FRC_LinearMotion".to_string(),
+            positioner_target: Some([45.0, 10.0]),
+            _permit: None,
+        };
+        motion_tx.send(cmd).await.expect("send motion");
+
+        let resp = tokio::time::timeout(Duration::from_secs(2), response_rx.recv())
+            .await
+            .expect("response within 2s")
+            .expect("response channel open");
+        assert_eq!(resp.seq_id, 1);
+
+        let state = robot_state.lock().await;
+        assert!(
+            (state.positioner_joints[0] as f64 - 45.0).abs() < 1e-2
+                && (state.positioner_joints[1] as f64 - 10.0).abs() < 1e-2,
+            "positioner should reach [45, 10]; got {:?}",
+            state.positioner_joints,
         );
     }
 
