@@ -46,8 +46,9 @@ pub mod protocol {
 /// A FANUC motion-group selection bitmask.
 ///
 /// FANUC controllers can be configured with multiple motion groups. Group 1 is
-/// the robot arm; a coordinated **positioner** (turntable / tilt-rotate table)
-/// is configured as a *second motion group* (Group 2). The RMI `GroupMask` field
+/// the robot arm; any additional coordinated axes — e.g. a **positioner**
+/// (turntable / tilt-rotate table), a track/rail, or a second robot — are
+/// configured as further motion groups (Group 2, Group 3, …). The RMI `GroupMask` field
 /// (used by `FRC_Initialize`) is a bitmask where **bit N-1 selects group N**:
 ///
 /// | Group | Bit  | Value |
@@ -82,7 +83,7 @@ pub struct GroupMask(u8);
 impl GroupMask {
     /// Group 1 (the robot arm) — the RMI default.
     pub const GROUP_1: GroupMask = GroupMask(0b0000_0001);
-    /// Group 2 — typically a coordinated positioner.
+    /// Group 2 — a second coordinated motion group (e.g. a positioner, track, or robot).
     pub const GROUP_2: GroupMask = GroupMask(0b0000_0010);
     /// Group 3.
     pub const GROUP_3: GroupMask = GroupMask(0b0000_0100);

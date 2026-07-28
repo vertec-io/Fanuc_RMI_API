@@ -171,7 +171,7 @@ impl FanucDriver {
         let (message_channel, _rx) = broadcast::channel(100);
         let (response_tx, _response_rx) = broadcast::channel(1000); // Larger buffer for high-frequency polling
         let (sent_instruction_tx, _sent_rx) = broadcast::channel(100);
-        let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(1000); //FIXME: there isnt a system on meteorite monitoring number of packets sent
+        let (queue_tx, queue_rx) = mpsc::channel::<DriverPacket>(1000); //FIXME: no backpressure/monitoring on the number of packets queued to the controller
         let next_available_sequence_number = Arc::new(std::sync::Mutex::new(1));
 
         let connected = Arc::new(Mutex::new(true));
