@@ -40,6 +40,95 @@ impl DriverPacket {
     }
 }
 
+/// Direction of a raw protocol frame relative to this process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RawDirection {
+    /// Written to the controller socket.
+    Sent,
+    /// Read from the controller socket.
+    Received,
+}
+
+impl RawDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RawDirection::Sent => "sent",
+            RawDirection::Received => "received",
+        }
+    }
+}
+
+/// One raw JSON frame exactly as it crossed the socket, before/after any typed
+/// deserialization. Used by diagnostic tooling that must capture the wire form
+/// (including frames the typed layer fails to parse).
+#[derive(Debug, Clone)]
+pub struct RawFrame {
+    pub direction: RawDirection,
+    /// The JSON text, with the trailing `\r\n` frame terminator stripped.
+    pub payload: String,
+    /// Set when the driver itself failed to deserialize a received frame
+    /// (carries the serde error text).
+    pub note: Option<String>,
+}
+
+/// Optional observer invoked for every raw frame the driver sends or receives.
+///
+/// Additive and off by default: [`FanucDriver::connect`] installs an empty hook,
+/// so behaviour is unchanged unless a caller opts in via
+/// [`FanucDriver::connect_with_raw_hook`]. The callback is synchronous and runs
+/// on the driver's I/O path — keep it cheap.
+#[derive(Clone, Default)]
+pub struct RawFrameHook(Option<Arc<dyn Fn(RawFrame) + Send + Sync>>);
+
+impl std::fmt::Debug for RawFrameHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "RawFrameHook(installed)"
+        } else {
+            "RawFrameHook(none)"
+        })
+    }
+}
+
+impl RawFrameHook {
+    /// Install an observer callback.
+    pub fn new(f: impl Fn(RawFrame) + Send + Sync + 'static) -> Self {
+        Self(Some(Arc::new(f)))
+    }
+
+    /// No observer (the default; zero overhead).
+    pub fn none() -> Self {
+        Self(None)
+    }
+
+    /// True when an observer is installed.
+    pub fn is_installed(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Report a frame written to the controller.
+    pub fn sent(&self, payload: impl Into<String>) {
+        self.emit(RawDirection::Sent, payload, None);
+    }
+
+    /// Report a frame read from the controller, with the driver's own
+    /// deserialization error when one occurred.
+    pub fn received(&self, payload: impl Into<String>, note: Option<String>) {
+        self.emit(RawDirection::Received, payload, note);
+    }
+
+    fn emit(&self, direction: RawDirection, payload: impl Into<String>, note: Option<String>) {
+        if let Some(f) = &self.0 {
+            let payload: String = payload.into();
+            f(RawFrame {
+                direction,
+                payload: payload.trim_end_matches(['\r', '\n']).to_string(),
+                note,
+            });
+        }
+    }
+}
+
 /// Protocol error information for broadcasting to clients.
 #[derive(Debug, Clone)]
 pub struct ProtocolError {
@@ -71,6 +160,9 @@ pub struct FanucDriver {
     /// When program_pause is called, in-flight instructions are stored here.
     /// When program_resume is called, instructions are read from here for replay.
     program_pause_instructions: Arc<std::sync::Mutex<Vec<Instruction>>>,
+    /// Optional raw-frame observer (see [`RawFrameHook`]). Empty unless the
+    /// caller connected via [`FanucDriver::connect_with_raw_hook`].
+    pub raw_hook: RawFrameHook,
 }
 
 impl FanucDriver {
@@ -123,6 +215,17 @@ impl FanucDriver {
     /// }
     /// ```
     pub async fn connect(config: FanucDriverConfig) -> Result<FanucDriver, FrcError> {
+        Self::connect_with_raw_hook(config, RawFrameHook::none()).await
+    }
+
+    /// Same as [`FanucDriver::connect`], but installs a [`RawFrameHook`] that
+    /// observes every raw JSON frame sent to and received from the controller —
+    /// including the `FRC_Connect` handshake and frames the typed layer fails to
+    /// deserialize. Intended for diagnostic/capture tooling.
+    pub async fn connect_with_raw_hook(
+        config: FanucDriverConfig,
+        raw_hook: RawFrameHook,
+    ) -> Result<FanucDriver, FrcError> {
         info!("Connecting fanuc");
         let init_addr = format!("{}:{}", config.addr, config.port);
         let mut stream = connect_with_retries(&init_addr, 3).await?;
@@ -133,6 +236,8 @@ impl FanucDriver {
                 "Communication: Connect packet didn't serialize correctly".to_string(),
             )
         })? + "\r\n";
+
+        raw_hook.sent(&serialized_packet);
 
         stream
             .write_all(serialized_packet.as_bytes())
@@ -152,7 +257,9 @@ impl FanucDriver {
         let response = String::from_utf8_lossy(&buffer[..n]);
         info!("Sent: {}Received: {}", &serialized_packet, &response);
 
-        let res: CommunicationResponse = serde_json::from_str(&response)
+        let parsed: Result<CommunicationResponse, _> = serde_json::from_str(&response);
+        raw_hook.received(response.to_string(), parsed.as_ref().err().map(|e| e.to_string()));
+        let res: CommunicationResponse = parsed
             .map_err(|e| FrcError::Serialization(format!("Could not parse response: {}", e)))?;
 
         let new_port = if let CommunicationResponse::FrcConnect(res) = res {
@@ -197,6 +304,7 @@ impl FanucDriver {
             connected,
             completed_packet_channel,
             program_pause_instructions: Arc::new(std::sync::Mutex::new(Vec::new())),
+            raw_hook,
         };
 
         let driver_clone1 = driver.clone();
@@ -1257,6 +1365,8 @@ impl FanucDriver {
             }
         };
 
+        self.raw_hook.sent(&serialized_packet);
+
         // Add timeout to write operation - this is still important to prevent blocking
         // indefinitely if the connection is stalled
         const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1338,6 +1448,7 @@ impl FanucDriver {
                 // Send directly to controller - bypass instruction queue
                 let fanuc_write = Arc::clone(&self.fanuc_write);
                 let log_channel = self.log_channel.clone();
+                let raw_hook = self.raw_hook.clone();
 
                 tokio::spawn(async move {
                     let serialized_packet = match serde_json::to_string(&packet) {
@@ -1347,6 +1458,8 @@ impl FanucDriver {
                             return;
                         }
                     };
+
+                    raw_hook.sent(&serialized_packet);
 
                     let mut stream = fanuc_write.lock().await;
                     if let Err(e) = stream.write_all(serialized_packet.as_bytes()).await {
@@ -1703,7 +1816,13 @@ impl FanucDriver {
         // HOT PATH: Only log at debug level to avoid flooding terminal
         self.log_debug(format!("Received: {}", line)).await;
 
-        match serde_json::from_str::<ResponsePacket>(&line) {
+        let parsed = serde_json::from_str::<ResponsePacket>(&line);
+        // Surface the raw frame (and the serde error, if any) to a diagnostic
+        // observer before any typed handling. No-op unless a hook is installed.
+        self.raw_hook
+            .received(line.clone(), parsed.as_ref().err().map(|e| e.to_string()));
+
+        match parsed {
             Ok(packet) => {
                 // Log InstructionResponse at info level for debugging
                 if matches!(packet, ResponsePacket::InstructionResponse(_)) {

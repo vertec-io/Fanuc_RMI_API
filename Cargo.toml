@@ -4,6 +4,7 @@ members = [
     "example",
     "fanuc_rmi",
     "fanuc_rmi_macros",
+    "probe",
     "sim",
     "web_common",
     "web_app",

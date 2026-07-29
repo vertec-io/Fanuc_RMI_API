@@ -5,3 +5,7 @@
 
 # Database
 data/
+
+# fanuc_probe capture output
+probe-output/
+**/probe-output/
