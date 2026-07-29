@@ -10,12 +10,27 @@ use tracing::{debug, error, info, warn};
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::time::Duration;
 use std::time::Instant;
 
 // Global request ID counter
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Render a `GroupMask` as the group numbers it names, e.g. `0b11` → `"G1+G2"`.
+/// Used in the group-mismatch error, where a raw bitmask tells the reader
+/// nothing about which block they forgot to build.
+fn describe_groups(mask: u8) -> String {
+    let names: Vec<String> = (1..=8)
+        .filter(|n| mask & (1 << (n - 1)) != 0)
+        .map(|n| format!("G{n}"))
+        .collect();
+    if names.is_empty() {
+        "none".to_string()
+    } else {
+        names.join("+")
+    }
+}
 
 // Prefer importing from the module rather than re-exporting from here
 // Prefer downstream crates to reference modules directly (crate::commands, crate::instructions, crate::dto)
@@ -302,6 +317,15 @@ pub struct FanucDriver {
     /// Wakes the background loops out of a parked read / sleep at teardown.
     /// Present on every clone.
     cancel_notify: Arc<Notify>,
+    /// The motion groups the controller reserved for this session, taken from
+    /// the `GroupMask` the controller **echoes back** in its `FRC_Initialize`
+    /// response — not from what we asked for. `0` means no session is
+    /// initialized and no group checking is possible.
+    ///
+    /// Shared across every clone (including the task clones), because it
+    /// describes the session, not the handle. See
+    /// [`FanucDriver::session_group_mask`].
+    session_group_mask: Arc<AtomicU8>,
     /// Sole owner of the session teardown — see [`DriverShutdown`].
     ///
     /// `Some` on every caller-held clone, `None` on the clones handed to the
@@ -477,6 +501,7 @@ impl FanucDriver {
             raw_hook,
             cancelled,
             cancel_notify,
+            session_group_mask: Arc::new(AtomicU8::new(0)),
             shutdown_owner: Some(shutdown_owner.clone()),
         };
 
@@ -539,6 +564,10 @@ impl FanucDriver {
     /// Prefer `disconnect().await` first when the link is healthy, so the
     /// controller is told the session is ending, then `shutdown()`.
     pub fn shutdown(&self) {
+        // The session is over, so its group reservation is too. Cleared on every
+        // teardown path because `disconnect_and_close` and the `Drop` owner both
+        // land here.
+        self.clear_session_group_mask();
         match &self.shutdown_owner {
             Some(owner) => owner.tear_down("explicit shutdown"),
             None => {
@@ -732,6 +761,11 @@ impl FanucDriver {
              RMI commands until the abort acknowledges — the controller will reject them with \
              RMIT-027 and report invalid status fields."
         ))?;
+
+        // The abort ends the RMI session, so its group reservation is gone too.
+        // Leaving a stale mask here would refuse valid single-group motion after
+        // the next initialize.
+        self.clear_session_group_mask();
 
         // After abort completes, clear the in-flight counter
         // The robot clears its motion queue on abort but doesn't send responses
@@ -1245,9 +1279,83 @@ impl FanucDriver {
         // Reset sequence counter after successful initialization.
         if result.error_id == 0 {
             self.reset_sequence_counter();
+            // Adopt the mask the CONTROLLER echoed, not the one we asked for.
+            // They can differ (the controller reserves what it actually has),
+            // and it is the controller's view that every subsequent motion
+            // packet is measured against.
+            let echoed = (result.group_mask & 0xFF) as u8;
+            self.session_group_mask.store(echoed, Ordering::SeqCst);
+            if u16::from(echoed) != result.group_mask {
+                self.log_warn(format!(
+                    "Controller reserved GroupMask {:#b}, which does not fit the 8 groups RMI \
+                     defines; group checking will use {:#b}",
+                    result.group_mask, echoed
+                ))
+                .await;
+            } else if echoed != group_mask {
+                self.log_warn(format!(
+                    "Requested GroupMask {group_mask:#b} but the controller reserved \
+                     {echoed:#b}; motion packets must carry {} group block(s) to match",
+                    echoed.count_ones()
+                ))
+                .await;
+            }
         }
 
         Ok(result)
+    }
+
+    /// The motion groups reserved for this session, as the controller echoed
+    /// them back from `FRC_Initialize`. `0` before a successful initialize and
+    /// after an abort or disconnect.
+    ///
+    /// Callers building motion need this: with more than one bit set, **every**
+    /// motion packet must carry that many group blocks (B-84184EN/03 §2.3.1).
+    pub fn session_group_mask(&self) -> u8 {
+        self.session_group_mask.load(Ordering::SeqCst)
+    }
+
+    /// Forget the session's reserved groups. Called when the RMI session ends
+    /// (abort/disconnect), because the reservation dies with it and a stale
+    /// mask would reject perfectly good motion after the next initialize.
+    fn clear_session_group_mask(&self) {
+        self.session_group_mask.store(0, Ordering::SeqCst);
+    }
+
+    /// Check a motion instruction's group blocks against the session mask.
+    ///
+    /// Returns the reason to refuse, or `None` when the packet may go out.
+    ///
+    /// **This rejects; it never pads.** Adding a zero-filled block to make the
+    /// count match would be silent and, for *absolute* motion, dangerous: a
+    /// zero block means "hold here" only on a relative instruction, while on an
+    /// absolute one it commands the group to drive to absolute zero. Refusing
+    /// with an explanation is the only safe answer, so the caller supplies a
+    /// real target for every reserved group.
+    fn reject_group_mask_mismatch(&self, packet: &SendPacket) -> Option<String> {
+        let SendPacket::Instruction(instruction) = packet else {
+            return None;
+        };
+        // No position payload (waits, frame/tool setters, program calls) — not
+        // group-bound, so nothing to check.
+        let packet_mask = instruction.motion_group_mask()?;
+        let session_mask = self.session_group_mask();
+        // No initialized session yet: the driver has nothing authoritative to
+        // check against, and guessing would refuse valid motion.
+        if session_mask == 0 || packet_mask == session_mask {
+            return None;
+        }
+        Some(format!(
+            "Refusing motion: this instruction carries motion group(s) {} but the session \
+             reserved {} (GroupMask {session_mask:#b}). The controller requires every motion \
+             packet to carry one position block per reserved group and would reject this with \
+             RMIT-040 Invalid Group Mask. Build the instruction with `with_groups`/`coordinated` \
+             so it names all {} group(s) — hold a group still with a zero *relative* delta, or \
+             its current position on an *absolute* move.",
+            describe_groups(packet_mask),
+            describe_groups(session_mask),
+            session_mask.count_ones(),
+        ))
     }
 
     /// Send a get status command to the FANUC controller
@@ -1738,6 +1846,18 @@ impl FanucDriver {
         packet: SendPacket,
         priority: PacketPriority,
     ) -> Result<u64, String> {
+        // Generate unique request ID
+        // Refuse a motion packet whose group blocks do not match the session's
+        // reserved GroupMask, before it reaches the wire. Downstream consumers
+        // repeatedly built single-group motion under a two-group session; the
+        // controller's only feedback was RMIT-040 on the far side of the queue,
+        // which reads like a robot fault rather than a caller bug.
+        if let Some(reason) = self.reject_group_mask_mismatch(&packet) {
+            error!("{reason}");
+            let _ = self.log_channel.send(format!("[ERROR] {reason}"));
+            return Err(reason);
+        }
+
         // Generate unique request ID
         let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
 

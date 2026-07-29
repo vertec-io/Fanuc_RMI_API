@@ -85,6 +85,43 @@ impl Instruction {
             Instruction::FrcSplineMotionJRep(resp) => resp.sequence_id,
         }
     }
+
+    /// The `GroupMask` this instruction's position payload actually carries, or
+    /// `None` for instructions that command no motion group at all (waits,
+    /// frame/tool/payload setters, program calls).
+    ///
+    /// The controller requires this to equal the session mask established by
+    /// `FRC_Initialize`: with two bits set, **every** motion packet must carry
+    /// two sets of position data or it is rejected with `RMIT-040 Invalid Group
+    /// Mask` (B-84184EN/03 §2.3.1). A single-group payload under a two-group
+    /// session is the classic form of that mistake — it looks correct in
+    /// isolation and only the controller says otherwise.
+    pub fn motion_group_mask(&self) -> Option<u8> {
+        match self {
+            // No position payload — group-independent, never validated.
+            Instruction::FrcWaitDIN(_)
+            | Instruction::FrcSetUFrame(_)
+            | Instruction::FrcSetUTool(_)
+            | Instruction::FrcWaitTime(_)
+            | Instruction::FrcSetPayLoad(_)
+            | Instruction::FrcCall(_) => None,
+
+            Instruction::FrcLinearMotion(i) => Some(i.groups.group_mask()),
+            Instruction::FrcLinearRelative(i) => Some(i.groups.group_mask()),
+            Instruction::FrcJointMotion(i) => Some(i.groups.group_mask()),
+            Instruction::FrcJointRelative(i) => Some(i.groups.group_mask()),
+            Instruction::FrcSplineMotion(i) => Some(i.groups.group_mask()),
+
+            Instruction::FrcLinearRelativeJRep(i) => Some(i.groups.group_mask()),
+            Instruction::FrcJointMotionJRep(i) => Some(i.groups.group_mask()),
+            Instruction::FrcJointRelativeJRep(i) => Some(i.groups.group_mask()),
+            Instruction::FrcLinearMotionJRep(i) => Some(i.groups.group_mask()),
+            Instruction::FrcSplineMotionJRep(i) => Some(i.groups.group_mask()),
+
+            Instruction::FrcCircularMotion(i) => Some(i.groups.group_mask()),
+            Instruction::FrcCircularRelative(i) => Some(i.groups.group_mask()),
+        }
+    }
 }
 
 #[cfg_attr(feature = "DTO", crate::mirror_dto)]

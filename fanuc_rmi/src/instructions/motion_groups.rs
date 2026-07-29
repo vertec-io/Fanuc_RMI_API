@@ -36,6 +36,24 @@ use std::fmt;
 
 use crate::{Configuration, JointAngles, Position};
 
+/// The `GroupMask` bit for Group 1, the value a flat single-group payload
+/// implies. Groups are 1-based on the wire and `GroupMask` is a bitmask, so
+/// group `n` is bit `n - 1` (§2.4.7.1: `GroupMask=5` ⇒ `G1` and `G3`).
+const GROUP_1_MASK: u8 = 0b0000_0001;
+
+/// Fold a set of wire group numbers (1-based) into a `GroupMask` bitmask.
+///
+/// Group numbers outside 1..=8 cannot be represented in the mask and are
+/// dropped rather than wrapping into some other group's bit — a mask that
+/// silently named the wrong group would be worse than one that fails the
+/// session-mask check.
+pub fn group_numbers_to_mask(numbers: impl IntoIterator<Item = u8>) -> u8 {
+    numbers
+        .into_iter()
+        .filter(|n| (1..=8).contains(n))
+        .fold(0u8, |mask, n| mask | (1u8 << (n - 1)))
+}
+
 /// One motion group's target within a multi-group packet.
 ///
 /// The first group of a given instruction is constrained to that instruction's
@@ -167,6 +185,18 @@ impl CartesianGroups {
             (2, group2),
         ])
     }
+
+    /// Which motion groups this payload carries, as a `GroupMask` bitmask.
+    ///
+    /// This must equal the session mask from `FRC_Initialize`, or the
+    /// controller rejects the packet with `RMIT-040 Invalid Group Mask`
+    /// (§2.3.1). See [`group_numbers_to_mask`].
+    pub fn group_mask(&self) -> u8 {
+        match self {
+            CartesianGroups::Single { .. } => GROUP_1_MASK,
+            CartesianGroups::Multi(blocks) => group_numbers_to_mask(blocks.iter().map(|(n, _)| *n)),
+        }
+    }
 }
 
 impl Serialize for CartesianGroups {
@@ -242,6 +272,14 @@ impl JointGroups {
     /// Arm(G1, joint) + positioner(G2) coordinated case.
     pub fn arm_and_group2(g1_joint: JointAngles, group2: GroupBlock) -> Self {
         JointGroups::Multi(vec![(1, GroupBlock::Joint { joint_angle: g1_joint }), (2, group2)])
+    }
+
+    /// Which motion groups this payload carries — see [`CartesianGroups::group_mask`].
+    pub fn group_mask(&self) -> u8 {
+        match self {
+            JointGroups::Single { .. } => GROUP_1_MASK,
+            JointGroups::Multi(blocks) => group_numbers_to_mask(blocks.iter().map(|(n, _)| *n)),
+        }
     }
 }
 
@@ -405,6 +443,14 @@ impl CircularGroups {
     /// Arm(G1) + Group 2 coordinated circular case.
     pub fn arm_and_group2(g1: CircGroupBlock, group2: CircGroupBlock) -> Self {
         CircularGroups::Multi(vec![(1, g1), (2, group2)])
+    }
+
+    /// Which motion groups this payload carries — see [`CartesianGroups::group_mask`].
+    pub fn group_mask(&self) -> u8 {
+        match self {
+            CircularGroups::Single { .. } => GROUP_1_MASK,
+            CircularGroups::Multi(blocks) => group_numbers_to_mask(blocks.iter().map(|(n, _)| *n)),
+        }
     }
 }
 
@@ -702,5 +748,86 @@ impl From<CircularGroupsDto> for CircularGroups {
             }
             CircularGroupsDto::Multi(v) => CircularGroups::Multi(circ_blocks_from_dto(v)),
         }
+    }
+}
+
+#[cfg(test)]
+mod group_mask_tests {
+    use super::*;
+    use crate::packets::Instruction;
+    use crate::{SpeedType, TermType};
+
+    /// The flat single-group form implies Group 1 — that implication is what
+    /// the driver's session check is built on.
+    #[test]
+    fn single_group_payloads_are_group_1() {
+        assert_eq!(
+            CartesianGroups::single(Configuration::default(), Position::default()).group_mask(),
+            0b01
+        );
+        assert_eq!(JointGroups::single(JointAngles::default()).group_mask(), 0b01);
+    }
+
+    #[test]
+    fn arm_and_group2_is_the_two_group_mask() {
+        let g2 = GroupBlock::joint(JointAngles::default());
+        assert_eq!(
+            CartesianGroups::arm_and_group2(
+                Configuration::default(),
+                Position::default(),
+                g2.clone()
+            )
+            .group_mask(),
+            0b11
+        );
+        assert_eq!(
+            JointGroups::arm_and_group2(JointAngles::default(), g2).group_mask(),
+            0b11
+        );
+    }
+
+    /// §2.4.7.1: `GroupMask=5` ⇒ `G1` and `G3`. Group numbers are 1-based and
+    /// non-contiguous masks are legal, so the bit math must not assume `G2`.
+    #[test]
+    fn non_contiguous_group_numbers_map_to_the_right_bits() {
+        let blocks = vec![
+            (1, GroupBlock::joint(JointAngles::default())),
+            (3, GroupBlock::joint(JointAngles::default())),
+        ];
+        assert_eq!(JointGroups::multi(blocks).group_mask(), 0b101);
+    }
+
+    /// A group number RMI cannot express must not silently fold into some other
+    /// group's bit — that would let a bogus packet pass the session check.
+    #[test]
+    fn out_of_range_group_numbers_are_dropped_not_wrapped() {
+        assert_eq!(group_numbers_to_mask([1, 9, 0]), 0b1);
+    }
+
+    /// The bug this whole guard exists for: a single-group instruction built
+    /// while the session reserved two groups.
+    #[test]
+    fn single_group_instruction_reports_a_mask_that_wont_match_two_groups() {
+        let instruction = Instruction::FrcLinearRelative(
+            crate::instructions::FrcLinearRelative::single(
+                1,
+                Configuration::default(),
+                Position::default(),
+                SpeedType::MMSec,
+                10.0,
+                TermType::FINE,
+                0,
+            ),
+        );
+        assert_eq!(instruction.motion_group_mask(), Some(0b01));
+        assert_ne!(instruction.motion_group_mask(), Some(0b11));
+    }
+
+    /// Non-motion instructions are group-independent and must stay exempt, or
+    /// the guard would refuse waits and frame setters under a two-group session.
+    #[test]
+    fn non_motion_instructions_carry_no_group_mask() {
+        let wait = Instruction::FrcWaitTime(crate::instructions::FrcWaitTime::new(1, 0.5));
+        assert_eq!(wait.motion_group_mask(), None);
     }
 }
