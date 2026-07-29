@@ -1,3 +1,23 @@
+# `FRC_Initialize` → 7015 on COMET1 — RESOLVED
+
+**Fix: delete the `RMI_MOVE` program on the teach pendant.** Verified live
+2026-07-29: `FRC_Initialize` returned `ErrorID: 0` on the first attempt after
+the delete, and abort / reset / repeated initialize are all clean since.
+
+Root cause: an earlier session initialized successfully (which is what *creates*
+RMI_MOVE, §2.3.1) and then died without sending `FRC_Abort` or `FRC_Disconnect`,
+leaving RMI_MOVE holding program control. A pendant ABORT cannot release it —
+§2.3.1 says so outright. Prevention is `FanucDriver::end_session()` plus the
+socket-leak fix in `0039770`; both landed here.
+
+> **Caveat that cost a false diagnosis.** `ProgramStatus: 0` is ambiguous. A
+> controller with NO RMI_MOVE at all also reports `0` ("Running"), so status
+> alone cannot distinguish stranded from healthy — an early version of
+> `readiness()` reported `OrphanedProgram` on a controller that then initialized
+> fine. Only the controller's answer to `FRC_Initialize` is authoritative.
+
+---
+
 # `FRC_Initialize` → 7015 on COMET1 (192.168.0.100)
 
 Live diagnosis, 2026-07-29, controller RMI v9.0. Run with:

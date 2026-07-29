@@ -1593,10 +1593,10 @@ impl FanucDriver {
                 self.log_error(&msg).await;
                 return Err(msg);
             }
-            // Do not fail here: report the cause and still attempt the
-            // initialize, so the controller's own verdict stays authoritative.
-            reason @ RmiReadiness::OrphanedProgram { .. } => {
-                self.log_warn(reason.explain()).await;
+            // Interface down is the normal case for a fresh connect; just say
+            // so and let FRC_Initialize be the authority.
+            reason @ RmiReadiness::InterfaceDown { .. } => {
+                self.log_info(reason.explain()).await;
             }
         }
 
@@ -1625,21 +1625,10 @@ impl FanucDriver {
             let msg = format!("Initialize failed: {}", crate::format_error_id(init_response.error_id));
             self.log_error(&msg).await;
 
-            // 7015 is MEMO-015 "Program already exists". The manual attributes it
-            // to RMI_MOVE being selected on the teach pendant, but that is not the
-            // only cause: it has been reproduced on an R-30iB with every documented
-            // precondition satisfied (servo_ready=1, tp_mode=0, rmi_motion_status=0),
-            // after a cold reboot, with RMI_MOVE deselected, and it survives
-            // FRC_Abort, FRC_Reset, and abort+reset. So suggest the documented
-            // remedy without asserting it as the diagnosis.
-            if init_response.error_id == 7015 {
-                self.log_error(
-                    "The controller already holds an RMI_MOVE program it will not replace. \
-                     Documented remedy: press SELECT on the TP, choose a program other than \
-                     RMI_MOVE, press ENTER, then retry. If RMI_MOVE is already deselected, \
-                     this is a controller-side program state that RMI commands cannot clear.",
-                )
-                .await;
+            // Attach the initialize-specific cause and remedy where one exists,
+            // so an operator gets an action rather than an error number.
+            if let Some(guidance) = crate::commands::explain_initialize_error(init_response.error_id) {
+                self.log_error(guidance).await;
             }
 
             return Err(msg);

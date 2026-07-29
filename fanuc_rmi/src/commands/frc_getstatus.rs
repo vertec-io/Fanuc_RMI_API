@@ -47,15 +47,11 @@ pub enum RmiReadiness {
     TeachPendantEnabled,
     /// Servo errors present. `FRC_Reset` may clear them.
     NotReady,
-    /// The RMI interface is down but an RMI_MOVE program still holds program
-    /// control. `FRC_Initialize` will return `7015 Program already exists`, and
-    /// **no RMI command can clear this** — not `FRC_Abort` (it fails with
-    /// `RMIT-014` because this session has no running RMI to abort), not
-    /// `FRC_Reset`, and not a pendant ABORT (§2.3.1 says so explicitly).
-    ///
-    /// Caused by an earlier session that initialized successfully and then went
-    /// away without sending `FRC_Abort` or `FRC_Disconnect`.
-    OrphanedProgram { state: ProgramState },
+    /// The RMI interface is down and the RMI_MOVE program is not reported as
+    /// aborted. `FRC_Initialize` is still worth attempting — see the note on
+    /// [`FrcGetStatusResponse::readiness`] for why this is NOT treated as a
+    /// failure.
+    InterfaceDown { program: ProgramState },
 }
 
 impl RmiReadiness {
@@ -76,13 +72,39 @@ impl RmiReadiness {
                 "The controller is not ready for motion (servo or other errors). Clear the \
                  fault on the pendant, or send a reset, then retry."
             }
-            Self::OrphanedProgram { .. } => {
-                "An earlier RMI session ended without aborting, so the RMI_MOVE program still \
-                 holds program control on the controller. Initialize will be rejected with \
-                 'Program already exists' (7015). Aborting from the teach pendant does not \
-                 release it; the controller needs its program control cleared."
+            Self::InterfaceDown { .. } => {
+                "The RMI interface is not running. Initialize to start it."
             }
         }
+    }
+}
+
+/// Explain an `FRC_Initialize` rejection in operator terms, with the remedy.
+///
+/// Returns `None` for ids with no initialize-specific guidance; callers should
+/// fall back to [`crate::format_error_id`].
+pub fn explain_initialize_error(error_id: u32) -> Option<&'static str> {
+    match error_id {
+        // MEMO-015. The manual attributes this to RMI_MOVE being *selected* on
+        // the pendant, but that is not the only cause and the documented remedy
+        // does not always work: reproduced on an R-30iB with every precondition
+        // satisfied, after a cold reboot, with RMI_MOVE deselected, surviving
+        // FRC_Abort, FRC_Reset and abort+reset.
+        //
+        // The cause in that case is a previous session that initialized
+        // successfully and then went away without FRC_Abort or FRC_Disconnect,
+        // leaving RMI_MOVE holding program control (§2.3.1 states a pendant
+        // ABORT does not release it). Since FRC_Initialize is what *creates*
+        // RMI_MOVE, deleting the program lets it be recreated — verified live as
+        // the fix on COMET1.
+        7015 => Some(
+            "The controller already has an RMI_MOVE program it will not replace. First press              SELECT on the teach pendant, choose a program other than RMI_MOVE, and press              ENTER. If that does not clear it, an earlier session ended without aborting and              RMI_MOVE still holds program control: delete the RMI_MOVE program on the pendant              and it will be recreated on the next connect.",
+        ),
+        // MEMO-004.
+        7004 => Some(
+            "The RMI_MOVE program is in use on the controller. Press SELECT on the teach              pendant and choose a different program, then retry.",
+        ),
+        _ => None,
     }
 }
 
@@ -110,10 +132,12 @@ pub struct FrcGetStatusResponse {
     /// running and `FRC_Initialize` may be sent to (re)start it.
     ///
     /// This is NOT the same as [`Self::program_status`], and the two can
-    /// disagree: `rmi_motion_status == 0` with `program_status == 0` means the
-    /// interface is down while an orphaned RMI_MOVE program is still running.
-    /// That combination is what produces `7015 MEMO-015 Program already exists`
-    /// on the next `FRC_Initialize`, and no RMI command can clear it.
+    /// disagree. Note that `rmi_motion_status == 0` with `program_status == 0`
+    /// is **ambiguous**: it looks identical whether RMI_MOVE is genuinely
+    /// running (stranded — the next `FRC_Initialize` returns `7015`) or does not
+    /// exist at all (healthy — `FRC_Initialize` succeeds). Only the
+    /// controller's answer to `FRC_Initialize` distinguishes them; see
+    /// [`explain_initialize_error`].
     #[serde(rename = "RMIMotionStatus", default)]
     pub rmi_motion_status: i8,
     /// The RMI_MOVE TP program's state: **0 = Running, 1 = Paused,
@@ -176,11 +200,18 @@ impl FrcGetStatusResponse {
         if self.rmi_interface_running() {
             return RmiReadiness::AlreadyRunning;
         }
-        // Interface down, but the program is not aborted: an earlier session
-        // left RMI_MOVE holding program control. This is the 7015 trap.
+        // Interface down. ProgramStatus alone CANNOT tell us whether RMI_MOVE
+        // is genuinely running or simply does not exist — a controller with no
+        // RMI_MOVE at all reports ProgramStatus 0 ("Running"), and Initialize
+        // then succeeds. Verified live: a controller reporting 0 here
+        // initialized with ErrorID 0 immediately after RMI_MOVE was deleted.
+        //
+        // So do not pre-judge. Report the interface as down and let the
+        // controller's own answer to FRC_Initialize be authoritative; if it
+        // rejects with 7015, `explain_initialize_error` gives the real cause.
         match self.program_state() {
             ProgramState::Aborted => RmiReadiness::Ready,
-            state => RmiReadiness::OrphanedProgram { state },
+            program => RmiReadiness::InterfaceDown { program },
         }
     }
 }
@@ -213,15 +244,16 @@ mod tests {
         assert_eq!(ProgramState::from_raw(2), ProgramState::Aborted);
     }
 
-    /// The exact frame COMET1 returned while rejecting every FRC_Initialize.
+    /// ProgramStatus 0 is ambiguous: COMET1 returned this exact frame both
+    /// while stranded AND immediately after RMI_MOVE was deleted, when
+    /// Initialize then succeeded. So it must NOT be reported as a failure.
     #[test]
-    fn orphaned_program_is_detected_from_the_real_comet1_frame() {
+    fn interface_down_is_not_treated_as_a_failure() {
         let s = status(0, 1, 0, 0);
         assert_eq!(
             s.readiness(),
-            RmiReadiness::OrphanedProgram { state: ProgramState::Running }
+            RmiReadiness::InterfaceDown { program: ProgramState::Running }
         );
-        assert!(!s.readiness().is_ready());
     }
 
     #[test]
