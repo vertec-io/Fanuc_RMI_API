@@ -71,6 +71,8 @@ pub struct RawFrame {
     pub note: Option<String>,
 }
 
+use crate::{OperatorAction, RmiFault};
+
 /// How long to wait for `FRC_Abort` to acknowledge.
 ///
 /// Deliberately far longer than an ordinary command budget: abort terminates a
@@ -1561,7 +1563,7 @@ impl FanucDriver {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn startup_sequence(&self) -> Result<(), String> {
+    pub async fn startup_sequence(&self) -> Result<(), RmiFault> {
         self.log_info("Starting robot initialization sequence...").await;
 
         // Step 1: Get current status
@@ -1569,9 +1571,9 @@ impl FanucDriver {
         let status = self.get_status().await?;
 
         if status.error_id != 0 {
-            let msg = format!("Get status failed with error: {}", status.error_id);
-            self.log_error(&msg).await;
-            return Err(msg);
+            let fault = RmiFault::from_error_id(status.error_id);
+            self.log_error(format!("Get status failed: {}", fault.full_text())).await;
+            return Err(fault);
         }
 
         // Step 2: Classify the controller against the §2.3.1 preconditions, so
@@ -1589,9 +1591,14 @@ impl FanucDriver {
         match status.readiness() {
             RmiReadiness::Ready | RmiReadiness::AlreadyRunning => {}
             reason @ (RmiReadiness::TeachPendantEnabled | RmiReadiness::NotReady) => {
-                let msg = reason.explain().to_string();
-                self.log_error(&msg).await;
-                return Err(msg);
+                let action = if matches!(reason, RmiReadiness::TeachPendantEnabled) {
+                    OperatorAction::DisableTeachPendant
+                } else {
+                    OperatorAction::ClearControllerFault
+                };
+                let fault = RmiFault::local(reason.explain()).with_action(action);
+                self.log_error(fault.full_text()).await;
+                return Err(fault);
             }
             // Interface down is the normal case for a fresh connect; just say
             // so and let FRC_Initialize be the authority.
@@ -1607,9 +1614,9 @@ impl FanucDriver {
             let abort_response = self.abort().await?;
 
             if abort_response.error_id != 0 {
-                let msg = format!("Abort failed: {}", crate::format_error_id(abort_response.error_id));
-                self.log_error(&msg).await;
-                return Err(msg);
+                let fault = RmiFault::from_error_id(abort_response.error_id);
+                self.log_error(format!("Abort failed: {}", fault.full_text())).await;
+                return Err(fault);
             }
 
             self.log_info("Abort successful").await;
@@ -1622,16 +1629,13 @@ impl FanucDriver {
         let init_response = self.initialize().await?;
 
         if init_response.error_id != 0 {
-            let msg = format!("Initialize failed: {}", crate::format_error_id(init_response.error_id));
-            self.log_error(&msg).await;
-
-            // Attach the initialize-specific cause and remedy where one exists,
-            // so an operator gets an action rather than an error number.
-            if let Some(guidance) = crate::commands::explain_initialize_error(init_response.error_id) {
-                self.log_error(guidance).await;
-            }
-
-            return Err(msg);
+            // The fault carries the decoded id AND, where the failure needs
+            // someone at the cell, the pendant procedure that clears it. Logging
+            // full_text() means the steps reach anyone watching the log even if
+            // the caller has no UI to show a dialog in.
+            let fault = RmiFault::from_error_id(init_response.error_id);
+            self.log_error(format!("Initialize failed: {}", fault.full_text())).await;
+            return Err(fault);
         }
 
         // Note: initialize() already resets sequence counter to 1 on success
