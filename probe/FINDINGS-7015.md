@@ -6,7 +6,7 @@ Live diagnosis, 2026-07-29, controller RMI v9.0. Run with:
 cargo run -p fanuc_probe --bin init_diag -- --addr 192.168.0.100:16001
 ```
 
-## What is proven
+## Reproduction
 
 Software cannot clear this. Every recovery sequence was tried against the live
 controller and all returned the same rejection:
@@ -24,40 +24,60 @@ does not log it as a fault — 7015 is a **rejection of the request**, not a
 latched error state, which is why nothing on the pendant looks wrong and why
 clearing faults changes nothing.
 
-## Every documented precondition PASSES
+## ROOT CAUSE (B-84184EN/03 §2.3.1, §2.3.7)
 
-Healthy status is stable and byte-identical across every run, including after
-toggling the TP enable switch on (fault), off, and resetting:
+Status is stable and byte-identical across every run:
 
 ```json
 {"ErrorID":0,"ServoReady":1,"TPMode":0,"RMIMotionStatus":0,"ProgramStatus":0,
- "SingleStepMode":0,"NumberUTool":10,"NumberUFrame":9,"Override":10,
- "UI[2]":1,"UI[8]":1}
+ "SingleStepMode":0,"NumberUTool":10,"NumberUFrame":9,"Override":10}
 ```
 
-Checked against `FanucDriver::startup_sequence`, which is the authority here
-because it cites FANUC B-84184EN/02 directly:
+Decoded against the manual's own field definitions (§2.3.7):
 
-- `ServoReady: 1` — required 1. **PASS**
-- `TPMode: 0` — B-84184EN/02: *0 = teach pendant disabled, 1 = enabled*, and
-  RMI works only while the pendant is **disabled**. So 0 is exactly right.
-  **PASS**
-- `RMIMotionStatus: 0` — 0 means "can initialize", which also rules out the
-  "RMI_MOVE is still running" theory. **PASS**
+| Field | Value | Manual |
+|---|---|---|
+| `ServoReady` | 1 | ready for motion — **OK** |
+| `TPMode` | 0 | pendant disabled, required by RMI — **OK** |
+| `RMIMotionStatus` | 0 | the RMI **interface** is NOT running; `FRC_Initialize` is allowed |
+| `ProgramStatus` | 0 | **0 = RMI_MOVE program is Running** (1 = Paused, 2 = Aborted) |
 
-So the controller reports itself fully ready and still refuses Initialize.
-That is the actual finding: **7015 here is not explained by any precondition
-the manual documents.**
+Those last two disagree, and that disagreement is the bug: **the RMI interface
+is down while the RMI_MOVE TP program is still running.** `FRC_Initialize` then
+tries to create RMI_MOVE, finds it already there, and returns
+`7015 MEMO-015 Program already exists`.
 
-> Correction to an earlier draft of this file, which named `TPMode: 0` as a
-> violated precondition. That came from two wrong annotations in this repo —
-> `frc_getstatus.rs` said "1 = AUTO mode, 0 = manual" and
-> `FANUC_INITIALIZATION_SEQUENCE.md` said "should be 1". Both contradicted the
-> driver's own manual-sourced check (`tp_mode != 0`). Both are now fixed.
-> FANUC's docs were never wrong; ours were.
+§2.3.1 states the consequence explicitly:
 
-`NumberUTool: 10` / `NumberUFrame: 9` are **slot counts** available on the
-controller, not the active tool/frame numbers.
+> If the FRC_Initialize command is executed successfully, you will have to send
+> an FRC_Abort command to terminate the RMI program in order for another TP
+> program to run. Otherwise, **even if you manually abort the RMI_MOVE TP
+> program through the teach pendant, the RMI still has program control** and
+> you will not be able to execute other TP programs.
+
+That is why FCTN → ABORT (ALL) on the pendant did nothing. And §2.3.2:
+
+> Please always end your RMI session with either an FRC_Abort or FRC_Disconnect
+> packet. This will ensure you can execute other TP programs after the RMI
+> session.
+
+A prior session initialized successfully and then died without sending either —
+consistent with the leaked sockets found earlier (one meteorite process holding
+three connections to `:16002`). The orphaned program kept control.
+
+The deadlock is real: `FRC_Initialize` fails because the program exists, and
+`FRC_Abort` fails (`RMIT-014 RMI Command Fail`) because `RMIMotionStatus == 0`
+means this session has no running RMI to abort.
+
+### Two annotations in this repo hid this
+
+- `program_status` was annotated `1 = aborted`. The manual says **0 = Running**.
+  So the healthy-looking `0` actually meant "RMI_MOVE is running" the entire
+  time.
+- `tp_mode` was annotated `1 = AUTO mode, 0 = manual`. The manual says
+  **0 = pendant disabled**, which is what RMI requires.
+
+Both are fixed. FANUC's documentation was correct throughout; ours was not.
 
 ## Second, unrelated defect found: `FRC_Abort` wedges the session
 
