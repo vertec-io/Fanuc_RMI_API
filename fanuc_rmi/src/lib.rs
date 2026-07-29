@@ -463,7 +463,7 @@ pub enum TermType {
 /// * `InchMin` - Represents speed in inches per second.
 /// * `Time` - Represents time in 0.1 second increments.
 /// * `MilliSeconds` - Represents time in milliseconds (0.001 seconds).
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeedType {
     #[serde(rename = "mmSec")]
     MMSec, // Speed in millimeters per second (mm/sec).
@@ -473,5 +473,15 @@ pub enum SpeedType {
     Time, // Time in 0.1 second increments.
     #[serde(rename = "mSec")]
     MilliSeconds, // Time in milliseconds (0.001 seconds).
+    /// Percentage of maximum speed, 1-100 (`J P[10] 10% CNT100`).
+    ///
+    /// **Joint motion requires this** (or `Time`/`mSec`). B-84184EN/03 §2.4.9:
+    /// "the joint motion only supports the following ... speed types: Percent,
+    /// Time, mSec". Sending [`MMSec`](Self::MMSec) on any joint instruction —
+    /// `FRC_JointMotion`, `FRC_JointRelative`, and the `JRep` forms — is
+    /// rejected with `RMIT-030 Invalid Speed Type`, verified live on an R-30iB.
+    /// Cartesian instructions are the opposite: they take `mmSec`, not percent.
+    #[serde(rename = "Percent")]
+    Percent,
 }
 

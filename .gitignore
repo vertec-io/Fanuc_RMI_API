@@ -9,3 +9,6 @@ data/
 # fanuc_probe capture output
 probe-output/
 **/probe-output/
+
+# Live hardware test rig (local only, not for the repo)
+livetest/

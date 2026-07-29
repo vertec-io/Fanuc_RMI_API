@@ -1858,6 +1858,19 @@ impl FanucDriver {
             return Err(reason);
         }
 
+        // Same idea for the speed notation: joint motion takes a percentage,
+        // a Cartesian path takes a rate, and `SpeedType` is one shared enum that
+        // gives no hint which is which. Getting it wrong costs an RMIT-030 from
+        // the controller, well after the call site.
+        if let SendPacket::Instruction(instruction) = &packet {
+            if let Some(reason) = instruction.check_speed_type() {
+                let reason = format!("Refusing motion: {reason}");
+                error!("{reason}");
+                let _ = self.log_channel.send(format!("[ERROR] {reason}"));
+                return Err(reason);
+            }
+        }
+
         // Generate unique request ID
         let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
 
