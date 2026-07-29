@@ -124,6 +124,19 @@ async fn main() {
 
     // Baseline: what does the controller think its state is before we touch it?
     status(&driver, "baseline").await;
+
+    // The typed verdict, which is what callers should branch on.
+    match driver.get_status().await {
+        Ok(s) => {
+            println!("\n=== readiness verdict ===");
+            println!("  teach pendant disabled : {}", s.teach_pendant_disabled());
+            println!("  RMI interface running  : {}", s.rmi_interface_running());
+            println!("  RMI_MOVE program       : {}", s.program_state());
+            println!("  readiness              : {:?}", s.readiness());
+            println!("  -> {}", s.readiness().explain());
+        }
+        Err(e) => println!("readiness check failed: {e}"),
+    }
     read_error(&driver, "baseline — what is the controller's own last error?").await;
 
     // Reproduce the failure so the sequences below have something to compare to.

@@ -71,6 +71,13 @@ pub struct RawFrame {
     pub note: Option<String>,
 }
 
+/// How long to wait for `FRC_Abort` to acknowledge.
+///
+/// Deliberately far longer than an ordinary command budget: abort terminates a
+/// running TP program, and a premature timeout leaves the session wedged (see
+/// [`FanucDriver::abort`]).
+const ABORT_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Optional observer invoked for every raw frame the driver sends or receives.
 ///
 /// Additive and off by default: [`FanucDriver::connect`] installs an empty hook,
@@ -547,6 +554,71 @@ impl FanucDriver {
     /// then always calls [`FanucDriver::shutdown`]. A failed or timed-out
     /// acknowledgement is logged, not propagated — the socket still closes,
     /// which is the whole point.
+    /// End an RMI session the way B-84184EN/03 §2.3.2 requires, then close the
+    /// socket. **This is the correct way to finish with a controller** — prefer
+    /// it over calling [`Self::disconnect`] or [`Self::shutdown`] directly.
+    ///
+    /// > "Please always end your RMI session with either an FRC_Abort or
+    /// > FRC_Disconnect packet. This will ensure you can execute other TP
+    /// > programs after the RMI session."
+    ///
+    /// Skipping this is not a cosmetic omission. If a session initializes
+    /// successfully and then goes away without aborting, the RMI_MOVE TP program
+    /// keeps **program control** of the controller. Every later
+    /// `FRC_Initialize` is then rejected with `7015 Program already exists`, and
+    /// per §2.3.1 aborting RMI_MOVE from the teach pendant does **not** release
+    /// it — the controller effectively needs servicing to recover. That failure
+    /// has been reproduced on an R-30iB and survives reboots, `FRC_Abort` and
+    /// `FRC_Reset`.
+    ///
+    /// The abort is best-effort: it is skipped when the RMI interface is not
+    /// running (where it would fail with `RMIT-014`), and a failure is logged
+    /// rather than propagated, because the disconnect must still happen.
+    pub async fn end_session(&self) {
+        // Only abort when there is actually a running RMI to abort. Sending it
+        // unconditionally just yields RMIT-014 and wastes the abort budget.
+        let should_abort = match self.get_status().await {
+            Ok(status) => status.rmi_interface_running(),
+            Err(e) => {
+                // Status is the thing we would branch on, so if it is unavailable
+                // attempt the abort anyway — an unnecessary abort is harmless,
+                // a skipped one can strand the controller.
+                self.log_warn(format!(
+                    "Could not read status before ending the session ({e}); attempting abort anyway"
+                ))
+                .await;
+                true
+            }
+        };
+
+        if should_abort {
+            match self.abort().await {
+                Ok(resp) if resp.error_id == 0 => {
+                    self.log_info("RMI program aborted; program control released").await;
+                }
+                Ok(resp) => {
+                    self.log_warn(format!(
+                        "Abort while ending the session returned {}. The controller may still \
+                         hold RMI program control, which would reject the next FRC_Initialize \
+                         with 7015.",
+                        crate::format_error_id(resp.error_id)
+                    ))
+                    .await;
+                }
+                Err(e) => {
+                    self.log_warn(format!(
+                        "Abort while ending the session failed ({e}). The controller may still \
+                         hold RMI program control, which would reject the next FRC_Initialize \
+                         with 7015."
+                    ))
+                    .await;
+                }
+            }
+        }
+
+        self.disconnect_and_close(Duration::from_secs(5)).await;
+    }
+
     pub async fn disconnect_and_close(&self, timeout: Duration) {
         match tokio::time::timeout(timeout, self.disconnect()).await {
             Ok(Ok(resp)) => info!("FANUC acknowledged disconnect: {:?}", resp),
@@ -637,8 +709,14 @@ impl FanucDriver {
         let mut response_rx = self.response_tx.subscribe();
         let _request_id = self.send_abort()?;
 
-        // Wait up to 5 seconds for response
-        let result = tokio::time::timeout(Duration::from_secs(5), async {
+        // FRC_Abort terminates a running TP program, which on real hardware can
+        // take far longer than an ordinary command to acknowledge — measured
+        // well past 5s on an R-30iB. Timing out early is not harmless: anything
+        // sent while the abort is still outstanding comes back
+        // RMIT-027 "Wait for Command Done", and FRC_GetStatus starts returning
+        // garbage field values (ProgramStatus -4, UI[8] -53) that a caller could
+        // easily mistake for real state. So wait generously.
+        let result = tokio::time::timeout(ABORT_TIMEOUT, async {
             while let Ok(response) = response_rx.recv().await {
                 if let ResponsePacket::CommandResponse(CommandResponse::FrcAbort(abort_response)) = response {
                     return Ok(abort_response);
@@ -647,7 +725,11 @@ impl FanucDriver {
             Err("Response channel closed".to_string())
         })
         .await
-        .map_err(|_| "Timeout waiting for abort response".to_string())?;
+        .map_err(|_| format!(
+            "Timeout waiting for abort response after {ABORT_TIMEOUT:?}. Do NOT send further \
+             RMI commands until the abort acknowledges — the controller will reject them with \
+             RMIT-027 and report invalid status fields."
+        ))?;
 
         // After abort completes, clear the in-flight counter
         // The robot clears its motion queue on abort but doesn't send responses
@@ -1492,26 +1574,31 @@ impl FanucDriver {
             return Err(msg);
         }
 
-        // Step 2: Check if controller is ready
-        if status.servo_ready != 1 {
-            let msg = "Controller not ready (servo errors present)".to_string();
-            self.log_error(&msg).await;
-            return Err(msg);
-        }
-
-        // Per FANUC documentation B-84184EN/02:
-        // TPMode: if it is 0, the teach pendant is disabled. If it is 1, the teach pendant is enabled.
-        // The Remote Motion interface only works when the teach pendant is disabled.
-        if status.tp_mode != 0 {
-            let msg = "Teach pendant is enabled (tp_mode=1). RMI requires teach pendant to be disabled (tp_mode=0). Switch to AUTO mode.".to_string();
-            self.log_error(&msg).await;
-            return Err(msg);
-        }
-
+        // Step 2: Classify the controller against the §2.3.1 preconditions, so
+        // an unusable state is reported with its cause instead of surfacing
+        // later as a bare error id from FRC_Initialize.
         self.log_info(&format!(
-            "Robot status: servo_ready={}, tp_mode={}, rmi_motion_status={}",
-            status.servo_ready, status.tp_mode, status.rmi_motion_status
-        )).await;
+            "Robot status: servo_ready={}, teach pendant {}, RMI interface {}, RMI_MOVE program {}",
+            status.servo_ready,
+            if status.teach_pendant_disabled() { "disabled" } else { "ENABLED" },
+            if status.rmi_interface_running() { "running" } else { "not running" },
+            status.program_state(),
+        ))
+        .await;
+
+        match status.readiness() {
+            RmiReadiness::Ready | RmiReadiness::AlreadyRunning => {}
+            reason @ (RmiReadiness::TeachPendantEnabled | RmiReadiness::NotReady) => {
+                let msg = reason.explain().to_string();
+                self.log_error(&msg).await;
+                return Err(msg);
+            }
+            // Do not fail here: report the cause and still attempt the
+            // initialize, so the controller's own verdict stays authoritative.
+            reason @ RmiReadiness::OrphanedProgram { .. } => {
+                self.log_warn(reason.explain()).await;
+            }
+        }
 
         // Step 3: Abort if RMI is already running
         // According to B-84184EN_02: FRC_Abort only works when RMI_MOVE is running
