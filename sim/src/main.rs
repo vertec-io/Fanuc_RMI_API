@@ -248,12 +248,24 @@ struct MotionCommand {
     #[allow(dead_code)]
     term_value: u64,
     instruction_type: String,
-    /// Group-2 positioner absolute joint target in **degrees** (`[J1, J2]`),
-    /// carried alongside the Group-1 arm target for coordinated two-group
-    /// motion (RMI Operators Manual §2.4.7.1). `None` for single-group packets.
-    /// The executor interpolates the positioner over the same duration as the
-    /// arm so both groups co-terminate (`COORD` semantics; see `split_groups`).
+    /// Group-2 positioner joint target in **degrees** (`[J1, J2]`), carried
+    /// alongside the Group-1 arm target for two-group motion (RMI Operators
+    /// Manual §2.4.7.1). `None` for single-group packets. The executor
+    /// interpolates the positioner over the same duration as the arm so both
+    /// groups co-terminate (`COORD` semantics; see `split_groups`).
+    ///
+    /// Absolute or relative according to [`Self::positioner_relative`] — the
+    /// G2 block follows the *instruction's* own semantics, exactly like G1.
     positioner_target: Option<[f64; 2]>,
+    /// `true` when the instruction is a **relative** move (`FRC_LinearRelative`,
+    /// `FRC_JointRelativeJRep`), so [`Self::positioner_target`] holds per-axis
+    /// deltas rather than absolute angles.
+    ///
+    /// The executor resolves the delta against the positioner's position at
+    /// *execution* start (not enqueue), matching how the arm's
+    /// [`MotionTarget::JointRelative`] is resolved — so a queue of relative
+    /// jogs accumulates instead of all landing on the same angle.
+    positioner_relative: bool,
     /// In-flight permit held while this command is queued or executing.
     /// Dropped when the executor finishes (or aborts) the command, freeing
     /// a slot in the 8-deep [`MOTION_IN_FLIGHT_CAP`] semaphore. `None`
@@ -674,12 +686,21 @@ async fn run_motion_executor(
                 }
             };
 
+        // Resolve the Group-2 target to absolute angles. A relative instruction
+        // (`FRC_JointRelativeJRep` / `FRC_LinearRelative`) carries per-axis
+        // DELTAS in its G2 block, and — like the arm's JointRelative target —
+        // they are resolved against the position at *execution* start, so a
+        // burst of jog steps accumulates rather than all landing on the delta.
+        let positioner_target = match (cmd.positioner_target, cmd.positioner_relative) {
+            (Some(d), true) => Some([start_positioner[0] + d[0], start_positioner[1] + d[1]]),
+            (t, _) => t,
+        };
+
         // Coordinated Group-2 positioner: factor its angular travel (degrees)
         // into the motion extent so a positioner-heavy (or positioner-only)
         // move still takes realtime rather than snapping instantly. Treated
         // like mm for the duration heuristic (a sim simplification).
-        let positioner_delta = cmd
-            .positioner_target
+        let positioner_delta = positioner_target
             .map(|t| (t[0] - start_positioner[0]).abs().max((t[1] - start_positioner[1]).abs()))
             .unwrap_or(0.0);
         let distance = distance.max(positioner_delta);
@@ -799,7 +820,7 @@ async fn run_motion_executor(
 
                     // Coordinated Group-2 positioner: interpolate its joints
                     // over the same `t` so it co-terminates with the arm.
-                    if let Some(pt) = cmd.positioner_target {
+                    if let Some(pt) = positioner_target {
                         state.positioner_joints[0] =
                             (start_positioner[0] + (pt[0] - start_positioner[0]) * t) as f32;
                         state.positioner_joints[1] =
@@ -854,7 +875,7 @@ async fn run_motion_executor(
                 }
             }
             // Coordinated Group-2 positioner: jump to the final target.
-            if let Some(pt) = cmd.positioner_target {
+            if let Some(pt) = positioner_target {
                 state.positioner_joints[0] = pt[0] as f32;
                 state.positioner_joints[1] = pt[1] as f32;
             }
@@ -1538,6 +1559,7 @@ async fn handle_secondary_client(
                                     term_value,
                                     instruction_type: "FRC_LinearMotion".to_string(),
                                     positioner_target,
+                                    positioner_relative: false,
                                     _permit: Some(permit),
                                 };
 
@@ -1598,6 +1620,7 @@ async fn handle_secondary_client(
                                     term_value,
                                     instruction_type: "FRC_LinearRelative".to_string(),
                                     positioner_target,
+                                    positioner_relative: true,
                                     _permit: Some(permit),
                                 };
 
@@ -1661,6 +1684,7 @@ async fn handle_secondary_client(
                                     term_value,
                                     instruction_type: "FRC_JointMotion".to_string(),
                                     positioner_target,
+                                    positioner_relative: false,
                                     _permit: Some(permit),
                                 };
 
@@ -1727,6 +1751,7 @@ async fn handle_secondary_client(
                                     term_value,
                                     instruction_type: "FRC_JointMotionJRep".to_string(),
                                     positioner_target,
+                                    positioner_relative: false,
                                     _permit: Some(permit),
                                 };
 
@@ -1793,6 +1818,7 @@ async fn handle_secondary_client(
                                     term_value,
                                     instruction_type: "FRC_JointRelativeJRep".to_string(),
                                     positioner_target,
+                                    positioner_relative: true,
                                     _permit: Some(permit),
                                 };
 
@@ -2439,6 +2465,7 @@ mod tests {
             term_value: 0,
             instruction_type: "FRC_JointMotion".to_string(),
             positioner_target: None,
+            positioner_relative: false,
             _permit: None,
         };
 
@@ -2482,6 +2509,7 @@ mod tests {
             term_value: 0,
             instruction_type: "FRC_JointMotionJRep".to_string(),
             positioner_target: None,
+            positioner_relative: false,
             _permit: None,
         };
 
@@ -2530,6 +2558,7 @@ mod tests {
             term_value: 0,
             instruction_type: "FRC_JointRelativeJRep".to_string(),
             positioner_target: None,
+            positioner_relative: false,
             _permit: None,
         };
 
@@ -2625,6 +2654,7 @@ mod tests {
             term_value: 0,
             instruction_type: "FRC_LinearMotion".to_string(),
             positioner_target: Some([45.0, 10.0]),
+            positioner_relative: false,
             _permit: None,
         };
         motion_tx.send(cmd).await.expect("send motion");
@@ -2640,6 +2670,48 @@ mod tests {
             (state.positioner_joints[0] as f64 - 45.0).abs() < 1e-2
                 && (state.positioner_joints[1] as f64 - 10.0).abs() < 1e-2,
             "positioner should reach [45, 10]; got {:?}",
+            state.positioner_joints,
+        );
+    }
+
+    /// A *relative* two-group command (the shape a manual positioner jog
+    /// emits: `FRC_JointRelativeJRep` with a zero G1 block and a G2 delta)
+    /// must ADD to the positioner's current angle, not snap to the delta.
+    /// Two identical steps therefore accumulate.
+    #[tokio::test]
+    async fn relative_positioner_deltas_accumulate() {
+        let (motion_tx, robot_state, mut response_rx, _ctrl) = spawn_test_executor();
+
+        let step = |seq: u32| MotionCommand {
+            seq_id: seq,
+            target: MotionTarget::JointRelative { joint_deltas_rad: [0.0; 6] },
+            speed: 10.0,
+            term_type: "FINE".to_string(),
+            term_value: 0,
+            instruction_type: "FRC_JointRelativeJRep".to_string(),
+            positioner_target: Some([0.0, -7.5]),
+            positioner_relative: true,
+            _permit: None,
+        };
+
+        for seq in 1..=2 {
+            motion_tx.send(step(seq)).await.expect("send motion");
+            let resp = tokio::time::timeout(Duration::from_secs(3), response_rx.recv())
+                .await
+                .expect("response within 3s")
+                .expect("response channel open");
+            assert_eq!(resp.seq_id, seq);
+        }
+
+        let state = robot_state.lock().await;
+        assert!(
+            (state.positioner_joints[1] as f64 + 15.0).abs() < 1e-2,
+            "two -7.5° relative steps should land on -15°; got {:?}",
+            state.positioner_joints,
+        );
+        assert!(
+            state.positioner_joints[0].abs() < 1e-2,
+            "the untouched axis must not move; got {:?}",
             state.positioner_joints,
         );
     }
