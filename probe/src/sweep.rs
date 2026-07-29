@@ -11,7 +11,9 @@
 use std::time::Duration;
 
 use fanuc_rmi::commands::*;
-use fanuc_rmi::instructions::{FrcJointRelativeJRep, FrcLinearRelative, GroupBlock, JointGroups};
+use fanuc_rmi::instructions::{
+    CartesianGroups, FrcJointRelativeJRep, FrcLinearRelative, GroupBlock, JointGroups,
+};
 use fanuc_rmi::packets::{Command, Communication, Instruction, SendPacket};
 use fanuc_rmi::{Configuration, JointAngles, Position, SpeedType, TermType};
 use serde::de::DeserializeOwned;
@@ -348,6 +350,18 @@ impl<'a> Sweep<'a> {
 
     // ---------------------------------------------------------------- phase 3
 
+    /// True when the live RMI session reserved two motion groups.
+    ///
+    /// Under a two-group session every motion packet must carry two groups'
+    /// worth of position data (B-84184EN/03 §2.3.1), so callers must build
+    /// multi-group instructions or the controller answers RMIT-040.
+    fn two_group_session(&self) -> bool {
+        self.findings
+            .session_mask
+            .map(|m| m.count_ones() > 1)
+            .unwrap_or(false)
+    }
+
     pub async fn lifecycle(&mut self) {
         if !self.cli.lifecycle {
             self.s.skip("lifecycle", "FRC_Pause/FRC_Continue/FRC_Reset", "non-motion lifecycle probes", "not requested (pass --lifecycle)");
@@ -573,15 +587,38 @@ impl<'a> Sweep<'a> {
             }
         };
 
-        let instr = FrcLinearRelative::new(
-            0, // the driver assigns the sequence id at dispatch
-            config.clone(),
-            delta,
-            SpeedType::MMSec,
-            self.cli.linear_speed,
-            TermType::FINE,
-            0,
-        );
+        // The session is reserved on the working mask (0b11 when a positioner
+        // exists), and B-84184EN/03 §2.3.1 is explicit: with two non-zero
+        // GroupMask bits, EVERY motion packet must carry two sets of position
+        // data. A single-group FRC_LinearRelative under a two-group session is
+        // rejected with RMIT-040 Invalid Group Mask — observed live on COMET1.
+        //
+        // So mirror what the positioner moves already do, inverted: command the
+        // arm and hold Group 2 at zero delta.
+        let instr = if self.two_group_session() {
+            FrcLinearRelative::with_groups(
+                0,
+                CartesianGroups::arm_and_group2(
+                    config.clone(),
+                    delta,
+                    GroupBlock::joint(JointAngles::default()),
+                ),
+                SpeedType::MMSec,
+                self.cli.linear_speed,
+                TermType::FINE,
+                0,
+            )
+        } else {
+            FrcLinearRelative::new(
+                0, // the driver assigns the sequence id at dispatch
+                config.clone(),
+                delta,
+                SpeedType::MMSec,
+                self.cli.linear_speed,
+                TermType::FINE,
+                0,
+            )
+        };
         let st = self
             .s
             .exchange_labeled(
