@@ -2,15 +2,15 @@ use serde::{Deserialize, Serialize};
 use tokio::{
     io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
     net::TcpStream,
-    sync::{broadcast, mpsc, Mutex},
+    sync::{broadcast, mpsc, Mutex, Notify},
     time::sleep,
 };
 
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -129,6 +129,130 @@ impl RawFrameHook {
     }
 }
 
+/// How long a cooperatively-cancelled background task is given to notice the
+/// cancellation and unwind before it is aborted outright.
+const TASK_GRACE: Duration = Duration::from_millis(250);
+
+/// Deterministic teardown for one RMI session.
+///
+/// # Why this type exists (the connection leak)
+///
+/// [`FanucDriver`] is `Clone`, and [`FanucDriver::connect`] hands a clone to
+/// each of its two background tasks (`send_queue_to_controller` /
+/// `read_responses`). Those clones hold the `Arc`s wrapping the socket halves,
+/// and the reader parks on `reader.read()` "indefinitely" — so the tasks kept
+/// the session alive **forever**, in a reference cycle nothing could break:
+///
+/// * dropping every caller-held driver freed no socket, and
+/// * `send_queue_to_controller`'s only exit is `packets_to_add.is_closed()`,
+///   which can never happen while the task's *own* clone holds `queue_tx`.
+///
+/// Observed on real hardware (2026-07-28): one server process holding three
+/// simultaneous sockets to a controller's data port — one per failed connect
+/// attempt — which wedged the controller, since a FANUC serves exactly one RMI
+/// session.
+///
+/// # How it breaks the cycle
+///
+/// Exactly one `Arc<DriverShutdown>` lives on the caller-facing driver
+/// (`shutdown_owner: Some(..)`). The clones handed to the background tasks are
+/// made with [`FanucDriver::task_clone`], which sets `shutdown_owner: None`. So
+/// the tasks can no longer keep the owner alive: when the last caller-held
+/// driver drops, this `Drop` runs, cancels the loops, closes the write half and
+/// aborts the tasks as a hard backstop. The tasks' clones then drop, which
+/// drops both socket halves and releases the fd.
+#[derive(Debug)]
+struct DriverShutdown {
+    /// Set once teardown has begun; the loops check it and exit.
+    cancelled: Arc<AtomicBool>,
+    /// Wakes loops that are parked on a socket read / sleep.
+    notify: Arc<Notify>,
+    /// Write half, so teardown can send FIN even if the reader is wedged.
+    write: Arc<Mutex<WriteHalf<TcpStream>>>,
+    /// Handles for the driver's own background tasks.
+    tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// `addr:port` of the data socket, for logging.
+    peer: String,
+}
+
+impl DriverShutdown {
+    /// Idempotent teardown: cancel the loops, close the socket, abort the tasks.
+    ///
+    /// Safe to call from `Drop` (does no awaiting itself — the socket close and
+    /// the backstop abort run on a detached task).
+    fn tear_down(&self, reason: &str) {
+        if self.cancelled.swap(true, Ordering::SeqCst) {
+            return; // already torn down
+        }
+        info!("FanucDriver teardown ({}) for session {}", reason, self.peer);
+
+        // 1. Cooperative: wake both loops so they can exit on their own.
+        self.notify.notify_waiters();
+
+        // 2. Take the task handles now; the detached closer aborts them if the
+        //    cooperative exit does not land within the grace window.
+        let handles: Vec<_> = self
+            .tasks
+            .lock()
+            .map(|mut t| t.drain(..).collect())
+            .unwrap_or_default();
+
+        let write = self.write.clone();
+        let peer = self.peer.clone();
+
+        match tokio::runtime::Handle::try_current() {
+            Ok(rt) => {
+                rt.spawn(async move {
+                    // Shut the write half down: sends FIN immediately, so a
+                    // healthy controller drops the RMI session even if we never
+                    // get to abort the reader.
+                    match tokio::time::timeout(TASK_GRACE, write.lock()).await {
+                        Ok(mut w) => {
+                            if let Err(e) = w.shutdown().await {
+                                debug!("FanucDriver {}: write-half shutdown: {}", peer, e);
+                            }
+                        }
+                        Err(_) => {
+                            warn!(
+                                "FanucDriver {}: write half still locked at teardown — \
+                                 aborting tasks without a clean FIN",
+                                peer
+                            );
+                        }
+                    }
+
+                    // Give the loops the rest of the grace window to unwind.
+                    tokio::time::sleep(TASK_GRACE).await;
+
+                    // 3. Hard backstop. `read_responses` parks on a socket read
+                    //    that a wedged controller may never satisfy; abort is
+                    //    what guarantees its driver clone — and therefore the
+                    //    socket — is released.
+                    for h in handles {
+                        if !h.is_finished() {
+                            h.abort();
+                        }
+                    }
+                    info!("FanucDriver {}: session closed, background tasks stopped", peer);
+                });
+            }
+            Err(_) => {
+                // No runtime (e.g. dropped after the runtime shut down). Abort
+                // synchronously — the runtime teardown closes the fds anyway.
+                for h in handles {
+                    h.abort();
+                }
+            }
+        }
+    }
+}
+
+impl Drop for DriverShutdown {
+    fn drop(&mut self) {
+        self.tear_down("driver dropped");
+    }
+}
+
 /// Protocol error information for broadcasting to clients.
 #[derive(Debug, Clone)]
 pub struct ProtocolError {
@@ -163,6 +287,19 @@ pub struct FanucDriver {
     /// Optional raw-frame observer (see [`RawFrameHook`]). Empty unless the
     /// caller connected via [`FanucDriver::connect_with_raw_hook`].
     pub raw_hook: RawFrameHook,
+    /// Set once the session is being torn down. Read by both background loops
+    /// (and by [`FanucDriver::is_shut_down`]); present on *every* clone.
+    cancelled: Arc<AtomicBool>,
+    /// Wakes the background loops out of a parked read / sleep at teardown.
+    /// Present on every clone.
+    cancel_notify: Arc<Notify>,
+    /// Sole owner of the session teardown — see [`DriverShutdown`].
+    ///
+    /// `Some` on every caller-held clone, `None` on the clones handed to the
+    /// driver's own background tasks. That asymmetry is what lets the last
+    /// caller-held driver drop actually close the socket instead of deadlocking
+    /// on a reference cycle with its own tasks.
+    shutdown_owner: Option<Arc<DriverShutdown>>,
 }
 
 impl FanucDriver {
@@ -269,8 +406,21 @@ impl FanucDriver {
         };
 
         drop(stream);
-        let init_addr = format!("{}:{}", config.addr, new_port);
-        let stream = connect_with_retries(&init_addr, 3).await?;
+        let data_addr = format!("{}:{}", config.addr, new_port);
+        let stream = connect_with_retries(&data_addr, 3).await?;
+
+        // ── The DATA socket is now open. ────────────────────────────────────
+        // Everything below MUST leave this socket closed if it returns `Err`.
+        // That is now structural rather than a rule to remember: the socket
+        // halves are handed straight to the driver, whose `shutdown_owner`
+        // (`DriverShutdown`) closes them and stops the background tasks on
+        // drop. So an early `return Err(..)` from here on — or a caller who
+        // drops the driver because a later `initialize()` / `startup_sequence()`
+        // failed, or whose whole connect future is cancelled by a timeout —
+        // releases the session instead of leaking it.
+        //
+        // Leaking it is exactly what happened before: a controller serves one
+        // RMI session, so every abandoned attempt burned the only one there is.
 
         let (read_half, write_half) = split(stream);
         let read_half = Arc::new(Mutex::new(read_half));
@@ -291,6 +441,17 @@ impl FanucDriver {
         // Error channel for protocol errors
         let (error_tx, _) = broadcast::channel(100);
 
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel_notify = Arc::new(Notify::new());
+
+        let shutdown_owner = Arc::new(DriverShutdown {
+            cancelled: cancelled.clone(),
+            notify: cancel_notify.clone(),
+            write: write_half.clone(),
+            tasks: std::sync::Mutex::new(Vec::new()),
+            peer: data_addr,
+        });
+
         let driver = Self {
             config,
             log_channel: message_channel,
@@ -305,12 +466,17 @@ impl FanucDriver {
             completed_packet_channel,
             program_pause_instructions: Arc::new(std::sync::Mutex::new(Vec::new())),
             raw_hook,
+            cancelled,
+            cancel_notify,
+            shutdown_owner: Some(shutdown_owner.clone()),
         };
 
-        let driver_clone1 = driver.clone();
-        let driver_clone2 = driver.clone();
+        // `task_clone`, NOT `clone`: the background tasks must not own the
+        // teardown, or nothing could ever close the socket (see DriverShutdown).
+        let driver_clone1 = driver.task_clone();
+        let driver_clone2 = driver.task_clone();
 
-        tokio::spawn(async move {
+        let send_task = tokio::spawn(async move {
             if let Err(e) = driver_clone1
                 .send_queue_to_controller(queue_rx, return_info)
                 .await
@@ -319,13 +485,78 @@ impl FanucDriver {
             }
         });
 
-        tokio::spawn(async move {
+        let read_task = tokio::spawn(async move {
             if let Err(e) = driver_clone2.read_responses(completed_packet_tx).await {
                 error!("read_queue_responses failed: {}", e);
             }
         });
 
+        if let Ok(mut tasks) = shutdown_owner.tasks.lock() {
+            tasks.push(send_task);
+            tasks.push(read_task);
+        }
+
         Ok(driver)
+    }
+
+    /// Clone for one of the driver's *own* background tasks.
+    ///
+    /// Identical to `Clone` except it does not carry the [`DriverShutdown`]
+    /// owner, so a background task can never keep the session alive after the
+    /// last caller-held driver is gone. Deliberately private.
+    fn task_clone(&self) -> Self {
+        let mut c = self.clone();
+        c.shutdown_owner = None;
+        c
+    }
+
+    /// True once the session has been torn down (or is being torn down).
+    ///
+    /// Callers holding a driver across a reconnect can use this to tell a stale
+    /// handle from a live one without poking the socket.
+    pub fn is_shut_down(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Explicitly close this session **now**, without waiting for the last
+    /// clone to drop.
+    ///
+    /// Idempotent. Cancels the background loops, sends FIN on the write half and
+    /// aborts the tasks as a backstop, which releases the socket. Unlike
+    /// [`FanucDriver::disconnect`] this does not need the controller to answer
+    /// (or even to be reachable), so it is the right call when the link is
+    /// wedged — a `disconnect()` that times out still leaves the socket open.
+    ///
+    /// Prefer `disconnect().await` first when the link is healthy, so the
+    /// controller is told the session is ending, then `shutdown()`.
+    pub fn shutdown(&self) {
+        match &self.shutdown_owner {
+            Some(owner) => owner.tear_down("explicit shutdown"),
+            None => {
+                // A task-side clone: cannot own teardown, but it can still ask
+                // the loops to stop.
+                self.cancelled.store(true, Ordering::SeqCst);
+                self.cancel_notify.notify_waiters();
+            }
+        }
+    }
+
+    /// Best-effort graceful close: tell the controller, then close regardless.
+    ///
+    /// Sends `FRC_Disconnect` and waits up to `timeout` for the acknowledgement,
+    /// then always calls [`FanucDriver::shutdown`]. A failed or timed-out
+    /// acknowledgement is logged, not propagated — the socket still closes,
+    /// which is the whole point.
+    pub async fn disconnect_and_close(&self, timeout: Duration) {
+        match tokio::time::timeout(timeout, self.disconnect()).await {
+            Ok(Ok(resp)) => info!("FANUC acknowledged disconnect: {:?}", resp),
+            Ok(Err(e)) => warn!("FANUC disconnect failed ({}) — closing the socket anyway", e),
+            Err(_) => warn!(
+                "FANUC disconnect timed out after {:?} — closing the socket anyway",
+                timeout
+            ),
+        }
+        self.shutdown();
     }
 
     /// Log an error message (always shown if logging feature enabled)
@@ -1528,6 +1759,11 @@ impl FanucDriver {
         loop {
             let start_time = Instant::now();
 
+            // Cooperative teardown: the session is closing, stop pumping.
+            if self.cancelled.load(Ordering::SeqCst) {
+                break;
+            }
+
             // Drain all available incoming packets
             while let Ok(new_packet) = packets_to_add.try_recv() {
                 match (new_packet.packet.clone(), &state) {
@@ -1744,10 +1980,15 @@ impl FanucDriver {
                 }
             }
 
-            // Maintain consistent loop timing
+            // Maintain consistent loop timing. Racing the sleep against the
+            // teardown notify means a `shutdown()` is picked up within a
+            // millisecond instead of a full loop interval.
             let elapsed = Instant::now().duration_since(start_time);
             if elapsed < LOOP_INTERVAL {
-                tokio::time::sleep(LOOP_INTERVAL - elapsed).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(LOOP_INTERVAL - elapsed) => {}
+                    _ = self.cancel_notify.notified() => break,
+                }
             } else {
                 self.log_warn(format!(
                     "Send loop duration took {:?} exceeding max time:{:?}",
@@ -1777,19 +2018,34 @@ impl FanucDriver {
             // Maintain a consistent loop interval for processing
             let start_time = Instant::now();
 
-            // Read without timeout - we want to stay connected indefinitely
-            let n = match reader.read(&mut buf).await {
-                Ok(0) => {
-                    // Connection closed by peer
-                    *self.connected.lock().await = false;
-                    return Err(FrcError::Disconnected());
-                }
-                Ok(n) => n,
-                Err(e) => {
-                    self.log_error(format!("Read error: {}", e)).await;
-                    *self.connected.lock().await = false;
-                    return Err(FrcError::FailedToReceive(e.to_string()));
-                }
+            if self.cancelled.load(Ordering::SeqCst) {
+                break;
+            }
+
+            // Read without timeout — we want to stay connected indefinitely.
+            //
+            // But NOT past a teardown: this read is the reason a dropped driver
+            // used to hold its socket forever (a wedged controller sends
+            // nothing, so the read never returns and the task never released
+            // its driver clone). Racing it against the cancel notify is what
+            // lets `shutdown()` / `Drop` unblock the reader promptly; the
+            // abort backstop in `DriverShutdown` covers the rest.
+            let n = tokio::select! {
+                biased;
+                _ = self.cancel_notify.notified() => break,
+                res = reader.read(&mut buf) => match res {
+                    Ok(0) => {
+                        // Connection closed by peer
+                        *self.connected.lock().await = false;
+                        return Err(FrcError::Disconnected());
+                    }
+                    Ok(n) => n,
+                    Err(e) => {
+                        self.log_error(format!("Read error: {}", e)).await;
+                        *self.connected.lock().await = false;
+                        return Err(FrcError::FailedToReceive(e.to_string()));
+                    }
+                },
             };
 
             temp.extend_from_slice(&buf[..n]);
@@ -1802,9 +2058,19 @@ impl FanucDriver {
 
             let elapsed = Instant::now().duration_since(start_time);
             if elapsed < LOOP_INTERVAL {
-                tokio::time::sleep(LOOP_INTERVAL - elapsed).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(LOOP_INTERVAL - elapsed) => {}
+                    _ = self.cancel_notify.notified() => break,
+                }
             }
         }
+
+        // Reached only via teardown (`shutdown()` / driver drop). Returning
+        // here drops the read-half guard and, with it, this task's driver
+        // clone — which is what actually frees the socket.
+        *self.connected.lock().await = false;
+        self.log_info("Read loop exiting: session torn down").await;
+        Ok(())
     }
 
     // Extract handling of each line into an async helper:
