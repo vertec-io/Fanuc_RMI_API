@@ -56,7 +56,15 @@
 
 ### Error: Initialize Failed (ErrorID = 7015)
 
-**Cause**: RMI_MOVE program is selected on teach pendant
+**Cause (per manual)**: RMI_MOVE program is selected on teach pendant.
+
+**Not the only cause.** Reproduced on an R-30iB (COMET1) with every documented
+precondition satisfied — `ServoReady: 1`, `TPMode: 0`, `RMIMotionStatus: 0`,
+`FRC_ReadError` reporting `"No Error"` — after a cold reboot, with RMI_MOVE
+deselected on the pendant. Verified live that it survives `FRC_Abort`,
+`FRC_Reset`, and abort+reset, on both GroupMask `0b01` and `0b11`. No RMI
+command clears it. See `probe/FINDINGS-7015.md` and reproduce with
+`cargo run -p fanuc_probe --bin init_diag -- --addr <ip>:16001`.
 
 **Solution** (from manual):
 > "Press the SELECT button on the TP, choose another program besides RMI_MOVE from the program list, then press the ENTER button on the TP. Next, resend the FRC_Initialize command."
@@ -69,7 +77,7 @@
 pub struct FrcGetStatusResponse {
     pub error_id: u32,
     pub servo_ready: i8,        // 1 = ready, 0 = not ready
-    pub tp_mode: i8,             // 1 = AUTO mode, 0 = manual
+    pub tp_mode: i8,             // 0 = teach pendant DISABLED (required by RMI), 1 = enabled
     pub rmi_motion_status: i8,   // 0 = not running, != 0 = running
     pub program_status: i8,      // 1 = aborted
     pub single_step_mode: i8,    // 1 = single-step mode
@@ -82,7 +90,7 @@ pub struct FrcGetStatusResponse {
 
 **Key Fields for Initialization**:
 - `servo_ready`: Must be 1 (controller ready)
-- `tp_mode`: Should be 1 (AUTO mode)
+- `tp_mode`: Must be **0** — the teach pendant must be DISABLED (B-84184EN/02). 1 means the pendant is enabled and RMI will not run.
 - `rmi_motion_status`: 0 = can initialize, != 0 = need abort first
 - `program_status`: 1 = RMI_MOVE is aborted
 
@@ -104,8 +112,8 @@ pub async fn startup_sequence(&self) -> Result<(), String> {
         return Err("Controller not ready (servo errors)".to_string());
     }
     
-    if status.tp_mode != 1 {
-        return Err("Controller not in AUTO mode".to_string());
+    if status.tp_mode != 0 {
+        return Err("Teach pendant is enabled; RMI requires it disabled".to_string());
     }
     
     // Step 3: Abort if RMI is already running

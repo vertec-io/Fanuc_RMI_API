@@ -9,6 +9,14 @@ pub struct FrcGetStatusResponse {
     pub error_id: u32,
     #[serde(rename = "ServoReady", default)]
     pub servo_ready: i8,
+    /// Teach-pendant enable state, per FANUC B-84184EN/02: **0 = the teach
+    /// pendant is disabled, 1 = it is enabled**. RMI only works while the
+    /// pendant is DISABLED, so `0` is the value a healthy remote session wants.
+    ///
+    /// (An earlier annotation here read "1 = AUTO mode, 0 = manual", which is
+    /// backwards and cost real debugging time on an R-30iB. The authority is
+    /// the manual and [`FanucDriver::startup_sequence`], which gates on
+    /// `tp_mode != 0`.)
     #[serde(rename = "TPMode", default)]
     pub tp_mode: i8,
     #[serde(rename = "RMIMotionStatus", default)]

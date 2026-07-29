@@ -24,9 +24,10 @@ does not log it as a fault — 7015 is a **rejection of the request**, not a
 latched error state, which is why nothing on the pendant looks wrong and why
 clearing faults changes nothing.
 
-## The one precondition still violated
+## Every documented precondition PASSES
 
-Healthy status is stable and identical across every run:
+Healthy status is stable and byte-identical across every run, including after
+toggling the TP enable switch on (fault), off, and resetting:
 
 ```json
 {"ErrorID":0,"ServoReady":1,"TPMode":0,"RMIMotionStatus":0,"ProgramStatus":0,
@@ -34,21 +35,26 @@ Healthy status is stable and identical across every run:
  "UI[2]":1,"UI[8]":1}
 ```
 
-Checked against the precondition list in `docs/FANUC_INITIALIZATION_SEQUENCE.md`:
+Checked against `FanucDriver::startup_sequence`, which is the authority here
+because it cites FANUC B-84184EN/02 directly:
 
-- `ServoReady: 1` — required 1. **OK**
-- `RMIMotionStatus: 0` — 0 means "can initialize". **OK**, and this kills the
-  "RMI_MOVE is still running" theory outright.
-- `TPMode: 0` — the field is documented `1 = AUTO mode, 0 = manual`, and
-  precondition #1 of that doc is *"the teach pendant is disabled and the
-  controller is in AUTO mode."* **VIOLATED, in every reading.**
+- `ServoReady: 1` — required 1. **PASS**
+- `TPMode: 0` — B-84184EN/02: *0 = teach pendant disabled, 1 = enabled*, and
+  RMI works only while the pendant is **disabled**. So 0 is exactly right.
+  **PASS**
+- `RMIMotionStatus: 0` — 0 means "can initialize", which also rules out the
+  "RMI_MOVE is still running" theory. **PASS**
 
-`TPMode` is the only gate still failing. It does not flicker: it reads 0 in
-every healthy sample, including reads whose own `ErrorID` is 0.
+So the controller reports itself fully ready and still refuses Initialize.
+That is the actual finding: **7015 here is not explained by any precondition
+the manual documents.**
 
-Note the mode selector reading `AUTO` on the pendant status line is not the
-same thing as `TPMode: 1` — the teach pendant's own **enable switch** must also
-be off for the controller to grant remote motion authority.
+> Correction to an earlier draft of this file, which named `TPMode: 0` as a
+> violated precondition. That came from two wrong annotations in this repo —
+> `frc_getstatus.rs` said "1 = AUTO mode, 0 = manual" and
+> `FANUC_INITIALIZATION_SEQUENCE.md` said "should be 1". Both contradicted the
+> driver's own manual-sourced check (`tp_mode != 0`). Both are now fixed.
+> FANUC's docs were never wrong; ours were.
 
 `NumberUTool: 10` / `NumberUFrame: 9` are **slot counts** available on the
 controller, not the active tool/frame numbers.
