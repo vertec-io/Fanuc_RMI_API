@@ -285,6 +285,97 @@ pub struct ProtocolError {
     pub raw_data: Option<String>,
 }
 
+/// Maximum instructions outstanding on the controller at once (backpressure).
+///
+/// Per FANUC B-84184EN/02 §3.2 the controller accepts a window of 8. This is the
+/// ceiling on everything [`InFlight`] tracks, which makes it the yardstick for the
+/// leak that type guards against: a pause can never legitimately preserve more
+/// than this many in-flight instructions.
+const MAX_IN_FLIGHT: u32 = 8;
+
+/// Instructions transmitted to the controller that have not yet reported completion.
+///
+/// The count and the instruction bodies are **one fact, not two**, and every
+/// operation here moves both. They used to be two separate locals in
+/// [`FanucDriver::send_queue_to_controller`], and that is exactly how the replay
+/// bug this type exists to prevent got in: [`DriverCommand::ClearInFlight`] reset
+/// the counter after an abort but left the bodies in the deque. Nothing else ever
+/// removed them — a completion is the only other exit, and aborted instructions
+/// never complete, which is the whole reason `ClearInFlight` exists. So every
+/// aborted run leaked its full window of instruction bodies, the next
+/// [`DriverCommand::ProgramPause`] snapshotted those leaked bodies alongside the
+/// genuinely-live ones, and `program_resume` replayed already-dead motion into the
+/// robot — carrying its original, by then possibly stale, `Configuration`.
+///
+/// Observed on the bench as: pause a run, resume it, and the arm reconfigures its
+/// wrist instead of continuing the toolpath, because the leaked packets still
+/// named the arm posture that was active when they were first built. The tell in
+/// the log is a pause preserving more instructions than [`MAX_IN_FLIGHT`] — the
+/// window is the ceiling, so a larger number is proof of leaked bodies.
+///
+/// Keep both fields private and go through the methods. A caller that can touch
+/// one without the other can reintroduce the same bug.
+#[derive(Debug, Default)]
+struct InFlight {
+    /// Bodies of program instructions sent but not yet completed, earliest first.
+    ///
+    /// Only program motion is recorded. Jog instructions sent while
+    /// [`DriverState::ProgramPaused`] are deliberately absent: they are not part
+    /// of the program and must never be replayed into it.
+    sent: VecDeque<(u32, Instruction)>,
+    /// How many instructions the controller still owes a response for.
+    ///
+    /// Deliberately not `sent.len()`: jog instructions consume backpressure
+    /// window without being recorded for replay, so the count runs ahead of the
+    /// tracked bodies whenever the driver is `ProgramPaused`.
+    count: u32,
+}
+
+impl InFlight {
+    /// Record one transmitted instruction.
+    ///
+    /// `track_for_replay` is false for anything sent outside
+    /// [`DriverState::Running`] — jogs, which must not re-enter the program.
+    fn record_sent(&mut self, sequence_id: u32, instruction: Instruction, track_for_replay: bool) {
+        self.count += 1;
+        if track_for_replay {
+            self.sent.push_back((sequence_id, instruction));
+        }
+    }
+
+    /// Credit the completion the controller reported for `sequence_id`.
+    fn complete(&mut self, sequence_id: u32) {
+        self.count = self.count.saturating_sub(1);
+        if let Some(pos) = self.sent.iter().position(|(seq, _)| *seq == sequence_id) {
+            self.sent.remove(pos);
+        }
+    }
+
+    /// How many responses are still outstanding, for the backpressure gate.
+    fn count(&self) -> u32 {
+        self.count
+    }
+
+    /// How many bodies are held for replay, for logging.
+    fn tracked_len(&self) -> usize {
+        self.sent.len()
+    }
+
+    /// Hand over every tracked body and reset, for a pause that will replay them.
+    fn take_for_replay(&mut self) -> Vec<Instruction> {
+        let taken = self.sent.drain(..).map(|(_, instr)| instr).collect();
+        self.count = 0;
+        taken
+    }
+
+    /// Forget everything: the controller dropped its queue and will never
+    /// respond, and these instructions are not coming back.
+    fn clear(&mut self) {
+        self.sent.clear();
+        self.count = 0;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FanucDriver {
     pub config: FanucDriverConfig,
@@ -1961,17 +2052,13 @@ impl FanucDriver {
         mut packets_to_add: mpsc::Receiver<DriverPacket>,
         mut completed_packet_info: broadcast::Receiver<CompletedPacketReturnInfo>,
     ) -> Result<(), FrcError> {
-        let mut in_flight: u32 = 0;
         let mut queue: VecDeque<DriverPacket> = VecDeque::new();
         let mut state = DriverState::default();
-        // Track in-flight instructions for program pause/resume replay
-        // Stores (sequence_id, instruction) pairs for instructions sent but not yet completed
-        let mut in_flight_instructions: VecDeque<(u32, Instruction)> = VecDeque::new();
+        // Counter and replay bodies together — see `InFlight`.
+        let mut in_flight = InFlight::default();
 
         // Standard loop interval
         const LOOP_INTERVAL: Duration = Duration::from_millis(8);
-        // Maximum in-flight packets (backpressure)
-        const MAX_IN_FLIGHT: u32 = 8;
         // Per FANUC documentation B-84184EN/02 Section 3.2:
         // "For each of the 8 instructions, please wait at least 2 milliseconds before
         // sending the next instruction. This is due to TCP/IP packs several RMI packets
@@ -2004,12 +2091,24 @@ impl FanucDriver {
                 if let SendPacket::DriverCommand(cmd) = &new_packet.packet {
                     match cmd {
                         DriverCommand::ClearInFlight => {
-                            // Reset the in-flight counter. This is needed after abort
-                            // because the robot clears its queue but doesn't send responses
-                            // for aborted instructions.
-                            let old_in_flight = in_flight;
-                            in_flight = 0;
-                            println!("ClearInFlight: reset in_flight counter from {} to 0", old_in_flight);
+                            // Forget the outstanding instructions entirely. This is sent
+                            // after an abort, where the robot clears its motion queue and
+                            // never sends responses for what it dropped.
+                            //
+                            // The BODIES go too, not just the count. An aborted instruction
+                            // has no other exit from the tracker — completion is the only
+                            // other one, and by definition it is not coming. Leaving them
+                            // behind means the next ProgramPause snapshots them as though
+                            // they were live and program_resume replays dead motion into
+                            // the robot. See `InFlight`.
+                            let old_in_flight = in_flight.count();
+                            let old_tracked = in_flight.tracked_len();
+                            in_flight.clear();
+                            println!(
+                                "ClearInFlight: reset in_flight counter from {} to 0, \
+                                 dropped {} tracked instruction(s)",
+                                old_in_flight, old_tracked
+                            );
                         }
                         DriverCommand::ProgramPause => {
                             // A pause is the seam between two TP programs. Snapshot the
@@ -2029,11 +2128,14 @@ impl FanucDriver {
                             // other non-instruction packets stay in the queue so abort /
                             // initialize / jog / rewind still flow while paused.
                             println!("ProgramPause: transitioning to ProgramPaused state");
+                            // Takes the bodies and resets the counter in one step: the
+                            // abort already emptied the controller's queue, so nothing
+                            // outstanding will ever report back.
+                            let preserved_in_flight = in_flight.take_for_replay();
                             if let Ok(mut stored) = self.program_pause_instructions.lock() {
                                 stored.clear();
-                                for (_, instr) in in_flight_instructions.iter() {
-                                    stored.push(instr.clone());
-                                }
+                                let from_in_flight = preserved_in_flight.len();
+                                stored.extend(preserved_in_flight);
                                 let mut drained_from_queue = 0usize;
                                 queue.retain(|pkt| match &pkt.packet {
                                     SendPacket::Instruction(instr) => {
@@ -2045,23 +2147,28 @@ impl FanucDriver {
                                 });
                                 println!(
                                     "  Preserving {} in-flight + {} queued instruction(s) for replay",
-                                    in_flight_instructions.len(),
-                                    drained_from_queue
+                                    from_in_flight, drained_from_queue
+                                );
+                                debug_assert!(
+                                    from_in_flight <= MAX_IN_FLIGHT as usize,
+                                    "preserved {} in-flight instructions but the controller \
+                                     window is only {} — instruction bodies have leaked into \
+                                     the tracker (see InFlight)",
+                                    from_in_flight,
+                                    MAX_IN_FLIGHT
                                 );
                             }
 
                             state = DriverState::ProgramPaused;
-                            // Reset counter since robot's buffer was cleared by abort
-                            in_flight = 0;
-                            // Clear local tracking since we've stored them
-                            in_flight_instructions.clear();
                         }
                         DriverCommand::ProgramResume { instructions_to_replay } => {
                             // Program resume: Re-queue instructions for replay, then set state to Running
                             println!("ProgramResume: replaying {} instructions", instructions_to_replay.len());
 
-                            // Clear tracked in-flight since we're starting fresh
-                            in_flight_instructions.clear();
+                            // Starting fresh: program_resume() has already sent FrcAbort +
+                            // FrcInitialize, so the controller owes nothing and holds
+                            // nothing. Counter and bodies both go.
+                            in_flight.clear();
 
                             // Re-queue instructions at the front (high priority) so they execute before
                             // any other queued instructions. Insert in reverse order to maintain order.
@@ -2100,12 +2207,7 @@ impl FanucDriver {
 
             // Process completed packets
             while let Ok(pkt) = completed_packet_info.try_recv() {
-                in_flight = in_flight.saturating_sub(1);
-                // Remove completed instruction from in-flight tracking
-                // Find and remove by sequence_id
-                if let Some(pos) = in_flight_instructions.iter().position(|(seq, _)| *seq == pkt.sequence_id) {
-                    in_flight_instructions.remove(pos);
-                }
+                in_flight.complete(pkt.sequence_id);
                 // Log if error occurred
                 if pkt.error_id != 0 {
                     self.log_error(format!(
@@ -2121,7 +2223,7 @@ impl FanucDriver {
 
             // Send packets with backpressure (when Running or ProgramPaused, not when Paused)
             // ProgramPaused allows jog commands and other instructions to be sent
-            while in_flight < MAX_IN_FLIGHT && (state == DriverState::Running || state == DriverState::ProgramPaused) {
+            while in_flight.count() < MAX_IN_FLIGHT && (state == DriverState::Running || state == DriverState::ProgramPaused) {
                 if let Some(mut driver_packet) = queue.pop_front() {
                     // Assign sequence ID right before sending (ensures consecutive IDs in send order)
                     if let SendPacket::Instruction(ref mut instruction) = driver_packet.packet {
@@ -2184,13 +2286,13 @@ impl FanucDriver {
                             }
                             if let SendPacket::Instruction(instr) = driver_packet.packet {
                                 let seq = instr.get_sequence_id();
-                                in_flight += 1;
 
-                                // Only track in-flight instructions when Running (not when ProgramPaused)
-                                // Instructions sent during ProgramPaused are jog commands, not program instructions
-                                if state == DriverState::Running {
-                                    in_flight_instructions.push_back((seq, instr));
-                                }
+                                // Only track for replay when Running (not when ProgramPaused).
+                                // Instructions sent during ProgramPaused are jog commands, not
+                                // program instructions, and must not re-enter the program.
+                                // Either way it counts against the backpressure window.
+                                let track_for_replay = state == DriverState::Running;
+                                in_flight.record_sent(seq, instr, track_for_replay);
 
                                 // Per FANUC documentation B-84184EN/02 Section 3.2:
                                 // Wait at least 2ms between consecutive instructions to prevent
@@ -2648,4 +2750,176 @@ fn extract_lines(buffer: &mut Vec<u8>) -> Vec<String> {
         }
     }
     lines
+}
+
+#[cfg(test)]
+mod in_flight_tests {
+    use super::*;
+    use crate::instructions::FrcWaitTime;
+
+    /// A distinguishable instruction body carrying `seq`.
+    fn instr(seq: u32) -> Instruction {
+        Instruction::FrcWaitTime(FrcWaitTime::new(seq, seq as f32))
+    }
+
+    /// Sequence ids of the bodies currently held for replay.
+    fn tracked_ids(tracker: &InFlight) -> Vec<u32> {
+        tracker.sent.iter().map(|(seq, _)| *seq).collect()
+    }
+
+    /// Fill the tracker as a running program would.
+    fn running_with(count: u32) -> InFlight {
+        let mut tracker = InFlight::default();
+        for seq in 1..=count {
+            tracker.record_sent(seq, instr(seq), true);
+        }
+        tracker
+    }
+
+    /// THE REGRESSION TEST.
+    ///
+    /// `ClearInFlight` follows an abort, where the controller has dropped its
+    /// queue and will never respond. Before this fix it zeroed the counter and
+    /// left the instruction BODIES behind, where nothing could ever remove them
+    /// — completion was their only other exit and it was never coming. They then
+    /// rode along in the next pause snapshot and got replayed into the robot as
+    /// live motion. Both halves must go.
+    #[test]
+    fn clearing_in_flight_drops_the_bodies_not_just_the_count() {
+        let mut tracker = running_with(MAX_IN_FLIGHT);
+        assert_eq!(tracker.count(), MAX_IN_FLIGHT);
+        assert_eq!(tracker.tracked_len(), MAX_IN_FLIGHT as usize);
+
+        tracker.clear();
+
+        assert_eq!(tracker.count(), 0, "the counter must reset");
+        assert_eq!(
+            tracker.tracked_len(),
+            0,
+            "the instruction bodies must go too, or the next pause snapshots \
+             aborted motion and resume replays it into the robot"
+        );
+    }
+
+    /// The bench signature of the leak: an abort followed by a fresh window used
+    /// to leave 16 bodies in a tracker whose ceiling is 8, and the pause preserved
+    /// all 16. After the fix a pause can never hand back more than the window.
+    #[test]
+    fn an_abort_then_a_fresh_window_never_preserves_more_than_the_window() {
+        let mut tracker = running_with(MAX_IN_FLIGHT);
+
+        // Abort: the controller drops everything, Meteorite sends ClearInFlight.
+        tracker.clear();
+
+        // The next run fills the window again.
+        for seq in 100..100 + MAX_IN_FLIGHT {
+            tracker.record_sent(seq, instr(seq), true);
+        }
+
+        let preserved = tracker.take_for_replay();
+        assert_eq!(
+            preserved.len(),
+            MAX_IN_FLIGHT as usize,
+            "preserved {} instructions with a window of {} — the pre-abort bodies leaked",
+            preserved.len(),
+            MAX_IN_FLIGHT
+        );
+    }
+
+    /// No sequence of operations may leave more bodies tracked than the window,
+    /// because the send gate refuses to transmit past it.
+    #[test]
+    fn tracked_bodies_never_exceed_the_controller_window() {
+        let mut tracker = InFlight::default();
+        let mut next_seq = 0u32;
+
+        for round in 0..20 {
+            // Send until the gate closes, exactly as the send loop does.
+            while tracker.count() < MAX_IN_FLIGHT {
+                next_seq += 1;
+                tracker.record_sent(next_seq, instr(next_seq), true);
+            }
+            assert!(
+                tracker.tracked_len() <= MAX_IN_FLIGHT as usize,
+                "round {round}: {} bodies tracked, window is {MAX_IN_FLIGHT}",
+                tracker.tracked_len()
+            );
+
+            // Alternate the two ways instructions leave: completion, and abort.
+            if round % 2 == 0 {
+                tracker.complete(next_seq);
+            } else {
+                tracker.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn a_completion_removes_exactly_its_own_body() {
+        let mut tracker = running_with(4);
+
+        tracker.complete(2);
+
+        assert_eq!(tracker.count(), 3);
+        assert_eq!(tracked_ids(&tracker), vec![1, 3, 4]);
+    }
+
+    /// The controller can report a sequence id the tracker never recorded — a
+    /// jog completion, or a stale reply after a re-initialize. It still owes one
+    /// fewer response, but there is no body to remove.
+    #[test]
+    fn an_unknown_completion_credits_the_count_without_touching_bodies() {
+        let mut tracker = running_with(2);
+
+        tracker.complete(999);
+
+        assert_eq!(tracker.count(), 1);
+        assert_eq!(tracked_ids(&tracker), vec![1, 2]);
+    }
+
+    /// Completions can outnumber sends after a re-initialize replays stale
+    /// replies. The count floors at zero rather than wrapping, which on a `u32`
+    /// would jam the send gate closed forever.
+    #[test]
+    fn surplus_completions_floor_the_count_at_zero() {
+        let mut tracker = running_with(1);
+
+        tracker.complete(1);
+        tracker.complete(1);
+        tracker.complete(1);
+
+        assert_eq!(tracker.count(), 0);
+        assert!(tracker.count() < MAX_IN_FLIGHT, "the send gate must still open");
+    }
+
+    /// Jogs are sent while `ProgramPaused`. They consume backpressure window but
+    /// are not part of the program, so replaying them on resume would move the
+    /// arm by an operator's manual nudge a second time.
+    #[test]
+    fn a_jog_counts_against_the_window_but_is_never_replayed() {
+        let mut tracker = InFlight::default();
+
+        tracker.record_sent(1, instr(1), false);
+        tracker.record_sent(2, instr(2), false);
+
+        assert_eq!(tracker.count(), 2, "jogs still occupy the controller window");
+        assert_eq!(tracker.tracked_len(), 0, "jogs are not program instructions");
+        assert!(tracker.take_for_replay().is_empty());
+    }
+
+    #[test]
+    fn taking_for_replay_hands_over_every_body_in_order_and_empties_the_tracker() {
+        let mut tracker = running_with(3);
+
+        let preserved = tracker.take_for_replay();
+
+        assert_eq!(preserved.len(), 3);
+        assert_eq!(preserved[0], instr(1), "earliest first — replay order matters");
+        assert_eq!(preserved[2], instr(3));
+        assert_eq!(tracker.count(), 0);
+        assert_eq!(tracker.tracked_len(), 0);
+
+        // A second pause with nothing sent in between preserves nothing.
+        assert!(tracker.take_for_replay().is_empty());
+    }
 }
