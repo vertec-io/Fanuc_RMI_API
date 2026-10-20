@@ -234,15 +234,100 @@ enum MotionTarget {
     JointRelative { joint_deltas_rad: [f64; 6] },
 }
 
+/// How a motion instruction's `Speed` value is to be read, from its
+/// `SpeedType` (RMI Operators Manual §2.4.9).
+///
+/// `Time` and `mSec` are DURATIONS, not rates: a controller finishes the move
+/// in that time whatever its length. Reading them as mm/s — which this
+/// simulator once did for every instruction — makes a 0.7 s segment sent as
+/// `Time 7` take seconds in realtime mode.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SpeedKind {
+    /// mm/s for Cartesian targets, deg/s for joint targets (`mmSec`, or no
+    /// `SpeedType` at all).
+    Rate,
+    /// Inches per minute (`InchMin`).
+    InchPerMin,
+    /// Tenths of a second (`Time`).
+    Tenths,
+    /// Milliseconds (`mSec`).
+    Millis,
+    /// Percent of the maximum speed, 1-100 (`Percent`).
+    Percent,
+}
+
+/// Cartesian speed a `Percent` move runs at when 100%, in mm/s.
+const MAX_CARTESIAN_SPEED_MM_S: f64 = 2000.0;
+/// Joint speed a `Percent` move runs at when 100%, in deg/s.
+const MAX_JOINT_SPEED_DEG_S: f64 = 180.0;
+
+impl SpeedKind {
+    fn from_speed_type(speed_type: Option<&str>) -> Self {
+        match speed_type {
+            Some("InchMin") => Self::InchPerMin,
+            Some("Time") => Self::Tenths,
+            Some("mSec") => Self::Millis,
+            Some("Percent") => Self::Percent,
+            _ => Self::Rate,
+        }
+    }
+
+    /// The value with its unit, for the motion log.
+    fn describe(self, speed: f64) -> String {
+        match self {
+            Self::Rate => format!("{speed:.1}/s"),
+            Self::InchPerMin => format!("{speed:.1}in/min"),
+            Self::Tenths => format!("{:.2}s", speed / 10.0),
+            Self::Millis => format!("{:.3}s", speed / 1000.0),
+            Self::Percent => format!("{speed:.0}%"),
+        }
+    }
+
+    /// Seconds to cover `extent` (mm for Cartesian, degrees for joint
+    /// targets) at `speed`, with the controller's speed override applied.
+    fn duration_s(self, speed: f64, extent: f64, joint: bool, override_frac: f64) -> f64 {
+        let override_frac = override_frac.max(0.01);
+        let from_rate = |rate: f64| -> f64 {
+            if rate <= 0.0 { 0.1 } else { (extent / (rate * override_frac)).max(0.01) }
+        };
+        match self {
+            Self::Rate => from_rate(speed),
+            Self::InchPerMin => from_rate(speed * 25.4 / 60.0),
+            Self::Percent => {
+                let max = if joint { MAX_JOINT_SPEED_DEG_S } else { MAX_CARTESIAN_SPEED_MM_S };
+                from_rate(max * speed.clamp(0.0, 100.0) / 100.0)
+            }
+            Self::Tenths => (speed / 10.0 / override_frac).max(0.01),
+            Self::Millis => (speed / 1000.0 / override_frac).max(0.01),
+        }
+    }
+}
+
+/// Signed angle (radians) from `from` to `to`, the short way round, in
+/// `(-PI, PI]`.
+fn shortest_angle_rad(from: f64, to: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    let d = (to - from).rem_euclid(tau);
+    if d > std::f64::consts::PI { d - tau } else { d }
+}
+
+/// `Speed` and its `SpeedType` from a motion instruction.
+fn parse_speed(request: &serde_json::Value, default: f64) -> (f64, SpeedKind) {
+    let speed = request.get("Speed").and_then(|v| v.as_f64()).unwrap_or(default);
+    let kind = SpeedKind::from_speed_type(request.get("SpeedType").and_then(|v| v.as_str()));
+    (speed, kind)
+}
+
 /// Motion command that can be queued for execution
 #[derive(Debug)]
 struct MotionCommand {
     seq_id: u32,
     target: MotionTarget,
-    /// Cartesian speed (mm/s) for linear targets, or joint angular speed
-    /// (deg/s) for joint targets. Used only to compute realtime-mode
-    /// duration via [`RobotState::calculate_motion_duration`].
+    /// The instruction's `Speed` value, read according to [`Self::speed_kind`].
+    /// Used only to compute the realtime-mode duration.
     speed: f64,
+    /// How [`Self::speed`] is to be read (`SpeedType`).
+    speed_kind: SpeedKind,
     #[allow(dead_code)]
     term_type: String,
     #[allow(dead_code)]
@@ -484,13 +569,6 @@ impl RobotState {
         }
     }
 
-    /// Calculate motion duration in seconds based on distance and speed
-    fn calculate_motion_duration(distance_mm: f64, speed_mm_per_sec: f64) -> f64 {
-        if speed_mm_per_sec <= 0.0 {
-            return 0.1; // Minimum duration
-        }
-        (distance_mm / speed_mm_per_sec).max(0.01) // At least 10ms
-    }
 }
 
 async fn handle_client(
@@ -705,16 +783,21 @@ async fn run_motion_executor(
             .unwrap_or(0.0);
         let distance = distance.max(positioner_delta);
 
-        // Apply speed override to motion speed
+        // The controller's speed override scales every notation: a rate runs
+        // slower, a duration runs longer.
         let speed_override = control.get_speed_override() as f64 / 100.0;
-        let effective_speed = cmd.speed * speed_override.max(0.01); // Minimum 1% to avoid division by zero
+        let joint_target = matches!(
+            cmd.target,
+            MotionTarget::JointAbsolute { .. } | MotionTarget::JointRelative { .. }
+        );
+        let duration_s = cmd.speed_kind.duration_s(cmd.speed, distance, joint_target, speed_override);
 
-        qeprintln!("🏃 Executing motion {} ({}) | dist={:.1} | speed={:.1} ({}% override)",
-            cmd.seq_id, cmd.instruction_type, distance, effective_speed, (speed_override * 100.0) as u8);
+        qeprintln!("🏃 Executing motion {} ({}) | dist={:.1} | speed={} | {:.2}s ({}% override)",
+            cmd.seq_id, cmd.instruction_type, distance, cmd.speed_kind.describe(cmd.speed),
+            duration_s, (speed_override * 100.0) as u8);
 
         let delay_ms = if mode == SimulatorMode::Realtime {
-            let duration = RobotState::calculate_motion_duration(distance, effective_speed);
-            (duration * 1000.0) as u64
+            (duration_s * 1000.0) as u64
         } else {
             0
         };
@@ -789,9 +872,11 @@ async fn run_motion_executor(
                             let current_x = start_x + (target_x - start_x) * t;
                             let current_y = start_y + (target_y - start_y) * t;
                             let current_z = start_z + (target_z - start_z) * t;
-                            let current_w = start_w + (target_w - start_w) * t;
-                            let current_p = start_p + (target_p - start_p) * t;
-                            let current_r = start_r + (target_r - start_r) * t;
+                            // Orientation turns the short way: W = 179° and
+                            // W = -179° are 2° apart, not 358°.
+                            let current_w = start_w + shortest_angle_rad(start_w, target_w) * t;
+                            let current_p = start_p + shortest_angle_rad(start_p, target_p) * t;
+                            let current_r = start_r + shortest_angle_rad(start_r, target_r) * t;
 
                             state.cartesian_position[0] = current_x as f32;
                             state.cartesian_position[1] = current_y as f32;
@@ -1078,13 +1163,15 @@ async fn handle_secondary_client(
                                     j3: 0.0, j4: 0.0, j5: 0.0, j6: 0.0, j7: 0.0, j8: 0.0, j9: 0.0,
                                 }
                             } else {
+                                // Stored in radians (the kinematics' unit); a
+                                // controller reports degrees.
                                 JointAngles {
-                                    j1: state.joint_angles[0],
-                                    j2: state.joint_angles[1],
-                                    j3: state.joint_angles[2],
-                                    j4: state.joint_angles[3],
-                                    j5: state.joint_angles[4],
-                                    j6: state.joint_angles[5],
+                                    j1: state.joint_angles[0].to_degrees(),
+                                    j2: state.joint_angles[1].to_degrees(),
+                                    j3: state.joint_angles[2].to_degrees(),
+                                    j4: state.joint_angles[3].to_degrees(),
+                                    j5: state.joint_angles[4].to_degrees(),
+                                    j6: state.joint_angles[5].to_degrees(),
                                     j7: 0.0,
                                     j8: 0.0,
                                     j9: 0.0,
@@ -1113,9 +1200,10 @@ async fn handle_secondary_client(
                                     x: state.cartesian_position[0] as f64,
                                     y: state.cartesian_position[1] as f64,
                                     z: state.cartesian_position[2] as f64,
-                                    w: state.cartesian_orientation[0] as f64,
-                                    p: state.cartesian_orientation[1] as f64,
-                                    r: state.cartesian_orientation[2] as f64,
+                                    // Stored in radians; the wire is degrees.
+                                    w: (state.cartesian_orientation[0] as f64).to_degrees(),
+                                    p: (state.cartesian_orientation[1] as f64).to_degrees(),
+                                    r: (state.cartesian_orientation[2] as f64).to_degrees(),
                                     ext1: 0.0,
                                     ext2: 0.0,
                                     ext3: 0.0,
@@ -1529,7 +1617,7 @@ async fn handle_secondary_client(
                                 let target_p = position["P"].as_f64().unwrap_or(0.0);
                                 let target_r = position["R"].as_f64().unwrap_or(0.0);
 
-                                let speed = request_json.get("Speed").and_then(|v| v.as_f64()).unwrap_or(100.0);
+                                let (speed, speed_kind) = parse_speed(&request_json, 100.0);
                                 let term_type = request_json.get("TermType").and_then(|v| v.as_str()).unwrap_or("FINE").to_string();
                                 let term_value = request_json.get("TermValue").and_then(|v| v.as_u64()).unwrap_or(0);
 
@@ -1539,8 +1627,8 @@ async fn handle_secondary_client(
                                     state.mode.clone()
                                 };
 
-                                qprintln!("🎯 FRC_LinearMotion: X={:.1} Y={:.1} Z={:.1} | Speed={:.1}mm/s | Term={} CNT={} | seq={}",
-                                    target_x, target_y, target_z, speed, term_type, term_value, seq);
+                                qprintln!("🎯 FRC_LinearMotion: X={:.1} Y={:.1} Z={:.1} | Speed={} | Term={} CNT={} | seq={}",
+                                    target_x, target_y, target_z, speed_kind.describe(speed), term_type, term_value, seq);
 
                                 // Acquire an in-flight permit (blocks past the 8-deep cap).
                                 let permit = Arc::clone(&motion_in_flight).acquire_owned().await
@@ -1551,10 +1639,11 @@ async fn handle_secondary_client(
                                     seq_id: seq,
                                     target: MotionTarget::Cartesian {
                                         pos: [target_x, target_y, target_z],
-                                        ori: [target_w, target_p, target_r],
+                                        ori: [target_w.to_radians(), target_p.to_radians(), target_r.to_radians()],
                                         is_relative: false,
                                     },
                                     speed,
+                                    speed_kind,
                                     term_type,
                                     term_value,
                                     instruction_type: "FRC_LinearMotion".to_string(),
@@ -1589,7 +1678,7 @@ async fn handle_secondary_client(
                                 let dy = position["Y"].as_f64().unwrap_or(0.0);
                                 let dz = position["Z"].as_f64().unwrap_or(0.0);
 
-                                let speed = request_json.get("Speed").and_then(|v| v.as_f64()).unwrap_or(10.0);
+                                let (speed, speed_kind) = parse_speed(&request_json, 10.0);
                                 let term_type = request_json.get("TermType").and_then(|v| v.as_str()).unwrap_or("FINE").to_string();
                                 let term_value = request_json.get("TermValue").and_then(|v| v.as_u64()).unwrap_or(0);
 
@@ -1599,8 +1688,8 @@ async fn handle_secondary_client(
                                     state.mode.clone()
                                 };
 
-                                qprintln!("🎯 FRC_LinearRelative: ΔX={:+.1} ΔY={:+.1} ΔZ={:+.1} | Speed={:.1}mm/s | Term={} CNT={} | seq={}",
-                                    dx, dy, dz, speed, term_type, term_value, seq);
+                                qprintln!("🎯 FRC_LinearRelative: ΔX={:+.1} ΔY={:+.1} ΔZ={:+.1} | Speed={} | Term={} CNT={} | seq={}",
+                                    dx, dy, dz, speed_kind.describe(speed), term_type, term_value, seq);
 
                                 // Acquire an in-flight permit (blocks past the 8-deep cap).
                                 let permit = Arc::clone(&motion_in_flight).acquire_owned().await
@@ -1616,6 +1705,7 @@ async fn handle_secondary_client(
                                         is_relative: true,
                                     },
                                     speed,
+                                    speed_kind,
                                     term_type,
                                     term_value,
                                     instruction_type: "FRC_LinearRelative".to_string(),
@@ -1657,7 +1747,7 @@ async fn handle_secondary_client(
                                 let target_p = position["P"].as_f64().unwrap_or(0.0);
                                 let target_r = position["R"].as_f64().unwrap_or(0.0);
 
-                                let speed = request_json.get("Speed").and_then(|v| v.as_f64()).unwrap_or(100.0);
+                                let (speed, speed_kind) = parse_speed(&request_json, 100.0);
                                 let term_type = request_json.get("TermType").and_then(|v| v.as_str()).unwrap_or("FINE").to_string();
                                 let term_value = request_json.get("TermValue").and_then(|v| v.as_u64()).unwrap_or(0);
 
@@ -1666,8 +1756,8 @@ async fn handle_secondary_client(
                                     state.mode.clone()
                                 };
 
-                                qprintln!("🎯 FRC_JointMotion: X={:.1} Y={:.1} Z={:.1} | Speed={:.1}mm/s | Term={} CNT={} | seq={}",
-                                    target_x, target_y, target_z, speed, term_type, term_value, seq);
+                                qprintln!("🎯 FRC_JointMotion: X={:.1} Y={:.1} Z={:.1} | Speed={} | Term={} CNT={} | seq={}",
+                                    target_x, target_y, target_z, speed_kind.describe(speed), term_type, term_value, seq);
 
                                 let permit = Arc::clone(&motion_in_flight).acquire_owned().await
                                     .expect("motion_in_flight semaphore should not be closed");
@@ -1676,10 +1766,11 @@ async fn handle_secondary_client(
                                     seq_id: seq,
                                     target: MotionTarget::Cartesian {
                                         pos: [target_x, target_y, target_z],
-                                        ori: [target_w, target_p, target_r],
+                                        ori: [target_w.to_radians(), target_p.to_radians(), target_r.to_radians()],
                                         is_relative: false,
                                     },
                                     speed,
+                                    speed_kind,
                                     term_type,
                                     term_value,
                                     instruction_type: "FRC_JointMotion".to_string(),
@@ -1719,7 +1810,7 @@ async fn handle_secondary_client(
                                 let j5 = joint_angles["J5"].as_f64().unwrap_or(0.0);
                                 let j6 = joint_angles["J6"].as_f64().unwrap_or(0.0);
 
-                                let speed = request_json.get("Speed").and_then(|v| v.as_f64()).unwrap_or(10.0);
+                                let (speed, speed_kind) = parse_speed(&request_json, 10.0);
                                 let term_type = request_json.get("TermType").and_then(|v| v.as_str()).unwrap_or("FINE").to_string();
                                 let term_value = request_json.get("TermValue").and_then(|v| v.as_u64()).unwrap_or(0);
 
@@ -1728,8 +1819,8 @@ async fn handle_secondary_client(
                                     state.mode.clone()
                                 };
 
-                                qprintln!("🎯 FRC_JointMotionJRep: J1={:.2}° J2={:.2}° J3={:.2}° J4={:.2}° J5={:.2}° J6={:.2}° | Speed={:.1}°/s | Term={} CNT={} | seq={}",
-                                    j1, j2, j3, j4, j5, j6, speed, term_type, term_value, seq);
+                                qprintln!("🎯 FRC_JointMotionJRep: J1={:.2}° J2={:.2}° J3={:.2}° J4={:.2}° J5={:.2}° J6={:.2}° | Speed={} | Term={} CNT={} | seq={}",
+                                    j1, j2, j3, j4, j5, j6, speed_kind.describe(speed), term_type, term_value, seq);
 
                                 let permit = Arc::clone(&motion_in_flight).acquire_owned().await
                                     .expect("motion_in_flight semaphore should not be closed");
@@ -1747,6 +1838,7 @@ async fn handle_secondary_client(
                                         ],
                                     },
                                     speed,
+                                    speed_kind,
                                     term_type,
                                     term_value,
                                     instruction_type: "FRC_JointMotionJRep".to_string(),
@@ -1786,7 +1878,7 @@ async fn handle_secondary_client(
                                 let dj5 = joint_angles["J5"].as_f64().unwrap_or(0.0);
                                 let dj6 = joint_angles["J6"].as_f64().unwrap_or(0.0);
 
-                                let speed = request_json.get("Speed").and_then(|v| v.as_f64()).unwrap_or(10.0);
+                                let (speed, speed_kind) = parse_speed(&request_json, 10.0);
                                 let term_type = request_json.get("TermType").and_then(|v| v.as_str()).unwrap_or("FINE").to_string();
                                 let term_value = request_json.get("TermValue").and_then(|v| v.as_u64()).unwrap_or(0);
 
@@ -1795,8 +1887,8 @@ async fn handle_secondary_client(
                                     state.mode.clone()
                                 };
 
-                                qprintln!("🎯 FRC_JointRelativeJRep: ΔJ1={:+.2}° ΔJ2={:+.2}° ΔJ3={:+.2}° ΔJ4={:+.2}° ΔJ5={:+.2}° ΔJ6={:+.2}° | Speed={:.1}°/s | Term={} CNT={} | seq={}",
-                                    dj1, dj2, dj3, dj4, dj5, dj6, speed, term_type, term_value, seq);
+                                qprintln!("🎯 FRC_JointRelativeJRep: ΔJ1={:+.2}° ΔJ2={:+.2}° ΔJ3={:+.2}° ΔJ4={:+.2}° ΔJ5={:+.2}° ΔJ6={:+.2}° | Speed={} | Term={} CNT={} | seq={}",
+                                    dj1, dj2, dj3, dj4, dj5, dj6, speed_kind.describe(speed), term_type, term_value, seq);
 
                                 let permit = Arc::clone(&motion_in_flight).acquire_owned().await
                                     .expect("motion_in_flight semaphore should not be closed");
@@ -1814,6 +1906,7 @@ async fn handle_secondary_client(
                                         ],
                                     },
                                     speed,
+                                    speed_kind,
                                     term_type,
                                     term_value,
                                     instruction_type: "FRC_JointRelativeJRep".to_string(),
@@ -2457,10 +2550,11 @@ mod tests {
             // FRC_JointMotion handler builds this Cartesian target shape.
             target: MotionTarget::Cartesian {
                 pos: [300.0, 0.0, 400.0],
-                ori: [-180.0, 0.0, 0.0],
+                ori: [-std::f64::consts::PI, 0.0, 0.0],
                 is_relative: false,
             },
             speed: 100.0,
+            speed_kind: SpeedKind::Rate,
             term_type: "FINE".to_string(),
             term_value: 0,
             instruction_type: "FRC_JointMotion".to_string(),
@@ -2505,6 +2599,7 @@ mod tests {
             seq_id: 1,
             target: MotionTarget::JointAbsolute { joints_rad: target_joints_rad },
             speed: 10.0,
+            speed_kind: SpeedKind::Rate,
             term_type: "FINE".to_string(),
             term_value: 0,
             instruction_type: "FRC_JointMotionJRep".to_string(),
@@ -2554,6 +2649,7 @@ mod tests {
                 joint_deltas_rad: [delta_rad, 0.0, 0.0, 0.0, 0.0, 0.0],
             },
             speed: 10.0,
+            speed_kind: SpeedKind::Rate,
             term_type: "FINE".to_string(),
             term_value: 0,
             instruction_type: "FRC_JointRelativeJRep".to_string(),
@@ -2646,10 +2742,11 @@ mod tests {
             seq_id: 1,
             target: MotionTarget::Cartesian {
                 pos: [300.0, 0.0, 400.0],
-                ori: [-180.0, 0.0, 0.0],
+                ori: [-std::f64::consts::PI, 0.0, 0.0],
                 is_relative: false,
             },
             speed: 100.0,
+            speed_kind: SpeedKind::Rate,
             term_type: "FINE".to_string(),
             term_value: 0,
             instruction_type: "FRC_LinearMotion".to_string(),
@@ -2686,6 +2783,7 @@ mod tests {
             seq_id: seq,
             target: MotionTarget::JointRelative { joint_deltas_rad: [0.0; 6] },
             speed: 10.0,
+            speed_kind: SpeedKind::Rate,
             term_type: "FINE".to_string(),
             term_value: 0,
             instruction_type: "FRC_JointRelativeJRep".to_string(),
@@ -3016,4 +3114,49 @@ mod tests {
         .expect("connect within 1s")
         .expect("sidecar should accept a TCP connection");
     }
+
+    #[test]
+    fn time_and_msec_speeds_are_durations_not_rates() {
+        // `Time 7` is 0.7 s whatever the distance; reading it as 7 mm/s made a
+        // 40 mm segment take 5.7 s in realtime mode.
+        assert!((SpeedKind::Tenths.duration_s(7.0, 40.0, false, 1.0) - 0.7).abs() < 1e-9);
+        assert!((SpeedKind::Tenths.duration_s(7.0, 400.0, false, 1.0) - 0.7).abs() < 1e-9);
+        assert!((SpeedKind::Millis.duration_s(250.0, 40.0, false, 1.0) - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rates_divide_the_extent() {
+        assert!((SpeedKind::Rate.duration_s(60.0, 120.0, false, 1.0) - 2.0).abs() < 1e-9);
+        // 600 in/min = 254 mm/s.
+        assert!((SpeedKind::InchPerMin.duration_s(600.0, 254.0, false, 1.0) - 1.0).abs() < 1e-9);
+        // 50% of the joint maximum over 90 degrees.
+        let joint = SpeedKind::Percent.duration_s(50.0, 90.0, true, 1.0);
+        assert!((joint - 90.0 / (MAX_JOINT_SPEED_DEG_S * 0.5)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_speed_override_stretches_every_notation() {
+        assert!((SpeedKind::Tenths.duration_s(10.0, 1.0, false, 0.5) - 2.0).abs() < 1e-9);
+        assert!((SpeedKind::Rate.duration_s(100.0, 100.0, false, 0.5) - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_speed_type_field_selects_the_notation() {
+        let v = serde_json::json!({"Speed": 7.0, "SpeedType": "Time"});
+        assert_eq!(parse_speed(&v, 100.0), (7.0, SpeedKind::Tenths));
+        let v = serde_json::json!({"Speed": 50.0, "SpeedType": "mmSec"});
+        assert_eq!(parse_speed(&v, 100.0), (50.0, SpeedKind::Rate));
+        let v = serde_json::json!({});
+        assert_eq!(parse_speed(&v, 100.0), (100.0, SpeedKind::Rate));
+    }
+
+
+    #[test]
+    fn orientation_interpolates_the_short_way() {
+        let d = shortest_angle_rad(179f64.to_radians(), (-179f64).to_radians());
+        assert!((d - 2f64.to_radians()).abs() < 1e-9);
+        let d = shortest_angle_rad(0.0, 90f64.to_radians());
+        assert!((d - 90f64.to_radians()).abs() < 1e-9);
+    }
+
 }
