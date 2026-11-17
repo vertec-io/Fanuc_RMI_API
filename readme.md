@@ -2,7 +2,7 @@
 
 A comprehensive Rust library for communicating with and controlling FANUC robots via the Remote Motion Interface (RMI) protocol. Includes driver implementation, web-based control interface, and simulation capabilities.
 
-**Current Version**: 0.6.0
+**Current Version**: 0.6.1
 **Status**: Active Development
 **License**: See LICENSE file
 
@@ -10,7 +10,19 @@ A comprehensive Rust library for communicating with and controlling FANUC robots
 
 ## ⚠️ Important Updates
 
-### Latest Changes (v0.6.0) - 2025-12-01
+### Latest Changes (v0.6.1) - 2026-11-17
+
+- Clearing in-flight tracking after an abort now discards the instruction bodies too,
+  preventing discarded motion from being replayed by a later pause/resume.
+- Set `driver.set_requested_group_mask(0b11)` before `startup_sequence()` to retain
+  Group 1 + Group 2 selection through initialization and recovery. The selection is
+  shared across clones; zero is ignored. `requested_group_mask()` reads the selection,
+  while `session_group_mask()` reports the controller's actual reservation.
+- `initialize_with_mask()` and `send_initialize_with_mask()` remain one-time overrides.
+  Set the requested mask explicitly for persistent recovery behavior.
+- See [v0.6.1 release notes](docs/releases/RELEASE_NOTES_v0.6.1.md).
+
+### Previous Changes (v0.6.0) - 2025-12-01
 
 **Major Web Interface Overhaul:**
 - ✨ **Desktop-Style UI**: Professional application layout with left navbar, main workspace, and right panel

@@ -326,6 +326,8 @@ pub struct FanucDriver {
     /// describes the session, not the handle. See
     /// [`FanucDriver::session_group_mask`].
     session_group_mask: Arc<AtomicU8>,
+    /// Caller-selected groups retained across aborts and recovery, shared by clones.
+    requested_group_mask: Arc<AtomicU8>,
     /// Sole owner of the session teardown — see [`DriverShutdown`].
     ///
     /// `Some` on every caller-held clone, `None` on the clones handed to the
@@ -502,6 +504,7 @@ impl FanucDriver {
             cancelled,
             cancel_notify,
             session_group_mask: Arc::new(AtomicU8::new(0)),
+            requested_group_mask: Arc::new(AtomicU8::new(GroupMask::default().bits())),
             shutdown_owner: Some(shutdown_owner.clone()),
         };
 
@@ -775,7 +778,7 @@ impl FanucDriver {
         result
     }
 
-    /// Clear the driver's in-flight instruction counter.
+    /// Clear the driver's in-flight instruction counter and tracked bodies.
     ///
     /// This should be called after an abort to reset the driver's tracking,
     /// since the robot clears its motion queue on abort but doesn't send
@@ -1251,7 +1254,7 @@ impl FanucDriver {
     /// # }
     /// ```
     pub async fn initialize(&self) -> Result<FrcInitializeResponse, String> {
-        self.initialize_with_mask(GroupMask::default().bits()).await
+        self.initialize_with_mask(self.requested_group_mask()).await
     }
 
     /// Initialize reserving a specific set of motion groups and wait for the
@@ -1303,6 +1306,21 @@ impl FanucDriver {
         }
 
         Ok(result)
+    }
+
+    /// Select the motion groups used by `initialize()`, startup, and recovery.
+    /// Shared across clones. Zero is ignored; the default remains Group 1.
+    /// This changes the next initialization, not the current session reservation.
+    /// `initialize_with_mask()` is a one-time override and does not change this value.
+    pub fn set_requested_group_mask(&self, group_mask: u8) {
+        if group_mask != 0 {
+            self.requested_group_mask.store(group_mask, Ordering::SeqCst);
+        }
+    }
+
+    /// The caller's persistent selection, distinct from `session_group_mask()`.
+    pub fn requested_group_mask(&self) -> u8 {
+        self.requested_group_mask.load(Ordering::SeqCst)
     }
 
     /// The motion groups reserved for this session, as the controller echoed
@@ -2008,8 +2026,13 @@ impl FanucDriver {
                             // because the robot clears its queue but doesn't send responses
                             // for aborted instructions.
                             let old_in_flight = in_flight;
+                            let dropped_bodies = in_flight_instructions.len();
                             in_flight = 0;
-                            println!("ClearInFlight: reset in_flight counter from {} to 0", old_in_flight);
+                            in_flight_instructions.clear();
+                            println!(
+                                "ClearInFlight: reset in_flight counter from {} to 0, dropped {} tracked instruction bodies",
+                                old_in_flight, dropped_bodies
+                            );
                         }
                         DriverCommand::ProgramPause => {
                             // A pause is the seam between two TP programs. Snapshot the
