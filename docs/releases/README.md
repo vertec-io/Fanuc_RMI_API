@@ -6,7 +6,13 @@ Official release notes for Fanuc RMI API versions.
 
 ## Releases
 
-### [v0.4.0](RELEASE_NOTES_v0.4.0.md) - 2025-11-25 ⭐ **LATEST**
+### [fanuc_rmi v0.6.1](RELEASE_NOTES_v0.6.1.md) - 2026-11-17
+
+Driver recovery fixes: discard aborted instruction bodies and retain the caller's
+requested motion-group mask through reinitialization. Library version 0.6.1;
+other workspace packages retain their existing versions.
+
+### [v0.4.0](RELEASE_NOTES_v0.4.0.md) - 2025-11-25
 
 **Major Release: Correlation ID System & Position Precision Fix**
 
